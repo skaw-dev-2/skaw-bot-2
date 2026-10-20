@@ -58,6 +58,18 @@ export default {
         InteractionHelper.patchInteractionResponses(interaction);
         ResponseCoordinator.attach(interaction);
 
+        // Employee Logs has its own dedicated component handler. Delegate its IDs before
+        // the generic router tries to resolve them in client.buttons/selectMenus/modals.
+        const isEmployeeLogsComponent = Boolean(interaction.customId?.startsWith('skaw_el_')) && (
+          interaction.isButton?.() || interaction.isUserSelectMenu?.() || interaction.isRoleSelectMenu?.()
+          || interaction.isStringSelectMenu?.() || interaction.isModalSubmit?.()
+        );
+        if (isEmployeeLogsComponent) {
+          const { handleEmployeeLogsComponent } = await import('../services/employeeLogsInteractionService.js');
+          await handleEmployeeLogsComponent(interaction);
+          return;
+        }
+
         if (interaction.isChatInputCommand()) {
           try {
             logger.info(`Command executed: /${interaction.commandName} by ${interaction.user.tag}`, {

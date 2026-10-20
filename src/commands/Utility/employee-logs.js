@@ -19,7 +19,7 @@ import {
     setEmployeeLogsSticker,
     clearEmployeeLogsSticker,
 } from '../../services/employeeLogsService.js';
-import { buildEmployeeLogsPanel } from '../../services/employeeLogsInteractionService.js';
+import { buildEmployeeLogsPanel, startEmployeeLogsInteractionHandler } from '../../services/employeeLogsInteractionService.js';
 
 const TYPE_CHOICES = Object.entries(EMPLOYEE_LOG_TYPES).map(([value, entry]) => ({
     name: `${entry.emoji} ${entry.shortLabel}`,
@@ -173,6 +173,11 @@ export default {
 
     async execute(interaction) {
         try {
+            // Fail-safe: attach the component handler when this command runs.
+            // This prevents panel dropdowns from timing out if the optional app.js hook
+            // was omitted during a manual/place-files installation. The service uses a
+            // WeakSet, so calling this repeatedly does not register duplicate listeners.
+            startEmployeeLogsInteractionHandler(interaction.client);
             requireManageGuild(interaction);
             const subcommand = interaction.options.getSubcommand();
             const guildId = interaction.guildId;

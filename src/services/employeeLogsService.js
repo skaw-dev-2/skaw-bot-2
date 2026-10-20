@@ -1,22 +1,20 @@
 import { EmbedBuilder, PermissionFlagsBits } from 'discord.js';
 
 const CONFIG_KEY = guildId => `guild:${guildId}:employee_logs`;
-const APPROVALS_KEY = guildId => `guild:${guildId}:employee_logs:approvals`;
 const AUDIT_KEY = guildId => `guild:${guildId}:employee_logs:audit`;
 const BRAND_BLUE = 0x2563eb;
 const FOOTER_TEXT = 'SKAW GROUP • PEOPLE OPERATIONS';
 const SNOWFLAKE_RE = /^\d{17,20}$/;
-const MAX_APPROVALS = 250;
 
 export const EMPLOYEE_LOG_TYPES = Object.freeze({
     sign_in: { label: 'Employee Sign In', shortLabel: 'Sign In', title: 'EMPLOYEE SIGN IN RECORD', emoji: '🟢', subtitle: 'WORKFORCE • DUTY COMMENCEMENT', channelLabel: 'Sign In channel', roleFields: ['position'], bannerEvent: 'employee-sign-in' },
     sign_out: { label: 'Employee Sign Out', shortLabel: 'Sign Out', title: 'EMPLOYEE SIGN OUT RECORD', emoji: '🔵', subtitle: 'WORKFORCE • DUTY COMPLETION', channelLabel: 'Sign Out channel', roleFields: ['position'], bannerEvent: 'employee-sign-out' },
     promotion: { label: 'Employee Promotion Letter', shortLabel: 'Promotion', title: 'EMPLOYEE PROMOTION LETTER', emoji: '🏆', subtitle: 'PEOPLE OPERATIONS • CAREER ADVANCEMENT', channelLabel: 'Promotion channel', roleFields: ['previousRank', 'nextRank'], bannerEvent: 'promotion' },
-    dismissal: { label: 'Employee Dismissal Notice', shortLabel: 'Dismissal', title: 'EMPLOYEE DISMISSAL NOTICE', emoji: '⛔', subtitle: 'PEOPLE OPERATIONS • EMPLOYMENT STATUS', channelLabel: 'Dismissal channel', roleFields: ['position'], bannerEvent: 'dismissal', approvalRequired: true },
+    dismissal: { label: 'Employee Dismissal Notice', shortLabel: 'Dismissal', title: 'EMPLOYEE DISMISSAL NOTICE', emoji: '⛔', subtitle: 'PEOPLE OPERATIONS • EMPLOYMENT STATUS', channelLabel: 'Dismissal channel', roleFields: ['position'], bannerEvent: 'dismissal' },
     resignation: { label: 'Employee Resignation Record', shortLabel: 'Resignation', title: 'EMPLOYEE RESIGNATION RECORD', emoji: '📄', subtitle: 'PEOPLE OPERATIONS • VOLUNTARY DEPARTURE', channelLabel: 'Resignation channel', roleFields: ['position'], bannerEvent: 'employee-resignation' },
     mutation: { label: 'Employee Mutation Record', shortLabel: 'Mutation', title: 'EMPLOYEE MUTATION RECORD', emoji: '🔄', subtitle: 'WORKFORCE • POSITION CHANGE', channelLabel: 'Mutation channel', roleFields: ['fromRole', 'toRole'], bannerEvent: 'mutation' },
     warning: { label: 'Employee Warning Notice', shortLabel: 'Warning', title: 'EMPLOYEE WARNING NOTICE', emoji: '⚠️', subtitle: 'COMPLIANCE • EMPLOYEE CONDUCT RECORD', channelLabel: 'Warning channel', roleFields: ['position'], bannerEvent: 'warning' },
-    blacklist: { label: 'Employee Blacklist Notice', shortLabel: 'Blacklist', title: 'EMPLOYEE BLACKLIST NOTICE', emoji: '🛡️', subtitle: 'COMPLIANCE • RESTRICTED PERSONNEL RECORD', channelLabel: 'Blacklist channel', roleFields: ['position'], bannerEvent: 'blacklist', approvalRequired: true },
+    blacklist: { label: 'Employee Blacklist Notice', shortLabel: 'Blacklist', title: 'EMPLOYEE BLACKLIST NOTICE', emoji: '🛡️', subtitle: 'COMPLIANCE • RESTRICTED PERSONNEL RECORD', channelLabel: 'Blacklist channel', roleFields: ['position'], bannerEvent: 'blacklist' },
     others: { label: 'Other Employee Activity', shortLabel: 'Others', title: 'EMPLOYEE ACTIVITY RECORD', emoji: '📝', subtitle: 'PEOPLE OPERATIONS • ADDITIONAL RECORD', channelLabel: 'Others channel', roleFields: ['position'], bannerEvent: 'employee-other' },
 });
 
@@ -32,7 +30,7 @@ export const EMPLOYEE_LOG_BANNER_EVENTS = Object.freeze({
     warning: { label: 'Warning' },
 });
 
-const DEFAULT_CONFIG = Object.freeze({ channels: {}, bannerUrl: null, banners: {}, stickers: {}, staffRoleId: null, managementRoleId: null, approvalChannelId: null });
+const DEFAULT_CONFIG = Object.freeze({ channels: {}, bannerUrl: null, banners: {}, stickers: {} });
 
 function normalizeBannerUrl(value) {
     if (typeof value !== 'string' || !value.trim()) return null;
@@ -63,15 +61,11 @@ function normalizeConfig(input = {}) {
             if (url) banners[eventKey] = url;
         }
     }
-    const safeId = value => typeof value === 'string' && SNOWFLAKE_RE.test(value) ? value : null;
     return {
         channels,
         stickers,
         bannerUrl: normalizeBannerUrl(input.bannerUrl),
         banners,
-        staffRoleId: safeId(input.staffRoleId),
-        managementRoleId: safeId(input.managementRoleId),
-        approvalChannelId: safeId(input.approvalChannelId),
         updatedAt: input.updatedAt || null,
         updatedBy: input.updatedBy || null,
     };
@@ -143,35 +137,6 @@ export async function clearEmployeeLogsSticker(client, guildId, type, updatedBy 
     delete config.stickers[type];
     return saveConfig(client, guildId, config, updatedBy);
 }
-export async function setEmployeeLogsApprovalChannel(client, guildId, channelId, updatedBy = null) {
-    if (!SNOWFLAKE_RE.test(String(channelId || ''))) throw new Error('Channel ID tidak valid.');
-    const config = await getEmployeeLogsConfig(client, guildId);
-    config.approvalChannelId = String(channelId);
-    return saveConfig(client, guildId, config, updatedBy);
-}
-export async function setEmployeeLogsManagementRole(client, guildId, roleId, updatedBy = null) {
-    if (!SNOWFLAKE_RE.test(String(roleId || ''))) throw new Error('Role ID tidak valid.');
-    const config = await getEmployeeLogsConfig(client, guildId);
-    config.managementRoleId = String(roleId);
-    return saveConfig(client, guildId, config, updatedBy);
-}
-export async function clearEmployeeLogsManagementRole(client, guildId, updatedBy = null) {
-    const config = await getEmployeeLogsConfig(client, guildId);
-    config.managementRoleId = null;
-    return saveConfig(client, guildId, config, updatedBy);
-}
-export async function setEmployeeLogsStaffRole(client, guildId, roleId, updatedBy = null) {
-    if (!SNOWFLAKE_RE.test(String(roleId || ''))) throw new Error('Role ID tidak valid.');
-    const config = await getEmployeeLogsConfig(client, guildId);
-    config.staffRoleId = String(roleId);
-    return saveConfig(client, guildId, config, updatedBy);
-}
-export async function clearEmployeeLogsStaffRole(client, guildId, updatedBy = null) {
-    const config = await getEmployeeLogsConfig(client, guildId);
-    config.staffRoleId = null;
-    return saveConfig(client, guildId, config, updatedBy);
-}
-
 export function getEmployeeLogBannerEventKey(type) {
     const template = EMPLOYEE_LOG_TYPES[type];
     if (!template) throw new Error('Jenis log tidak valid.');
@@ -226,14 +191,14 @@ export function buildEmployeeLogBody(type, data = {}) {
     throw new Error('Template employee log belum tersedia.');
 }
 
-export function buildEmployeeLogEmbed(type, data = {}, bannerUrl = null, { pending = false } = {}) {
+export function buildEmployeeLogEmbed(type, data = {}, bannerUrl = null) {
     const template = EMPLOYEE_LOG_TYPES[type];
     if (!template) throw new Error('Jenis log tidak valid.');
     const embed = new EmbedBuilder()
         .setColor(BRAND_BLUE)
         .setAuthor({ name: '🏢 SKAW GROUP • PEOPLE OPERATIONS' })
-        .setTitle(`${template.emoji}  ${pending ? `PENDING APPROVAL • ${template.title}` : template.title}`.slice(0, 256))
-        .setDescription(`**${template.subtitle}**\n${pending ? 'This record is awaiting Management review.' : 'Official personnel record maintained by SKAW Management.'}`)
+        .setTitle(`${template.emoji}  ${template.title}`.slice(0, 256))
+        .setDescription(`**${template.subtitle}**\nOfficial personnel record maintained by SKAW Management.`)
         .setFooter({ text: FOOTER_TEXT })
         .setTimestamp(new Date());
     const name = userMention(data.userId);
@@ -268,7 +233,6 @@ export function buildEmployeeLogEmbed(type, data = {}, bannerUrl = null, { pendi
             { name: '🏷️  POSITION', value: roleMention(data.position, 'Position'), inline: true },
             { name: type === 'blacklist' ? '🛡️  BLACKLIST REASON' : '⛔  DISMISSAL REASON', value: cleanText(data.reason, 'Reason', { maxLength: 900 }).slice(0, 1024), inline: false },
             { name: '🧾  ISSUED BY', value: actor, inline: true },
-            ...(pending ? [{ name: '🔐  APPROVAL STATUS', value: 'Waiting for an authorized Management member.', inline: false }] : []),
         );
     } else if (type === 'warning') {
         const warn = cleanText(data.warn, 'Warning Level', { maxLength: 10 });
@@ -292,9 +256,6 @@ export function buildEmployeeLogEmbed(type, data = {}, bannerUrl = null, { pendi
         );
     }
     addNotes(embed, data);
-    if (SNOWFLAKE_RE.test(String(data.approvedBy || ''))) {
-        embed.addFields({ name: '✅  APPROVED BY', value: `<@${data.approvedBy}>`, inline: true });
-    }
     embed.addFields({ name: '📜  RECORD STATEMENT', value: 'Regards,\n**SKAW Management.**', inline: false });
     const safeBanner = normalizeBannerUrl(bannerUrl);
     if (safeBanner) embed.setImage(safeBanner);
@@ -348,11 +309,9 @@ export async function sendEmployeeLog(client, guild, type, data) {
             type,
             employeeId: String(data.userId || ''),
             recordedBy: String(data.recordedBy || ''),
-            approvedBy: SNOWFLAKE_RE.test(String(data.approvedBy || '')) ? String(data.approvedBy) : null,
             channelId: String(channel.id),
             messageId: String(message.id),
             publishedAt: new Date().toISOString(),
-            approvalRequired: Boolean(template.approvalRequired),
         });
         await client.db.set(AUDIT_KEY(guild.id), history.slice(-1000));
     } catch (auditError) {
@@ -369,27 +328,3 @@ export async function getEmployeeLogAudit(client, guildId, { type = null, limit 
     return filtered.slice(-Math.max(1, Math.min(25, Number(limit) || 10))).reverse();
 }
 
-export async function createEmployeeLogApproval(client, guildId, payload) {
-    if (!client?.db) throw new Error('Database belum siap. Coba lagi setelah bot tersambung ke database.');
-    const records = await client.db.get(APPROVALS_KEY(guildId), []);
-    const safeRecords = Array.isArray(records) ? records : [];
-    if (safeRecords.some(record => record.id === payload.id)) throw new Error('ID persetujuan sudah digunakan. Coba ulangi.');
-    const next = [...safeRecords, { ...payload, status: 'pending', createdAt: new Date().toISOString() }].slice(-MAX_APPROVALS);
-    await client.db.set(APPROVALS_KEY(guildId), next);
-    return next[next.length - 1];
-}
-export async function getEmployeeLogApproval(client, guildId, requestId) {
-    if (!client?.db) throw new Error('Database belum siap.');
-    const records = await client.db.get(APPROVALS_KEY(guildId), []);
-    return (Array.isArray(records) ? records : []).find(record => record.id === requestId) || null;
-}
-export async function updateEmployeeLogApproval(client, guildId, requestId, patch) {
-    if (!client?.db) throw new Error('Database belum siap.');
-    const records = await client.db.get(APPROVALS_KEY(guildId), []);
-    const list = Array.isArray(records) ? records : [];
-    const index = list.findIndex(record => record.id === requestId);
-    if (index < 0) throw new Error('Permintaan persetujuan tidak ditemukan atau sudah kedaluwarsa.');
-    list[index] = { ...list[index], ...patch, updatedAt: new Date().toISOString() };
-    await client.db.set(APPROVALS_KEY(guildId), list.slice(-MAX_APPROVALS));
-    return list[index];
-}

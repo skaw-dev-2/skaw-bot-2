@@ -18,6 +18,7 @@ import {
     getEmployeeLogsConfig,
     resolveEmployeeLogsBanner,
     sendEmployeeLog,
+    createEmployeeLogRecordId,
 } from './employeeLogsService.js';
 
 const SESSION_TTL_MS = 15 * 60 * 1000;
@@ -89,9 +90,10 @@ function textInput(id, label, placeholder, required, style = TextInputStyle.Shor
 function buildModal(session) {
     const template = EMPLOYEE_LOG_TYPES[session.type];
     const modal = new ModalBuilder().setCustomId(`skaw_el_form:${session.id}`).setTitle(`${template.shortLabel} • Record Details`.slice(0, 45));
-    if (session.type === 'dismissal' || session.type === 'blacklist') {
+    if (session.type === 'dismissal' || session.type === 'blacklist' || session.type === 'resignation') {
+        const reasonLabel = session.type === 'resignation' ? 'Resignation Reason (required)' : 'Reason (required)';
         modal.addComponents(
-            textInput('reason', 'Reason (required)', 'Explain the reason for this notice.', true, TextInputStyle.Paragraph, 850, session.data.reason),
+            textInput('reason', reasonLabel, 'Explain the reason for this record.', true, TextInputStyle.Paragraph, 850, session.data.reason),
             textInput('notes', 'Additional Notes (optional)', 'Optional supporting details.', false, TextInputStyle.Paragraph, 850, session.data.notes),
         );
     } else if (session.type === 'warning') {
@@ -124,16 +126,28 @@ async function sendPrivate(interaction, content) {
     return interaction.reply(payload);
 }
 async function validateSessionConfig(interaction, type, config) {
-    if (!config.channels[type]) throw new Error(`Channel for **${EMPLOYEE_LOG_TYPES[type].shortLabel}** is not configured. Ask an administrator to run /employee-logs set-channel.`);
+    const channelId = config.channels[type];
+    if (!channelId) throw new Error(`Channel for **${EMPLOYEE_LOG_TYPES[type].shortLabel}** is not configured. Ask an administrator to run /employee-logs set-channel.`);
+    const channel = await interaction.client.channels.fetch(channelId).catch(() => null);
+    if (!channel || !channel.isTextBased?.() || channel.isDMBased?.() || channel.guildId !== interaction.guildId) {
+        throw new Error(`The configured destination for **${EMPLOYEE_LOG_TYPES[type].shortLabel}** is unavailable. Set its channel again with /employee-logs set-channel.`);
+    }
+    const botMember = interaction.guild?.members?.me || await interaction.guild?.members?.fetchMe?.().catch(() => null);
+    const channelPermissions = channel.permissionsFor(botMember || interaction.client.user);
+    const required = PermissionFlagsBits.ViewChannel | PermissionFlagsBits.SendMessages | PermissionFlagsBits.EmbedLinks;
+    if (!channelPermissions?.has(required)) {
+        throw new Error(`The bot needs View Channel, Send Messages, and Embed Links in ${channel}.`);
+    }
 }
 async function showPreview(interaction, session) {
     const config = await getEmployeeLogsConfig(interaction.client, interaction.guildId);
     await validateSessionConfig(interaction, session.type, config);
     session.data.recordedBy = interaction.user.id;
+    if (!session.data.recordId) session.data.recordId = createEmployeeLogRecordId(new Date());
+    if (!session.data.recordedAt) session.data.recordedAt = new Date().toISOString();
     const embed = buildEmployeeLogEmbed(session.type, session.data, resolveEmployeeLogsBanner(config, session.type));
-    embed.setDescription(`**PRIVATE PREVIEW**\n${EMPLOYEE_LOG_TYPES[session.type].subtitle}\nCheck the details before publishing. This preview is visible only to you.`);
     return interaction.editReply({
-        content: `**${EMPLOYEE_LOG_TYPES[session.type].shortLabel} — review your record**\nDestination: <#${config.channels[session.type]}>`,
+        content: `**PRIVATE PREVIEW · ${EMPLOYEE_LOG_TYPES[session.type].shortLabel}**\nDestination: <#${config.channels[session.type]}>\nReview carefully before publishing.`,
         embeds: [embed],
         components: [previewButtons(session.id)],
         allowedMentions: { parse: [] },
@@ -198,7 +212,7 @@ async function handleModal(interaction) {
     const session = getSession(interaction, sessionId);
     if (!session) return interaction.editReply({ content: '⌛ Form expired. Open `/employee-logs panel` and start again.', allowedMentions: { parse: [] } });
     const get = id => interaction.fields.getTextInputValue(id).trim();
-    if (session.type === 'dismissal' || session.type === 'blacklist') session.data.reason = get('reason');
+    if (session.type === 'dismissal' || session.type === 'blacklist' || session.type === 'resignation') session.data.reason = get('reason');
     if (session.type === 'warning') { session.data.warn = get('warn'); session.data.reason = get('reason'); }
     if (session.type === 'others') { session.data.activityTitle = get('activityTitle'); session.data.activityDescription = get('activityDescription'); }
     session.data.notes = get('notes');
@@ -214,12 +228,15 @@ async function handleEdit(interaction) {
 }
 
 async function handleConfirm(interaction) {
-    await acknowledgeComponentUpdate(interaction);
     const sessionId = interaction.customId.slice('skaw_el_confirm:'.length);
     const session = getSession(interaction, sessionId);
+    if (session?.status === 'submitting') {
+        await acknowledgeComponentUpdate(interaction);
+        return sendPrivate(interaction, '⏳ This record is already being processed. Please wait.');
+    }
+    if (session) session.status = 'submitting';
+    await acknowledgeComponentUpdate(interaction);
     if (!session) return interaction.editReply({ content: '⌛ Form expired. Open `/employee-logs panel` and start again.', embeds: [], components: [], allowedMentions: { parse: [] } });
-    if (session.status === 'submitting') return sendPrivate(interaction, '⏳ This record is already being processed. Please wait.');
-    session.status = 'submitting';
     try {
         const config = await getEmployeeLogsConfig(interaction.client, interaction.guildId);
         await validateSessionConfig(interaction, session.type, config);
@@ -227,7 +244,7 @@ async function handleConfirm(interaction) {
         const result = await sendEmployeeLog(interaction.client, interaction.guild, session.type, session.data);
         sessions.delete(sessionKey(session.guildId, session.userId));
         const stickerNote = result.stickerWarning ? `\n⚠️ ${result.stickerWarning}` : (result.stickerSent ? '\n✨ Sticker successfully sent.' : '');
-        return interaction.editReply({ content: `✅ **${result.template.shortLabel} published successfully** to ${result.channel}.${stickerNote}`, embeds: [], components: [], allowedMentions: { parse: [] } });
+        return interaction.editReply({ content: `✅ **${result.template.shortLabel} published successfully** to ${result.channel}.\nRecord ID: \`${result.recordId}\`${stickerNote}`, embeds: [], components: [], allowedMentions: { parse: [] } });
     } catch (error) {
         session.status = 'ready';
         throw error;
@@ -239,7 +256,8 @@ async function handleBackToPanel(interaction) {
     const sessionId = interaction.customId.slice('skaw_el_back:'.length);
     const session = getSession(interaction, sessionId);
     if (session) sessions.delete(sessionKey(session.guildId, session.userId));
-    return interaction.editReply({ content: 'Session cancelled. Choose another activity or close this private panel.', ...buildEmployeeLogsPanel(), allowedMentions: { parse: [] } });
+    const config = await getEmployeeLogsConfig(interaction.client, interaction.guildId);
+    return interaction.editReply({ content: 'Session cancelled. Choose another activity or close this private panel.', ...buildEmployeeLogsPanel(config), allowedMentions: { parse: [] } });
 }
 
 async function handleCancel(interaction) {
@@ -272,7 +290,13 @@ async function handleInteraction(interaction) {
     if (interaction.isModalSubmit?.() && interaction.customId.startsWith('skaw_el_form:')) return handleModal(interaction);
 }
 
-export function buildEmployeeLogsPanel() {
+export function buildEmployeeLogsPanel(config = null) {
+    const missingChannels = config ? Object.entries(EMPLOYEE_LOG_TYPES).filter(([type]) => !config.channels?.[type]).map(([, entry]) => `${entry.emoji} ${entry.shortLabel}`) : [];
+    const setupSummary = !config
+        ? 'Use /employee-logs status to inspect setup.'
+        : missingChannels.length
+            ? `⚙️ **Setup needed:** destination channel not configured for ${missingChannels.join(', ')}. Use /employee-logs set-channel for each activity.`
+            : '✅ **Setup complete:** all activity destination channels are configured.';
     const embed = new EmbedBuilder()
         .setColor(0x2563eb)
         .setAuthor({ name: '🏢 SKAW GROUP • PEOPLE OPERATIONS' })
@@ -286,14 +310,16 @@ export function buildEmployeeLogsPanel() {
             '⚠️ Warning • 🛡️ Blacklist • 📝 Others',
             '',
             'All activity forms and previews are private. Final records are published to the configured destination channel.',
+            '',
+            setupSummary,
         ].join('\n'))
         .setFooter({ text: 'SKAW GROUP • PEOPLE OPERATIONS' })
         .setTimestamp(new Date());
     const types = Object.entries(EMPLOYEE_LOG_TYPES);
     const rows = [];
-    for (let start = 0; start < types.length; start += 5) {
+    for (let start = 0; start < types.length; start += 3) {
         const row = new ActionRowBuilder();
-        for (const [type, entry] of types.slice(start, start + 5)) {
+        for (const [type, entry] of types.slice(start, start + 3)) {
             const style = type === 'sign_in' ? ButtonStyle.Success
                 : type === 'dismissal' || type === 'blacklist' ? ButtonStyle.Danger
                 : type === 'promotion' ? ButtonStyle.Primary : ButtonStyle.Secondary;

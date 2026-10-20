@@ -100,12 +100,14 @@ export default {
             if (subcommand === 'panel') {
                 requireManager(interaction);
                 await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-                return interaction.editReply({ ...buildEmployeeLogsPanel(), allowedMentions: { parse: [] } });
+                const config = await getEmployeeLogsConfig(interaction.client, guildId);
+                return interaction.editReply({ ...buildEmployeeLogsPanel(config), allowedMentions: { parse: [] } });
             }
             requireManager(interaction);
             if (subcommand === 'status') {
+                await interaction.deferReply({ flags: MessageFlags.Ephemeral });
                 const config = await getEmployeeLogsConfig(interaction.client, guildId);
-                return interaction.reply({ embeds: [configurationEmbed(interaction.guild, config)], flags: MessageFlags.Ephemeral, allowedMentions: { parse: [] } });
+                return interaction.editReply({ embeds: [configurationEmbed(interaction.guild, config)], allowedMentions: { parse: [] } });
             }
             if (subcommand === 'history') {
                 await interaction.deferReply({ flags: MessageFlags.Ephemeral });
@@ -121,7 +123,7 @@ export default {
                         const meta = EMPLOYEE_LOG_TYPES[record.type];
                         const date = new Date(record.publishedAt);
                         const validDate = Number.isNaN(date.getTime()) ? 'Unknown time' : `<t:${Math.floor(date.getTime() / 1000)}:f>`;
-                        const line = `**${index + 1}. ${meta?.emoji || '📄'} ${meta?.shortLabel || record.type}**\nEmployee: <@${record.employeeId}> · Recorded by: <@${record.recordedBy}>\nChannel: <#${record.channelId}> · ${validDate}\n[Open record](https://discord.com/channels/${guildId}/${record.channelId}/${record.messageId})`;
+                        const line = `**${index + 1}. ${meta?.emoji || '📄'} ${meta?.shortLabel || record.type}**\nRecord ID: \`${record.recordId || 'legacy record'}\`\nEmployee: <@${record.employeeId}> · Recorded by: <@${record.recordedBy}>\nChannel: <#${record.channelId}> · ${validDate}\n[Open record](https://discord.com/channels/${guildId}/${record.channelId}/${record.messageId})`;
                         if (total + line.length > 3800) break;
                         lines.push(line); total += line.length + 2;
                     }
@@ -138,9 +140,10 @@ export default {
                 return interaction.editReply({ content: `✅ Channel **${EMPLOYEE_LOG_TYPES[type].shortLabel}** diset ke ${channel}.`, allowedMentions: { parse: [] } });
             }
             if (subcommand === 'clear-channel') {
+                await interaction.deferReply({ flags: MessageFlags.Ephemeral });
                 const type = interaction.options.getString('type', true);
                 await clearEmployeeLogsChannel(interaction.client, guildId, type, interaction.user.id);
-                return interaction.reply({ content: `✅ Channel **${EMPLOYEE_LOG_TYPES[type].shortLabel}** dihapus.`, flags: MessageFlags.Ephemeral, allowedMentions: { parse: [] } });
+                return interaction.editReply({ content: `✅ Channel **${EMPLOYEE_LOG_TYPES[type].shortLabel}** dihapus.`, allowedMentions: { parse: [] } });
             }
             if (subcommand === 'set-banner') {
                 await interaction.deferReply({ flags: MessageFlags.Ephemeral });
@@ -154,13 +157,15 @@ export default {
                 return interaction.editReply({ content: `✅ Banner **${EMPLOYEE_LOG_BANNER_EVENTS[event].label}** disimpan.`, allowedMentions: { parse: [] } });
             }
             if (subcommand === 'clear-event-banner') {
+                await interaction.deferReply({ flags: MessageFlags.Ephemeral });
                 const event = interaction.options.getString('event', true);
                 await clearEmployeeLogsEventBanner(interaction.client, guildId, event, interaction.user.id);
-                return interaction.reply({ content: `✅ Banner **${EMPLOYEE_LOG_BANNER_EVENTS[event].label}** dihapus.`, flags: MessageFlags.Ephemeral, allowedMentions: { parse: [] } });
+                return interaction.editReply({ content: `✅ Banner **${EMPLOYEE_LOG_BANNER_EVENTS[event].label}** dihapus.`, allowedMentions: { parse: [] } });
             }
             if (subcommand === 'clear-banner') {
+                await interaction.deferReply({ flags: MessageFlags.Ephemeral });
                 await clearEmployeeLogsBanner(interaction.client, guildId, interaction.user.id);
-                return interaction.reply({ content: '✅ Banner default dihapus; banner event tetap berlaku.', flags: MessageFlags.Ephemeral, allowedMentions: { parse: [] } });
+                return interaction.editReply({ content: '✅ Banner default dihapus; banner event tetap berlaku.', allowedMentions: { parse: [] } });
             }
             if (subcommand === 'set-sticker') {
                 await interaction.deferReply({ flags: MessageFlags.Ephemeral });
@@ -170,9 +175,10 @@ export default {
                 return interaction.editReply({ content: `✅ Sticker disimpan untuk **${EMPLOYEE_LOG_TYPES[type].shortLabel}**. Jika sticker gagal, embed tetap dikirim.`, allowedMentions: { parse: [] } });
             }
             if (subcommand === 'clear-sticker') {
+                await interaction.deferReply({ flags: MessageFlags.Ephemeral });
                 const type = interaction.options.getString('type', true);
                 await clearEmployeeLogsSticker(interaction.client, guildId, type, interaction.user.id);
-                return interaction.reply({ content: `✅ Sticker untuk **${EMPLOYEE_LOG_TYPES[type].shortLabel}** dihapus.`, flags: MessageFlags.Ephemeral, allowedMentions: { parse: [] } });
+                return interaction.editReply({ content: `✅ Sticker untuk **${EMPLOYEE_LOG_TYPES[type].shortLabel}** dihapus.`, allowedMentions: { parse: [] } });
             }
             throw new Error('Subcommand tidak dikenal.');
         } catch (error) {

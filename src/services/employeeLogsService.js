@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { EmbedBuilder, PermissionFlagsBits } from 'discord.js';
 
 const CONFIG_KEY = guildId => `guild:${guildId}:employee_logs`;
@@ -161,102 +162,151 @@ function validId(value, label) {
 function userMention(id) { return `<@${validId(id, 'Employee')}>`; }
 function roleMention(id, label) { return `<@&${validId(id, label)}>`; }
 function actorMention(data) { return SNOWFLAKE_RE.test(String(data.recordedBy || '')) ? `<@${data.recordedBy}>` : 'Not recorded'; }
-function addNotes(embed, data) {
-    const notes = cleanText(data.notes, 'Notes', { required: false, maxLength: 900 });
-    if (notes) embed.addFields({ name: '📝  ADDITIONAL NOTES', value: notes.slice(0, 1024), inline: false });
+
+function formatTimestampWIB(value = new Date()) {
+    const date = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(date.getTime())) return 'Time unavailable';
+    const parts = new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Asia/Jakarta',
+        day: '2-digit', month: 'short', year: 'numeric',
+        hour: '2-digit', minute: '2-digit', hour12: false,
+    }).format(date);
+    return `${parts} WIB`;
+}
+
+export function createEmployeeLogRecordId(value = new Date()) {
+    const date = value instanceof Date ? value : new Date(value);
+    const parts = new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit',
+    }).formatToParts(date);
+    const fields = Object.fromEntries(parts.map(part => [part.type, part.value]));
+    const datePart = `${fields.year}${fields.month}${fields.day}`;
+    const suffix = cryptoRandomSuffix();
+    return `SKAW-EL-${datePart}-${suffix}`;
+}
+
+function cryptoRandomSuffix() {
+    return randomUUID().replaceAll('-', '').slice(0, 10).toUpperCase();
 }
 
 export function buildEmployeeLogBody(type, data = {}) {
     const template = EMPLOYEE_LOG_TYPES[type];
     if (!template) throw new Error('Jenis log tidak valid.');
     const name = userMention(data.userId);
-    if (['sign_in', 'sign_out', 'resignation'].includes(type)) return `> Name: ${name}\n> Position: ${roleMention(data.position, 'Position')}\n> Activity: ${template.shortLabel}`;
-    if (type === 'promotion') {
-        if (data.previousRank === data.nextRank) throw new Error('Previous Rank dan New Rank tidak boleh sama.');
-        return `> Name: ${name}\n> Previous Rank: ${roleMention(data.previousRank, 'Previous Rank')}\n> New Rank: ${roleMention(data.nextRank, 'New Rank')}`;
-    }
-    if (type === 'mutation') {
-        if (data.fromRole === data.toRole) throw new Error('Role asal dan tujuan mutation tidak boleh sama.');
-        return `> Name: ${name}\n> Previous Position: ${roleMention(data.fromRole, 'Previous Position')}\n> New Position: ${roleMention(data.toRole, 'New Position')}`;
-    }
-    if (type === 'dismissal' || type === 'blacklist') return `> Name: ${name}\n> Position: ${roleMention(data.position, 'Position')}\n> Reason: ${cleanText(data.reason, 'Reason', { maxLength: 900 })}`;
-    if (type === 'warning') {
-        const warn = cleanText(data.warn, 'Warning Level', { maxLength: 10 });
-        if (!/^([1-9]\d?)\/([1-9]\d?)$/.test(warn)) throw new Error('Warning Level harus berformat seperti 1/2.');
-        const [current, maximum] = warn.split('/').map(Number);
-        if (current > maximum) throw new Error('Angka pertama Warning Level tidak boleh lebih besar dari angka kedua.');
-        return `> Name: ${name}\n> Position: ${roleMention(data.position, 'Position')}\n> Warning Level: ${warn}\n> Reason: ${cleanText(data.reason, 'Reason', { maxLength: 850 })}`;
-    }
-    if (type === 'others') return `> Name: ${name}\n> Position: ${roleMention(data.position, 'Position')}\n> Activity: ${cleanText(data.activityTitle, 'Activity title', { maxLength: 80 })}\n> Details: ${cleanText(data.activityDescription, 'Activity details', { maxLength: 850 })}`;
-    throw new Error('Template employee log belum tersedia.');
-}
-
-export function buildEmployeeLogEmbed(type, data = {}, bannerUrl = null) {
-    const template = EMPLOYEE_LOG_TYPES[type];
-    if (!template) throw new Error('Jenis log tidak valid.');
-    const embed = new EmbedBuilder()
-        .setColor(BRAND_BLUE)
-        .setAuthor({ name: '🏢 SKAW GROUP • PEOPLE OPERATIONS' })
-        .setTitle(`${template.emoji}  ${template.title}`.slice(0, 256))
-        .setDescription(`**${template.subtitle}**\nOfficial personnel record maintained by SKAW Management.`)
-        .setFooter({ text: FOOTER_TEXT })
-        .setTimestamp(new Date());
-    const name = userMention(data.userId);
-    const actor = actorMention(data);
-    if (['sign_in', 'sign_out', 'resignation'].includes(type)) {
-        embed.addFields(
-            { name: '👤  EMPLOYEE', value: name, inline: true },
-            { name: '🏷️  POSITION', value: roleMention(data.position, 'Position'), inline: true },
-            { name: '📌  ACTIVITY', value: template.shortLabel, inline: false },
-            { name: '🧾  RECORDED BY', value: actor, inline: true },
-        );
+    let lines;
+    if (type === 'sign_in' || type === 'sign_out') {
+        lines = [
+            `👤 **Employee:** ${name}`,
+            `🏢 **Position:** ${roleMention(data.position, 'Position')}`,
+            `📝 **Recorded By:** ${actorMention(data)}`,
+        ];
+    } else if (type === 'resignation') {
+        lines = [
+            `👤 **Employee:** ${name}`,
+            `🏢 **Position:** ${roleMention(data.position, 'Position')}`,
+            `📌 **Reason:** ${cleanText(data.reason, 'Resignation reason', { maxLength: 850 })}`,
+            `📝 **Recorded By:** ${actorMention(data)}`,
+        ];
     } else if (type === 'promotion') {
         if (data.previousRank === data.nextRank) throw new Error('Previous Rank dan New Rank tidak boleh sama.');
-        embed.addFields(
-            { name: '👤  EMPLOYEE', value: name, inline: true },
-            { name: '🪪  PREVIOUS RANK', value: roleMention(data.previousRank, 'Previous Rank'), inline: true },
-            { name: '🏆  NEW RANK', value: roleMention(data.nextRank, 'New Rank'), inline: true },
-            { name: '✅  ISSUED BY', value: actor, inline: true },
-            { name: '📣  MESSAGE', value: 'Congratulations on your promotion. We wish you continued success in your new role.', inline: false },
-        );
+        lines = [
+            `👤 **Employee:** ${name}`,
+            `⬆️ **Previous Rank:** ${roleMention(data.previousRank, 'Previous Rank')}`,
+            `🏆 **New Rank:** ${roleMention(data.nextRank, 'New Rank')}`,
+            `📝 **Recorded By:** ${actorMention(data)}`,
+        ];
     } else if (type === 'mutation') {
         if (data.fromRole === data.toRole) throw new Error('Role asal dan tujuan mutation tidak boleh sama.');
-        embed.addFields(
-            { name: '👤  EMPLOYEE', value: name, inline: true },
-            { name: '📍  PREVIOUS POSITION', value: roleMention(data.fromRole, 'Previous Position'), inline: true },
-            { name: '🧭  NEW POSITION', value: roleMention(data.toRole, 'New Position'), inline: true },
-            { name: '🧾  RECORDED BY', value: actor, inline: true },
-        );
+        lines = [
+            `👤 **Employee:** ${name}`,
+            `◽ **Previous Position:** ${roleMention(data.fromRole, 'Previous Position')}`,
+            `🔄 **New Position:** ${roleMention(data.toRole, 'New Position')}`,
+            `📝 **Recorded By:** ${actorMention(data)}`,
+        ];
     } else if (type === 'dismissal' || type === 'blacklist') {
-        embed.addFields(
-            { name: '👤  EMPLOYEE', value: name, inline: true },
-            { name: '🏷️  POSITION', value: roleMention(data.position, 'Position'), inline: true },
-            { name: type === 'blacklist' ? '🛡️  BLACKLIST REASON' : '⛔  DISMISSAL REASON', value: cleanText(data.reason, 'Reason', { maxLength: 900 }).slice(0, 1024), inline: false },
-            { name: '🧾  ISSUED BY', value: actor, inline: true },
-        );
+        lines = [
+            `👤 **Individual:** ${name}`,
+            `🏢 **Last Known Position:** ${roleMention(data.position, 'Position')}`,
+            `📌 **Reason:** ${cleanText(data.reason, 'Reason', { maxLength: 900 })}`,
+            `📝 **Issued By:** ${actorMention(data)}`,
+        ];
     } else if (type === 'warning') {
         const warn = cleanText(data.warn, 'Warning Level', { maxLength: 10 });
         if (!/^([1-9]\d?)\/([1-9]\d?)$/.test(warn)) throw new Error('Warning Level harus berformat seperti 1/2.');
         const [current, maximum] = warn.split('/').map(Number);
         if (current > maximum) throw new Error('Angka pertama Warning Level tidak boleh lebih besar dari angka kedua.');
-        embed.addFields(
-            { name: '👤  EMPLOYEE', value: name, inline: true },
-            { name: '🏷️  POSITION', value: roleMention(data.position, 'Position'), inline: true },
-            { name: '⚠️  WARNING LEVEL', value: `**${warn}**`, inline: true },
-            { name: '📋  REASON / OBSERVATION', value: cleanText(data.reason, 'Reason', { maxLength: 850 }).slice(0, 1024), inline: false },
-            { name: '🧾  ISSUED BY', value: actor, inline: true },
-        );
+        lines = [
+            `👤 **Employee:** ${name}`,
+            `🏢 **Position:** ${roleMention(data.position, 'Position')}`,
+            `⚠️ **Warning Level:** ${warn}`,
+            `📌 **Reason:** ${cleanText(data.reason, 'Reason', { maxLength: 850 })}`,
+            `📝 **Issued By:** ${actorMention(data)}`,
+        ];
     } else if (type === 'others') {
-        embed.setTitle(`📝  ${cleanText(data.activityTitle, 'Activity title', { maxLength: 80 })}`.slice(0, 256));
-        embed.addFields(
-            { name: '👤  EMPLOYEE', value: name, inline: true },
-            { name: '🏷️  POSITION', value: roleMention(data.position, 'Position'), inline: true },
-            { name: '📌  ACTIVITY DETAILS', value: cleanText(data.activityDescription, 'Activity details', { maxLength: 850 }).slice(0, 1024), inline: false },
-            { name: '🧾  RECORDED BY', value: actor, inline: true },
-        );
+        lines = [
+            `🏷️ **Activity:** ${cleanText(data.activityTitle, 'Activity title', { maxLength: 80 })}`,
+            `👤 **Employee:** ${name}`,
+            `🏢 **Position:** ${roleMention(data.position, 'Position')}`,
+            '',
+            '**📌 ACTIVITY DETAILS**',
+            cleanText(data.activityDescription, 'Activity details', { maxLength: 850 }),
+            '',
+            `📝 **Recorded By:** ${actorMention(data)}`,
+        ];
+    } else {
+        throw new Error('Template employee log belum tersedia.');
     }
-    addNotes(embed, data);
-    embed.addFields({ name: '📜  RECORD STATEMENT', value: 'Regards,\n**SKAW Management.**', inline: false });
+    return lines.join('\n');
+}
+
+function getActivitySummary(type) {
+    const summaries = {
+        sign_in: "This record confirms the employee's commencement of duty.",
+        sign_out: "This record documents the completion of the employee's duty period.",
+        promotion: 'This notice formally records a career advancement within SKAW GROUP.',
+        dismissal: 'This notice records an employee status change for official personnel administration.',
+        resignation: 'This record documents an employee resignation from their position.',
+        mutation: 'This record documents an updated organizational assignment.',
+        warning: 'This notice documents a formal employee warning for compliance records.',
+        blacklist: 'This record documents a blacklist decision maintained for SKAW GROUP compliance and administrative purposes.',
+        others: 'This entry documents an additional personnel activity registered by SKAW Management.',
+    };
+    return summaries[type] || 'Official personnel record maintained by SKAW Management.';
+}
+
+export function buildEmployeeLogEmbed(type, data = {}, bannerUrl = null) {
+    const template = EMPLOYEE_LOG_TYPES[type];
+    if (!template) throw new Error('Jenis log tidak valid.');
+    const now = data.recordedAt ? new Date(data.recordedAt) : new Date();
+    const recordId = cleanText(data.recordId || createEmployeeLogRecordId(now), 'Record ID', { maxLength: 64 });
+    const title = type === 'others'
+        ? `📝 ${cleanText(data.activityTitle, 'Activity title', { maxLength: 80 })}`
+        : `${template.emoji} ${template.title}`;
+    const intro = getActivitySummary(type);
+    const lines = [
+        `**${template.subtitle}**`,
+        '',
+        intro,
+        '',
+        '━━━━━━━━━━━━━━━━━━━━━━━━',
+        '',
+        '**📋 RECORD INFORMATION**',
+        '',
+        buildEmployeeLogBody(type, data),
+    ];
+    const notes = cleanText(data.notes, 'Notes', { required: false, maxLength: 900 });
+    if (notes) {
+        lines.push('', '━━━━━━━━━━━━━━━━━━━━━━━━', '', '**🗒️ ADDITIONAL NOTES**', '', notes);
+    }
+    lines.push('', '━━━━━━━━━━━━━━━━━━━━━━━━', '', 'Regards,', '', '**SKAW Management.**');
+    const description = lines.join('\n');
+    if (description.length > 4096) throw new Error('Isi log terlalu panjang untuk embed Discord. Ringkas deskripsi atau Notes.');
+    const embed = new EmbedBuilder()
+        .setColor(BRAND_BLUE)
+        .setAuthor({ name: 'SKAW GROUP  ·  PEOPLE OPERATIONS' })
+        .setTitle(title.slice(0, 256))
+        .setDescription(description)
+        .setFooter({ text: `${FOOTER_TEXT}  •  ${recordId}  •  ${formatTimestampWIB(now)}`.slice(0, 2048) });
     const safeBanner = normalizeBannerUrl(bannerUrl);
     if (safeBanner) embed.setImage(safeBanner);
     return embed;
@@ -270,7 +320,6 @@ function isStickerSpecificDiscordError(error) {
 export async function sendEmployeeLog(client, guild, type, data) {
     const template = EMPLOYEE_LOG_TYPES[type];
     if (!template) throw new Error('Jenis log tidak valid.');
-    // Validate all record content before resolving the destination.
     const config = await getEmployeeLogsConfig(client, guild.id);
     const channelId = config.channels[type];
     if (!channelId) throw new Error(`Channel ${template.shortLabel} belum diatur. Admin perlu menjalankan /employee-logs set-channel.`);
@@ -282,8 +331,12 @@ export async function sendEmployeeLog(client, guild, type, data) {
     const permissions = channel.permissionsFor(botMember || client.user);
     const required = PermissionFlagsBits.ViewChannel | PermissionFlagsBits.SendMessages | PermissionFlagsBits.EmbedLinks;
     if (!permissions?.has(required)) throw new Error(`Bot membutuhkan izin View Channel, Send Messages, dan Embed Links di ${channel}.`);
+
+    const publishedAt = new Date();
+    const recordId = data.recordId || createEmployeeLogRecordId(publishedAt);
+    const publishedData = { ...data, recordId, recordedAt: publishedAt, recordedBy: data.recordedBy || '' };
     const bannerUrl = resolveEmployeeLogsBanner(config, type);
-    const embed = buildEmployeeLogEmbed(type, data, bannerUrl);
+    const embed = buildEmployeeLogEmbed(type, publishedData, bannerUrl);
     const allowedMentions = { parse: [] };
     const stickerId = config.stickers[type];
     let message;
@@ -301,23 +354,23 @@ export async function sendEmployeeLog(client, guild, type, data) {
     } else {
         message = await channel.send({ embeds: [embed], allowedMentions });
     }
-    // Audit persistence is best-effort: a database hiccup must not pretend the already-published Discord record failed.
     try {
         const oldEntries = await client.db.get(AUDIT_KEY(guild.id), []);
         const history = Array.isArray(oldEntries) ? oldEntries : [];
         history.push({
+            recordId,
             type,
             employeeId: String(data.userId || ''),
             recordedBy: String(data.recordedBy || ''),
             channelId: String(channel.id),
             messageId: String(message.id),
-            publishedAt: new Date().toISOString(),
+            publishedAt: publishedAt.toISOString(),
         });
         await client.db.set(AUDIT_KEY(guild.id), history.slice(-1000));
     } catch (auditError) {
         console.warn('[Employee Logs] Published record but could not persist the audit entry:', auditError?.message || auditError);
     }
-    return { channel, message, template, stickerSent, stickerWarning };
+    return { channel, message, template, recordId, publishedAt, stickerSent, stickerWarning };
 }
 
 export async function getEmployeeLogAudit(client, guildId, { type = null, limit = 10 } = {}) {

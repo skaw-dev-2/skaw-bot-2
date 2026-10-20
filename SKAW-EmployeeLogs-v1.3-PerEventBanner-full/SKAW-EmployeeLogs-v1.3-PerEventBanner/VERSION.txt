@@ -1,0 +1,2 @@
+SKAW Employee Logs v1.3.0
+Per-event banner profiles for individual personnel events.

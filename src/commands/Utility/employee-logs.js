@@ -12,20 +12,15 @@ import {
     clearEmployeeLogsBanner,
     clearEmployeeLogsEventBanner,
     clearEmployeeLogsChannel,
-    clearEmployeeLogsManagementRole,
-    clearEmployeeLogsStaffRole,
     clearEmployeeLogsSticker,
     getEmployeeLogsConfig,
     getEmployeeLogAudit,
-    setEmployeeLogsApprovalChannel,
     setEmployeeLogsBanner,
     setEmployeeLogsEventBanner,
     setEmployeeLogsChannel,
-    setEmployeeLogsManagementRole,
-    setEmployeeLogsStaffRole,
     setEmployeeLogsSticker,
 } from '../../services/employeeLogsService.js';
-import { buildEmployeeLogsPanel, startEmployeeLogsInteractionHandler } from '../../services/employeeLogsInteractionService.js';
+import { buildEmployeeLogsPanel } from '../../services/employeeLogsInteractionService.js';
 
 const TYPE_CHOICES = Object.entries(EMPLOYEE_LOG_TYPES).map(([value, entry]) => ({ name: `${entry.emoji} ${entry.shortLabel}`.slice(0, 100), value }));
 const BANNER_EVENT_CHOICES = Object.entries(EMPLOYEE_LOG_BANNER_EVENTS).map(([value, entry]) => ({ name: entry.label.slice(0, 100), value }));
@@ -36,15 +31,6 @@ function requireManager(interaction) {
         && !interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
         throw new Error('Kamu membutuhkan permission **Manage Server** untuk mengubah konfigurasi Employee Logs.');
     }
-}
-function canUsePanel(interaction, config) {
-    const roles = interaction.member?.roles;
-    const hasStaffRole = config.staffRoleId && (roles?.cache?.has?.(config.staffRoleId)
-        || (Array.isArray(roles) && roles.includes(config.staffRoleId))
-        || interaction.guild?.members?.cache?.get(interaction.user.id)?.roles?.cache?.has?.(config.staffRoleId));
-    return Boolean(interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)
-        || interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)
-        || hasStaffRole);
 }
 async function assertCanSend(channel, guild) {
     if (!channel || !channel.isTextBased() || channel.isDMBased() || channel.guildId !== guild.id) throw new Error('Pilih channel teks dari server yang sama.');
@@ -65,12 +51,10 @@ function configurationEmbed(guild, config) {
         .setColor(0x2563eb)
         .setAuthor({ name: '🏢 SKAW GROUP • PEOPLE OPERATIONS' })
         .setTitle('⚙️ EMPLOYEE RECORDS CONFIGURATION')
-        .setDescription(`**SERVER:** ${guild.name}\nManage channel routing, branding, staff access, and approval workflow from this configuration.`)
+        .setDescription(`**SERVER:** ${guild.name}\nManage channel routing and event branding. All Employee Logs actions require Manage Server permission.`)
         .addFields(channelFields)
         .addFields(
-            { name: '🔐 Staff Access', value: config.staffRoleId ? `<@&${config.staffRoleId}>` : 'No staff role set — Manage Server permission required.', inline: false },
-            { name: '🛡️ Management Approver Role', value: config.managementRoleId ? `<@&${config.managementRoleId}>` : '⚠️ Not configured — Blacklist and Dismissal approval is unavailable.', inline: false },
-            { name: '📨 Approval Queue Channel', value: config.approvalChannelId ? `<#${config.approvalChannelId}>` : '⚠️ Not configured — Blacklist and Dismissal approval is unavailable.', inline: false },
+            { name: '🔐 Access Control', value: 'Manage Server permission required for panel, configuration, and all record actions.', inline: false },
             { name: '🖼️ Default Banner', value: config.bannerUrl ? '✅ Configured as fallback.' : '⚪ No default banner.', inline: false },
             { name: '🎨 Event-specific Banners', value: bannerLines.join('\n').slice(0, 1024), inline: false },
             { name: '✨ Optional Stickers', value: stickerLines.join('\n').slice(0, 1024), inline: false },
@@ -83,7 +67,7 @@ export default {
     data: new SlashCommandBuilder()
         .setName('employee-logs')
         .setDescription('Buka panel privat dan atur channel log karyawan SKAW GROUP.')
-        // Leave command visible so a configured staff role can use /panel; sensitive config subcommands are checked below.
+        .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
         .addSubcommand(subcommand => subcommand.setName('panel').setDescription('Buka panel Employee Logs privat dari channel mana pun.'))
         .addSubcommand(subcommand => subcommand.setName('set-channel').setDescription('Atur channel tujuan untuk salah satu jenis log.')
             .addStringOption(option => option.setName('type').setDescription('Jenis log.').setRequired(true).addChoices(...TYPE_CHOICES))
@@ -103,14 +87,6 @@ export default {
             .addStringOption(option => option.setName('sticker_id').setDescription('ID sticker server Discord.').setRequired(true).setMinLength(17).setMaxLength(20)))
         .addSubcommand(subcommand => subcommand.setName('clear-sticker').setDescription('Hapus sticker opsional dari jenis log.')
             .addStringOption(option => option.setName('type').setDescription('Jenis log.').setRequired(true).addChoices(...TYPE_CHOICES)))
-        .addSubcommand(subcommand => subcommand.setName('set-staff-role').setDescription('Role yang boleh membuat employee logs.')
-            .addRoleOption(option => option.setName('role').setDescription('Role staff yang diizinkan.').setRequired(true)))
-        .addSubcommand(subcommand => subcommand.setName('clear-staff-role').setDescription('Hapus role staff; panel kembali terbatas ke Manage Server.'))
-        .addSubcommand(subcommand => subcommand.setName('set-management-role').setDescription('Role yang boleh menyetujui Blacklist dan Dismissal.')
-            .addRoleOption(option => option.setName('role').setDescription('Role Management approver.').setRequired(true)))
-        .addSubcommand(subcommand => subcommand.setName('clear-management-role').setDescription('Hapus role approver Management.'))
-        .addSubcommand(subcommand => subcommand.setName('set-approval-channel').setDescription('Atur channel antrian persetujuan Blacklist dan Dismissal.')
-            .addChannelOption(option => option.setName('channel').setDescription('Channel privat yang hanya dapat diakses Management.').addChannelTypes(ChannelType.GuildText).setRequired(true)))
         .addSubcommand(subcommand => subcommand.setName('status').setDescription('Lihat seluruh channel dan konfigurasi Employee Logs.'))
         .addSubcommand(subcommand => subcommand.setName('history').setDescription('Lihat audit trail log yang sudah dipublikasikan.')
             .addStringOption(option => option.setName('type').setDescription('Filter jenis log (opsional).').setRequired(false).addChoices(...TYPE_CHOICES))
@@ -122,13 +98,8 @@ export default {
             const subcommand = interaction.options.getSubcommand();
             const guildId = interaction.guildId;
             if (subcommand === 'panel') {
-                // Self-start the interaction listener when the panel is first opened; duplicate app.js hooks remain safe/idempotent.
-                startEmployeeLogsInteractionHandler(interaction.client);
+                requireManager(interaction);
                 await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-                const config = await getEmployeeLogsConfig(interaction.client, guildId);
-                if (!canUsePanel(interaction, config)) {
-                    return interaction.editReply({ content: '❌ Kamu membutuhkan role Staff yang dikonfigurasi atau permission Manage Server untuk menggunakan panel.', allowedMentions: { parse: [] } });
-                }
                 return interaction.editReply({ ...buildEmployeeLogsPanel(), allowedMentions: { parse: [] } });
             }
             requireManager(interaction);
@@ -150,7 +121,7 @@ export default {
                         const meta = EMPLOYEE_LOG_TYPES[record.type];
                         const date = new Date(record.publishedAt);
                         const validDate = Number.isNaN(date.getTime()) ? 'Unknown time' : `<t:${Math.floor(date.getTime() / 1000)}:f>`;
-                        const line = `**${index + 1}. ${meta?.emoji || '📄'} ${meta?.shortLabel || record.type}**\nEmployee: <@${record.employeeId}> · Recorded by: <@${record.recordedBy}>${record.approvedBy ? ` · Approved by: <@${record.approvedBy}>` : ''}\nChannel: <#${record.channelId}> · ${validDate}\n[Open record](https://discord.com/channels/${guildId}/${record.channelId}/${record.messageId})`;
+                        const line = `**${index + 1}. ${meta?.emoji || '📄'} ${meta?.shortLabel || record.type}**\nEmployee: <@${record.employeeId}> · Recorded by: <@${record.recordedBy}>\nChannel: <#${record.channelId}> · ${validDate}\n[Open record](https://discord.com/channels/${guildId}/${record.channelId}/${record.messageId})`;
                         if (total + line.length > 3800) break;
                         lines.push(line); total += line.length + 2;
                     }
@@ -163,8 +134,6 @@ export default {
                 const type = interaction.options.getString('type', true);
                 const channel = interaction.options.getChannel('channel', true);
                 await assertCanSend(channel, interaction.guild);
-                const currentConfig = await getEmployeeLogsConfig(interaction.client, guildId);
-                if (currentConfig.approvalChannelId === channel.id) throw new Error('Channel approval Management tidak boleh dipakai sebagai channel log resmi.');
                 await setEmployeeLogsChannel(interaction.client, guildId, type, channel.id, interaction.user.id);
                 return interaction.editReply({ content: `✅ Channel **${EMPLOYEE_LOG_TYPES[type].shortLabel}** diset ke ${channel}.`, allowedMentions: { parse: [] } });
             }
@@ -204,34 +173,6 @@ export default {
                 const type = interaction.options.getString('type', true);
                 await clearEmployeeLogsSticker(interaction.client, guildId, type, interaction.user.id);
                 return interaction.reply({ content: `✅ Sticker untuk **${EMPLOYEE_LOG_TYPES[type].shortLabel}** dihapus.`, flags: MessageFlags.Ephemeral, allowedMentions: { parse: [] } });
-            }
-            if (subcommand === 'set-staff-role') {
-                const role = interaction.options.getRole('role', true);
-                await setEmployeeLogsStaffRole(interaction.client, guildId, role.id, interaction.user.id);
-                return interaction.reply({ content: `✅ Role Staff diset ke ${role}. Role ini dapat menggunakan panel Employee Logs.`, flags: MessageFlags.Ephemeral, allowedMentions: { parse: [] } });
-            }
-            if (subcommand === 'clear-staff-role') {
-                await clearEmployeeLogsStaffRole(interaction.client, guildId, interaction.user.id);
-                return interaction.reply({ content: '✅ Role Staff dihapus. Panel kembali hanya untuk pengguna dengan Manage Server.', flags: MessageFlags.Ephemeral, allowedMentions: { parse: [] } });
-            }
-            if (subcommand === 'set-management-role') {
-                const role = interaction.options.getRole('role', true);
-                if (role.id === interaction.guildId) throw new Error('Pilih role Management, bukan @everyone.');
-                await setEmployeeLogsManagementRole(interaction.client, guildId, role.id, interaction.user.id);
-                return interaction.reply({ content: `✅ Role approver Management diset ke ${role}.`, flags: MessageFlags.Ephemeral, allowedMentions: { parse: [] } });
-            }
-            if (subcommand === 'clear-management-role') {
-                await clearEmployeeLogsManagementRole(interaction.client, guildId, interaction.user.id);
-                return interaction.reply({ content: '✅ Role approver Management dihapus. Persetujuan Blacklist/Dismissal dinonaktifkan sampai role baru diset.', flags: MessageFlags.Ephemeral, allowedMentions: { parse: [] } });
-            }
-            if (subcommand === 'set-approval-channel') {
-                await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-                const channel = interaction.options.getChannel('channel', true);
-                await assertCanSend(channel, interaction.guild);
-                const currentConfig = await getEmployeeLogsConfig(interaction.client, guildId);
-                if (Object.values(currentConfig.channels).includes(channel.id)) throw new Error('Pilih channel khusus Management yang berbeda dari semua channel log resmi.');
-                await setEmployeeLogsApprovalChannel(interaction.client, guildId, channel.id, interaction.user.id);
-                return interaction.editReply({ content: `✅ Approval queue diset ke ${channel}. Pastikan channel ini hanya dapat dilihat Management.`, allowedMentions: { parse: [] } });
             }
             throw new Error('Subcommand tidak dikenal.');
         } catch (error) {

@@ -58,8 +58,8 @@ export default {
         InteractionHelper.patchInteractionResponses(interaction);
         ResponseCoordinator.attach(interaction);
 
-        // Employee Logs has its own dedicated component handler. Delegate its IDs before
-        // the generic router tries to resolve them in client.buttons/selectMenus/modals.
+        // Route Employee Logs components before TitanBot's generic registry lookup.
+        // Its selects and modal IDs are handled by the dedicated Employee Logs service.
         const isEmployeeLogsComponent = Boolean(interaction.customId?.startsWith('skaw_el_')) && (
           interaction.isButton?.() || interaction.isUserSelectMenu?.() || interaction.isRoleSelectMenu?.()
           || interaction.isStringSelectMenu?.() || interaction.isModalSubmit?.()

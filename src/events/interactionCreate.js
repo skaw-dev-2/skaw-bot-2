@@ -19,6 +19,7 @@ import { resolveSlashAccessKey } from '../utils/messageAdapter.js';
 import { isCollectorManagedComponent } from '../utils/collectorComponents.js';
 import { ResponseCoordinator } from '../utils/responseCoordinator.js';
 import { enforceDefaultCommandPermissions } from '../utils/permissionGuard.js';
+import { handleEmployeeLogsComponent } from '../services/employeeLogsInteractionService.js';
 
 const COMMAND_ERROR_SUBTYPES = {
   warn: 'warn_failed',
@@ -58,14 +59,12 @@ export default {
         InteractionHelper.patchInteractionResponses(interaction);
         ResponseCoordinator.attach(interaction);
 
-        // Route Employee Logs components before TitanBot's generic registry lookup.
-        // Its selects and modal IDs are handled by the dedicated Employee Logs service.
-        const isEmployeeLogsComponent = Boolean(interaction.customId?.startsWith('skaw_el_')) && (
+        // Employee Logs buttons, selects and modals must be routed before the
+        // generic interaction handlers so public Edit buttons remain functional.
+        if (interaction.customId?.startsWith('skaw_el_') && (
           interaction.isButton?.() || interaction.isUserSelectMenu?.() || interaction.isRoleSelectMenu?.()
           || interaction.isStringSelectMenu?.() || interaction.isModalSubmit?.()
-        );
-        if (isEmployeeLogsComponent) {
-          const { handleEmployeeLogsComponent } = await import('../services/employeeLogsInteractionService.js');
+        )) {
           await handleEmployeeLogsComponent(interaction);
           return;
         }

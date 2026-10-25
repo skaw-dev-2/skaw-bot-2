@@ -23,11 +23,8 @@ import {
 
 const SESSION_TTL_MS = 15 * 60 * 1000;
 const sessions = new Map();
-const deferredUpdateInteractions = new WeakSet();
-
 async function acknowledgeComponentUpdate(interaction) {
     await interaction.deferUpdate();
-    deferredUpdateInteractions.add(interaction);
 }
 
 function hasManageGuild(interaction) {
@@ -58,7 +55,7 @@ function getSession(interaction, id) {
     return session;
 }
 function roleFieldLabel(field) {
-    return ({ position: 'Position / jabatan', previousRank: 'Previous Rank', nextRank: 'New Rank', fromRole: 'Previous Position', toRole: 'New Position' })[field] || 'Position';
+    return ({ position: 'Position / jabatan', previousRank: 'Previous Rank', newRank: 'New Rank', fromRole: 'Previous Position', toRole: 'New Position' })[field] || 'Position';
 }
 function userSelectRow(session) {
     return new ActionRowBuilder().addComponents(new UserSelectMenuBuilder()
@@ -90,8 +87,8 @@ function textInput(id, label, placeholder, required, style = TextInputStyle.Shor
 function buildModal(session) {
     const template = EMPLOYEE_LOG_TYPES[session.type];
     const modal = new ModalBuilder().setCustomId(`skaw_el_form:${session.id}`).setTitle(`${template.shortLabel} • Record Details`.slice(0, 45));
-    if (session.type === 'dismissal' || session.type === 'blacklist' || session.type === 'resignation') {
-        const reasonLabel = session.type === 'resignation' ? 'Resignation Reason (required)' : 'Reason (required)';
+    if (session.type === 'dismissal' || session.type === 'blacklist' || session.type === 'resignation' || session.type === 'demote') {
+        const reasonLabel = session.type === 'resignation' ? 'Resignation Reason (required)' : session.type === 'demote' ? 'Demotion Reason (required)' : session.type === 'dismissal' ? 'Dismissal Reason (required)' : 'Blacklist Reason (required)';
         modal.addComponents(
             textInput('reason', reasonLabel, 'Explain the reason for this record.', true, TextInputStyle.Paragraph, 850, session.data.reason),
             textInput('notes', 'Additional Notes (optional)', 'Optional supporting details.', false, TextInputStyle.Paragraph, 850, session.data.notes),
@@ -212,7 +209,7 @@ async function handleModal(interaction) {
     const session = getSession(interaction, sessionId);
     if (!session) return interaction.editReply({ content: '⌛ Form expired. Open `/employee-logs panel` and start again.', allowedMentions: { parse: [] } });
     const get = id => interaction.fields.getTextInputValue(id).trim();
-    if (session.type === 'dismissal' || session.type === 'blacklist' || session.type === 'resignation') session.data.reason = get('reason');
+    if (session.type === 'dismissal' || session.type === 'blacklist' || session.type === 'resignation' || session.type === 'demote') session.data.reason = get('reason');
     if (session.type === 'warning') { session.data.warn = get('warn'); session.data.reason = get('reason'); }
     if (session.type === 'others') { session.data.activityTitle = get('activityTitle'); session.data.activityDescription = get('activityDescription'); }
     session.data.notes = get('notes');
@@ -224,6 +221,7 @@ async function handleEdit(interaction) {
     const sessionId = interaction.customId.slice('skaw_el_edit:'.length);
     const session = getSession(interaction, sessionId);
     if (!session) return sendPrivate(interaction, '⌛ Form expired. Open `/employee-logs panel` and start again.');
+    if (session.status === 'submitting') return sendPrivate(interaction, '⏳ This record is already being processed. Please wait.');
     return interaction.showModal(buildModal(session));
 }
 
@@ -252,18 +250,26 @@ async function handleConfirm(interaction) {
 }
 
 async function handleBackToPanel(interaction) {
-    await acknowledgeComponentUpdate(interaction);
     const sessionId = interaction.customId.slice('skaw_el_back:'.length);
     const session = getSession(interaction, sessionId);
+    if (session?.status === 'submitting') {
+        await acknowledgeComponentUpdate(interaction);
+        return sendPrivate(interaction, '⏳ This record is already being processed. Please wait.');
+    }
+    await acknowledgeComponentUpdate(interaction);
     if (session) sessions.delete(sessionKey(session.guildId, session.userId));
     const config = await getEmployeeLogsConfig(interaction.client, interaction.guildId);
     return interaction.editReply({ content: 'Session cancelled. Choose another activity or close this private panel.', ...buildEmployeeLogsPanel(config), allowedMentions: { parse: [] } });
 }
 
 async function handleCancel(interaction) {
-    await acknowledgeComponentUpdate(interaction);
     const sessionId = interaction.customId.slice('skaw_el_cancel:'.length);
     const session = getSession(interaction, sessionId);
+    if (session?.status === 'submitting') {
+        await acknowledgeComponentUpdate(interaction);
+        return sendPrivate(interaction, '⏳ This record is already being processed and cannot be cancelled now.');
+    }
+    await acknowledgeComponentUpdate(interaction);
     if (session) sessions.delete(sessionKey(session.guildId, session.userId));
     return interaction.editReply({ content: '🗑️ Record cancelled. Nothing was published.', embeds: [], components: [], allowedMentions: { parse: [] } });
 }
@@ -288,6 +294,7 @@ async function handleInteraction(interaction) {
     if (interaction.isUserSelectMenu?.() && interaction.customId.startsWith('skaw_el_user:')) return handleUserSelect(interaction);
     if (interaction.isRoleSelectMenu?.() && interaction.customId.startsWith('skaw_el_role:')) return handleRoleSelect(interaction);
     if (interaction.isModalSubmit?.() && interaction.customId.startsWith('skaw_el_form:')) return handleModal(interaction);
+    return sendPrivate(interaction, 'This Employee Logs action is not recognized or has expired. Reopen `/employee-logs panel` and try again.');
 }
 
 export function buildEmployeeLogsPanel(config = null) {
@@ -299,30 +306,34 @@ export function buildEmployeeLogsPanel(config = null) {
             : '✅ **Setup complete:** all activity destination channels are configured.';
     const embed = new EmbedBuilder()
         .setColor(0x2563eb)
-        .setAuthor({ name: '🏢 SKAW GROUP • PEOPLE OPERATIONS' })
+        .setAuthor({ name: 'SKAW GROUP · PEOPLE OPERATIONS' })
         .setTitle('📑 EMPLOYEE RECORDS CONSOLE')
         .setDescription([
-            '**CENTRAL PERSONNEL LOGGING SYSTEM**',
-            'Choose an activity below. Forms and previews are visible only to you.',
+            '**CORPORATE PERSONNEL MANAGEMENT**',
+            'Choose an activity to create an official record. Your workflow and preview are private.',
             '',
-            '🟢 Sign In • 🔵 Sign Out • 🏆 Promotion',
-            '⛔ Dismissal • 📄 Resignation • 🔄 Mutation',
-            '⚠️ Warning • 🛡️ Blacklist • 📝 Others',
+            '🟢 Sign In · 🔵 Sign Out · 🏆 Promotion · 🔻 Demote',
+            '⛔ Dismissal · 📄 Resignation · 🔄 Mutation',
+            '⚠️ Warning · 🛡️ Blacklist · 📝 Others',
             '',
-            'All activity forms and previews are private. Final records are published to the configured destination channel.',
+            'The final embed is sent automatically to the configured channel for that activity.',
             '',
             setupSummary,
         ].join('\n'))
         .setFooter({ text: 'SKAW GROUP • PEOPLE OPERATIONS' })
         .setTimestamp(new Date());
     const types = Object.entries(EMPLOYEE_LOG_TYPES);
+    const rowSizes = [4, 3, 3];
     const rows = [];
-    for (let start = 0; start < types.length; start += 3) {
+    let offset = 0;
+    for (const rowSize of rowSizes) {
+        const group = types.slice(offset, offset + rowSize);
+        if (!group.length) continue;
         const row = new ActionRowBuilder();
-        for (const [type, entry] of types.slice(start, start + 3)) {
+        for (const [type, entry] of group) {
             const style = type === 'sign_in' ? ButtonStyle.Success
-                : type === 'dismissal' || type === 'blacklist' ? ButtonStyle.Danger
-                : type === 'promotion' ? ButtonStyle.Primary : ButtonStyle.Secondary;
+                : ['dismissal', 'blacklist', 'warning', 'demote'].includes(type) ? ButtonStyle.Danger
+                : ['promotion', 'sign_out'].includes(type) ? ButtonStyle.Primary : ButtonStyle.Secondary;
             row.addComponents(new ButtonBuilder()
                 .setCustomId(`skaw_el_start:${type}`)
                 .setLabel(entry.shortLabel)
@@ -330,6 +341,7 @@ export function buildEmployeeLogsPanel(config = null) {
                 .setStyle(style));
         }
         rows.push(row);
+        offset += rowSize;
     }
     return { embeds: [embed], components: rows, allowedMentions: { parse: [] } };
 }
@@ -342,11 +354,14 @@ export async function handleEmployeeLogsComponent(interaction) {
         console.error('[Employee Logs]', error);
         if (!interaction.isRepliable?.()) return;
         try {
-            if (interaction.deferred && !interaction.replied && !deferredUpdateInteractions.has(interaction)) {
-                await interaction.editReply({ content: `❌ Employee Logs: ${message}`, embeds: [], components: [], allowedMentions: { parse: [] } });
+            const payload = { content: `❌ Employee Logs: ${message}`, embeds: [], components: [], allowedMentions: { parse: [] } };
+            if (interaction.deferred && !interaction.replied) {
+                await interaction.editReply(payload);
+            } else if (interaction.replied) {
+                await interaction.followUp({ ...payload, flags: MessageFlags.Ephemeral });
             } else {
-                await sendPrivate(interaction, `❌ Employee Logs: ${message}`);
+                await interaction.reply({ ...payload, flags: MessageFlags.Ephemeral });
             }
-        } catch { /* Interaction already expired/acknowledged */ }
+        } catch { /* Interaction expired or already acknowledged. */ }
     }
 }

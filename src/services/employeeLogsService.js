@@ -191,32 +191,91 @@ function cryptoRandomSuffix() {
     return randomUUID().replaceAll('-', '').slice(0, 10).toUpperCase();
 }
 
+const EMOJI = Object.freeze({
+    signIn: String.fromCodePoint(0x1F7E2),
+    signOut: String.fromCodePoint(0x1F535),
+    promotion: String.fromCodePoint(0x1F3C6),
+    demotion: String.fromCodePoint(0x1F53B),
+    dismissal: String.fromCodePoint(0x26D4, 0xFE0F),
+    resignation: String.fromCodePoint(0x1F4C4),
+    mutation: String.fromCodePoint(0x1F504),
+    warning: String.fromCodePoint(0x26A0, 0xFE0F),
+    blacklist: String.fromCodePoint(0x1F6E1, 0xFE0F),
+    others: String.fromCodePoint(0x1F4DD),
+    person: String.fromCodePoint(0x1F464),
+    building: String.fromCodePoint(0x1F3E2),
+    pin: String.fromCodePoint(0x1F4CC),
+    note: String.fromCodePoint(0x1F5D2, 0xFE0F),
+    clipboard: String.fromCodePoint(0x1F4CB),
+    rank: String.fromCodePoint(0x1F539),
+    arrow: String.fromCodePoint(0x27A1, 0xFE0F),
+    recorded: String.fromCodePoint(0x1F4DD),
+});
+
+const TITLE_EMOJI = Object.freeze({
+    sign_in: EMOJI.signIn,
+    sign_out: EMOJI.signOut,
+    promotion: EMOJI.promotion,
+    demote: EMOJI.demotion,
+    dismissal: EMOJI.dismissal,
+    resignation: EMOJI.resignation,
+    mutation: EMOJI.mutation,
+    warning: EMOJI.warning,
+    blacklist: EMOJI.blacklist,
+    others: EMOJI.others,
+});
+
 export function buildEmployeeLogBody(type, data = {}) {
     const template = EMPLOYEE_LOG_TYPES[type];
     if (!template) throw new Error('Jenis log tidak valid.');
     const name = userMention(data.userId);
+    const person = `${EMOJI.person} **Employee:** ${name}`;
+    const position = `${EMOJI.building} **Position:** ${roleMention(data.position, 'Position')}`;
     const lines = [];
+
     if (type === 'sign_in' || type === 'sign_out') {
-        lines.push(`👤 **Employee:** ${name}`, `🏢 **Position:** ${roleMention(data.position, 'Position')}`);
+        lines.push(person, position);
     } else if (type === 'resignation') {
-        lines.push(`👤 **Employee:** ${name}`, `🏢 **Position:** ${roleMention(data.position, 'Position')}`, `📌 **Reason:** ${cleanText(data.reason, 'Resignation reason', { maxLength: 850 })}`);
+        lines.push(person, position, `${EMOJI.pin} **Reason:** ${cleanText(data.reason, 'Resignation reason', { maxLength: 850 })}`);
     } else if (type === 'promotion' || type === 'demote') {
         if (data.previousRank === data.newRank) throw new Error('Previous Rank dan New Rank tidak boleh sama.');
-        lines.push(`👤 **Employee:** ${name}`, `🔹 **Previous Rank:** ${roleMention(data.previousRank, 'Previous Rank')}`, `${type === 'promotion' ? '🏆' : '🔻'} **New Rank:** ${roleMention(data.newRank, 'New Rank')}`);
-        if (type === 'demote') lines.push(`📌 **Reason:** ${cleanText(data.reason, 'Demotion reason', { maxLength: 850 })}`);
+        lines.push(
+            person,
+            `${EMOJI.rank} **Previous Rank:** ${roleMention(data.previousRank, 'Previous Rank')}`,
+            `${type === 'promotion' ? EMOJI.promotion : EMOJI.demotion} **New Rank:** ${roleMention(data.newRank, 'New Rank')}`,
+        );
+        if (type === 'demote') lines.push(`${EMOJI.pin} **Reason:** ${cleanText(data.reason, 'Demotion reason', { maxLength: 850 })}`);
     } else if (type === 'mutation') {
         if (data.fromRole === data.toRole) throw new Error('Role asal dan tujuan mutation tidak boleh sama.');
-        lines.push(`👤 **Employee:** ${name}`, `🔹 **Previous Position:** ${roleMention(data.fromRole, 'Previous Position')}`, `➡️ **New Position:** ${roleMention(data.toRole, 'New Position')}`);
+        lines.push(
+            person,
+            `${EMOJI.rank} **Previous Position:** ${roleMention(data.fromRole, 'Previous Position')}`,
+            `${EMOJI.arrow} **New Position:** ${roleMention(data.toRole, 'New Position')}`,
+        );
     } else if (type === 'dismissal' || type === 'blacklist') {
-        lines.push(`👤 **Individual:** ${name}`, `🏢 **Last Known Position:** ${roleMention(data.position, 'Position')}`, `📌 **${type === 'blacklist' ? 'Blacklist Reason' : 'Dismissal Reason'}:** ${cleanText(data.reason, 'Reason', { maxLength: 900 })}`);
+        lines.push(
+            `${EMOJI.person} **Individual:** ${name}`,
+            `${EMOJI.building} **Last Known Position:** ${roleMention(data.position, 'Position')}`,
+            `${EMOJI.pin} **${type === 'blacklist' ? 'Blacklist Reason' : 'Dismissal Reason'}:** ${cleanText(data.reason, 'Reason', { maxLength: 900 })}`,
+        );
     } else if (type === 'warning') {
         const warn = cleanText(data.warn, 'Warning Level', { maxLength: 10 });
         if (!/^([1-9]\d?)\/([1-9]\d?)$/.test(warn)) throw new Error('Warning Level harus berformat seperti 1/2.');
         const [current, maximum] = warn.split('/').map(Number);
         if (current > maximum) throw new Error('Angka pertama Warning Level tidak boleh lebih besar dari angka kedua.');
-        lines.push(`👤 **Employee:** ${name}`, `🏢 **Position:** ${roleMention(data.position, 'Position')}`, `⚠️ **Warning Level:** ${warn}`, `📌 **Reason:** ${cleanText(data.reason, 'Warning reason', { maxLength: 850 })}`);
+        lines.push(
+            person,
+            position,
+            `${EMOJI.warning} **Warning Level:** ${warn}`,
+            `${EMOJI.pin} **Reason:** ${cleanText(data.reason, 'Warning reason', { maxLength: 850 })}`,
+        );
     } else if (type === 'others') {
-        lines.push(`🏷️ **Activity:** ${cleanText(data.activityTitle, 'Activity title', { maxLength: 80 })}`, `👤 **Employee:** ${name}`, `🏢 **Position:** ${roleMention(data.position, 'Position')}`, '**📌 ACTIVITY DETAILS**', cleanText(data.activityDescription, 'Activity details', { maxLength: 850 }));
+        lines.push(
+            `${EMOJI.clipboard} **Activity:** ${cleanText(data.activityTitle, 'Activity title', { maxLength: 80 })}`,
+            person,
+            position,
+            `${EMOJI.pin} **Activity Details:** ${cleanText(data.activityDescription, 'Activity details', { maxLength: 850 })}`,
+        );
     } else {
         throw new Error('Template employee log belum tersedia.');
     }
@@ -246,54 +305,51 @@ export function buildEmployeeLogEmbed(type, data = {}, bannerUrl = null) {
     const now = data.recordedAt ? new Date(data.recordedAt) : new Date();
     if (Number.isNaN(now.getTime())) throw new Error('Waktu pencatatan tidak valid.');
     const recordId = cleanText(data.recordId || createEmployeeLogRecordId(now), 'Record ID', { maxLength: 64 });
-    const title = type === 'others'
-        ? `📝 ${cleanText(data.activityTitle, 'Activity title', { maxLength: 80 })}`
-        : `${template.emoji} ${template.title}`;
-
-    // Keep the body compact. The embed's native title provides the large heading,
-    // avoiding the excessive vertical margins that Markdown headings (# / ##)
-    // create when repeated inside an embed description.
+    const activityTitle = type === 'others'
+        ? cleanText(data.activityTitle, 'Activity title', { maxLength: 80 })
+        : template.title;
+    // Build Unicode icons from code points at runtime rather than relying on an
+    // editor's literal emoji encoding. Native embed title provides the heading.
+    const title = `${TITLE_EMOJI[type]} ${activityTitle}`;
+    const separator = '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━';
     const lines = [
-        '-# SKAW GROUP · PEOPLE OPERATIONS',
         `-# ${template.subtitle}`,
         getActivitySummary(type),
-        '',
-        '━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
-        '**📋 RECORD INFORMATION**',
+        separator,
+        `**${EMOJI.clipboard} RECORD INFORMATION**`,
         ...buildEmployeeLogBody(type, data).split('\n'),
     ];
 
     const notes = cleanText(data.notes, 'Notes', { required: false, maxLength: 900 });
     if (notes) {
         lines.push(
-            '',
-            '━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
-            '**🗒️ ADDITIONAL NOTES**',
+            separator,
+            `**${EMOJI.note} ADDITIONAL NOTES**`,
             notes,
         );
     }
 
     lines.push(
-        '',
-        '━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+        separator,
         'Regards,',
         '**SKAW Management.**',
-        `-# ${template.actorLabel === 'Issued by' ? '📝 Issued by' : '📝 Recorded by'} ${actorMention(data)}`,
-        `-# 🆔 ${recordId}`,
-        `-# 🕒 ${formatTimestampWIB(now)}`,
+        `-# ${EMOJI.recorded} ${template.actorLabel} ${actorMention(data)}`,
     );
 
     const description = lines.join('\n');
     if (description.length > 4096) throw new Error('Isi log terlalu panjang untuk embed Discord. Ringkas deskripsi atau Notes.');
 
     const safeBanner = normalizeBannerUrl(bannerUrl);
+    const footer = `${FOOTER_TEXT} • ${recordId} • ${formatTimestampWIB(now)}`;
     const embed = new EmbedBuilder()
         .setColor(BRAND_BLUE)
+        .setAuthor({ name: 'SKAW GROUP · PEOPLE OPERATIONS' })
         .setTitle(title)
         .setDescription(description)
-        .setFooter({ text: FOOTER_TEXT })
-        .setTimestamp(now);
+        .setFooter({ text: footer });
 
+    // Keep the explicit WIB timestamp in the footer. A second native timestamp
+    // is deliberately omitted so readers do not see duplicate time metadata.
     if (safeBanner) embed.setImage(safeBanner);
     return embed;
 }

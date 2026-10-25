@@ -216,7 +216,7 @@ export function buildEmployeeLogBody(type, data = {}) {
         if (current > maximum) throw new Error('Angka pertama Warning Level tidak boleh lebih besar dari angka kedua.');
         lines.push(`👤 **Employee:** ${name}`, `🏢 **Position:** ${roleMention(data.position, 'Position')}`, `⚠️ **Warning Level:** ${warn}`, `📌 **Reason:** ${cleanText(data.reason, 'Warning reason', { maxLength: 850 })}`);
     } else if (type === 'others') {
-        lines.push(`🏷️ **Activity:** ${cleanText(data.activityTitle, 'Activity title', { maxLength: 80 })}`, `👤 **Employee:** ${name}`, `🏢 **Position:** ${roleMention(data.position, 'Position')}`, '', '## 📌 ACTIVITY DETAILS', cleanText(data.activityDescription, 'Activity details', { maxLength: 850 }));
+        lines.push(`🏷️ **Activity:** ${cleanText(data.activityTitle, 'Activity title', { maxLength: 80 })}`, `👤 **Employee:** ${name}`, `🏢 **Position:** ${roleMention(data.position, 'Position')}`, '**📌 ACTIVITY DETAILS**', cleanText(data.activityDescription, 'Activity details', { maxLength: 850 }));
     } else {
         throw new Error('Template employee log belum tersedia.');
     }
@@ -242,43 +242,58 @@ function getActivitySummary(type) {
 export function buildEmployeeLogEmbed(type, data = {}, bannerUrl = null) {
     const template = EMPLOYEE_LOG_TYPES[type];
     if (!template) throw new Error('Jenis log tidak valid.');
+
     const now = data.recordedAt ? new Date(data.recordedAt) : new Date();
     if (Number.isNaN(now.getTime())) throw new Error('Waktu pencatatan tidak valid.');
     const recordId = cleanText(data.recordId || createEmployeeLogRecordId(now), 'Record ID', { maxLength: 64 });
     const title = type === 'others'
         ? `📝 ${cleanText(data.activityTitle, 'Activity title', { maxLength: 80 })}`
         : `${template.emoji} ${template.title}`;
+
+    // Keep the body compact. The embed's native title provides the large heading,
+    // avoiding the excessive vertical margins that Markdown headings (# / ##)
+    // create when repeated inside an embed description.
     const lines = [
         '-# SKAW GROUP · PEOPLE OPERATIONS',
-        '',
-        `# ${title}`,
         `-# ${template.subtitle}`,
-        '',
         getActivitySummary(type),
         '',
-        '━━━━━━━━━━━━━━━━━━━━',
-        '',
-        '## 📋 RECORD INFORMATION',
-        buildEmployeeLogBody(type, data),
+        '━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+        '**📋 RECORD INFORMATION**',
+        ...buildEmployeeLogBody(type, data).split('\n'),
     ];
+
     const notes = cleanText(data.notes, 'Notes', { required: false, maxLength: 900 });
-    if (notes) lines.push('', '━━━━━━━━━━━━━━━━━━━━', '', '## 🗒️ ADDITIONAL NOTES', notes);
+    if (notes) {
+        lines.push(
+            '',
+            '━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+            '**🗒️ ADDITIONAL NOTES**',
+            notes,
+        );
+    }
+
     lines.push(
         '',
-        '━━━━━━━━━━━━━━━━━━━━',
-        '',
+        '━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
         'Regards,',
         '**SKAW Management.**',
-        '',
         `-# ${template.actorLabel === 'Issued by' ? '📝 Issued by' : '📝 Recorded by'} ${actorMention(data)}`,
+        `-# 🆔 ${recordId}`,
+        `-# 🕒 ${formatTimestampWIB(now)}`,
     );
+
     const description = lines.join('\n');
     if (description.length > 4096) throw new Error('Isi log terlalu panjang untuk embed Discord. Ringkas deskripsi atau Notes.');
+
     const safeBanner = normalizeBannerUrl(bannerUrl);
     const embed = new EmbedBuilder()
         .setColor(BRAND_BLUE)
+        .setTitle(title)
         .setDescription(description)
-        .setFooter({ text: `${FOOTER_TEXT}  •  ${recordId}  •  ${formatTimestampWIB(now)}`.slice(0, 2048) });
+        .setFooter({ text: FOOTER_TEXT })
+        .setTimestamp(now);
+
     if (safeBanner) embed.setImage(safeBanner);
     return embed;
 }
@@ -351,4 +366,3 @@ export async function getEmployeeLogAudit(client, guildId, { type = null, limit 
     const filtered = type ? entries.filter(entry => entry.type === type) : entries;
     return filtered.slice(-Math.max(1, Math.min(25, Number(limit) || 10))).reverse();
 }
-

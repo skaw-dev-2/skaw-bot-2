@@ -65,7 +65,7 @@ function configurationEmbed(guild, config) {
 
 export default {
     data: new SlashCommandBuilder()
-        .setName('employee-logs')
+        .setName('epl')
         .setDescription('Buka panel privat dan atur channel log karyawan SKAW GROUP.')
         .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
         .addSubcommand(subcommand => subcommand.setName('panel').setDescription('Buka panel Employee Logs privat dari channel mana pun.'))

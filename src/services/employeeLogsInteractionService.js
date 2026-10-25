@@ -19,6 +19,8 @@ import {
     resolveEmployeeLogsBanner,
     sendEmployeeLog,
     createEmployeeLogRecordId,
+    getEmployeeLogRecord,
+    updateEmployeeLogRecord,
 } from './employeeLogsService.js';
 
 const SESSION_TTL_MS = 15 * 60 * 1000;
@@ -117,6 +119,37 @@ function previewButtons(sessionId) {
         new ButtonBuilder().setCustomId(`skaw_el_cancel:${sessionId}`).setLabel('Cancel').setEmoji('✖️').setStyle(ButtonStyle.Secondary),
     );
 }
+
+function buildPublishedRecordEditModal(record) {
+    return new ModalBuilder()
+        .setCustomId(`skaw_el_edit_record_modal:${record.recordId}`)
+        .setTitle('Edit Employee Log')
+        .addComponents(
+            textInput('editReason', 'Reason (optional)', 'Add or update the reason.', false, TextInputStyle.Paragraph, 900, record.data?.reason || ''),
+            textInput('editNotes', 'Additional Notes (optional)', 'Add or update additional notes.', false, TextInputStyle.Paragraph, 900, record.data?.notes || ''),
+        );
+}
+
+async function handlePublishedRecordEditButton(interaction) {
+    const recordId = interaction.customId.slice('skaw_el_edit_record:'.length);
+    const record = await getEmployeeLogRecord(interaction.client, interaction.guildId, recordId);
+    if (!record) return sendPrivate(interaction, 'This record is no longer available to edit.');
+    if (String(record.guildId) !== String(interaction.guildId)) return sendPrivate(interaction, 'This record is not available in this server.');
+    if (String(interaction.message?.id || '') !== String(record.messageId)
+        || String(interaction.message?.author?.id || '') !== String(interaction.client.user?.id || '')) {
+        return sendPrivate(interaction, 'This Edit button is not linked to the original Employee Log message.');
+    }
+    return interaction.showModal(buildPublishedRecordEditModal(record));
+}
+
+async function handlePublishedRecordEditModal(interaction) {
+    const recordId = interaction.customId.slice('skaw_el_edit_record_modal:'.length);
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    const reason = interaction.fields.getTextInputValue('editReason').trim();
+    const notes = interaction.fields.getTextInputValue('editNotes').trim();
+    await updateEmployeeLogRecord(interaction.client, interaction.guildId, recordId, { reason, notes }, interaction.user.id);
+    return interaction.editReply({ content: 'Employee log updated.', allowedMentions: { parse: [] } });
+}
 async function sendPrivate(interaction, content) {
     const payload = { content, flags: MessageFlags.Ephemeral, allowedMentions: { parse: [] } };
     if (interaction.deferred || interaction.replied) return interaction.followUp(payload);
@@ -124,16 +157,16 @@ async function sendPrivate(interaction, content) {
 }
 async function validateSessionConfig(interaction, type, config) {
     const channelId = config.channels[type];
-    if (!channelId) throw new Error(`Channel for **${EMPLOYEE_LOG_TYPES[type].shortLabel}** is not configured. Ask an administrator to run /employee-logs set-channel.`);
+    if (!channelId) throw new Error(`Channel for **${EMPLOYEE_LOG_TYPES[type].shortLabel}** is not configured. Ask an administrator to run /epl set-channel.`);
     const channel = await interaction.client.channels.fetch(channelId).catch(() => null);
     if (!channel || !channel.isTextBased?.() || channel.isDMBased?.() || channel.guildId !== interaction.guildId) {
-        throw new Error(`The configured destination for **${EMPLOYEE_LOG_TYPES[type].shortLabel}** is unavailable. Set its channel again with /employee-logs set-channel.`);
+        throw new Error(`The configured destination for **${EMPLOYEE_LOG_TYPES[type].shortLabel}** is unavailable. Set its channel again with /epl set-channel.`);
     }
     const botMember = interaction.guild?.members?.me || await interaction.guild?.members?.fetchMe?.().catch(() => null);
     const channelPermissions = channel.permissionsFor(botMember || interaction.client.user);
-    const required = PermissionFlagsBits.ViewChannel | PermissionFlagsBits.SendMessages | PermissionFlagsBits.EmbedLinks;
+    const required = PermissionFlagsBits.ViewChannel | PermissionFlagsBits.SendMessages | PermissionFlagsBits.EmbedLinks | PermissionFlagsBits.ReadMessageHistory;
     if (!channelPermissions?.has(required)) {
-        throw new Error(`The bot needs View Channel, Send Messages, and Embed Links in ${channel}.`);
+        throw new Error(`The bot needs View Channel, Send Messages, Embed Links, and Read Message History in ${channel}.`);
     }
 }
 async function showPreview(interaction, session) {
@@ -170,7 +203,7 @@ async function handleUserSelect(interaction) {
     await acknowledgeComponentUpdate(interaction);
     const sessionId = interaction.customId.slice('skaw_el_user:'.length);
     const session = getSession(interaction, sessionId);
-    if (!session) return interaction.editReply({ content: '⌛ Form expired. Open `/employee-logs panel` and start again.', embeds: [], components: [], allowedMentions: { parse: [] } });
+    if (!session) return interaction.editReply({ content: '⌛ Form expired. Open `/epl panel` and start again.', embeds: [], components: [], allowedMentions: { parse: [] } });
     const memberId = interaction.values[0];
     const member = await interaction.guild.members.fetch(memberId).catch(() => null);
     if (!member) return interaction.editReply({ content: '❌ Employee could not be found in this server.', embeds: [], components: [], allowedMentions: { parse: [] } });
@@ -186,7 +219,7 @@ async function handleUserSelect(interaction) {
 async function handleRoleSelect(interaction) {
     const sessionId = interaction.customId.slice('skaw_el_role:'.length);
     const session = getSession(interaction, sessionId);
-    if (!session) return sendPrivate(interaction, '⌛ Form expired. Open `/employee-logs panel` and start again.');
+    if (!session) return sendPrivate(interaction, '⌛ Form expired. Open `/epl panel` and start again.');
     const fields = EMPLOYEE_LOG_TYPES[session.type].roleFields;
     const field = fields[session.stepIndex];
     const roleId = interaction.values[0];
@@ -207,7 +240,7 @@ async function handleModal(interaction) {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     const sessionId = interaction.customId.slice('skaw_el_form:'.length);
     const session = getSession(interaction, sessionId);
-    if (!session) return interaction.editReply({ content: '⌛ Form expired. Open `/employee-logs panel` and start again.', allowedMentions: { parse: [] } });
+    if (!session) return interaction.editReply({ content: '⌛ Form expired. Open `/epl panel` and start again.', allowedMentions: { parse: [] } });
     const get = id => interaction.fields.getTextInputValue(id).trim();
     if (session.type === 'dismissal' || session.type === 'blacklist' || session.type === 'resignation' || session.type === 'demote') session.data.reason = get('reason');
     if (session.type === 'warning') { session.data.warn = get('warn'); session.data.reason = get('reason'); }
@@ -220,7 +253,7 @@ async function handleModal(interaction) {
 async function handleEdit(interaction) {
     const sessionId = interaction.customId.slice('skaw_el_edit:'.length);
     const session = getSession(interaction, sessionId);
-    if (!session) return sendPrivate(interaction, '⌛ Form expired. Open `/employee-logs panel` and start again.');
+    if (!session) return sendPrivate(interaction, '⌛ Form expired. Open `/epl panel` and start again.');
     if (session.status === 'submitting') return sendPrivate(interaction, '⏳ This record is already being processed. Please wait.');
     return interaction.showModal(buildModal(session));
 }
@@ -234,7 +267,7 @@ async function handleConfirm(interaction) {
     }
     if (session) session.status = 'submitting';
     await acknowledgeComponentUpdate(interaction);
-    if (!session) return interaction.editReply({ content: '⌛ Form expired. Open `/employee-logs panel` and start again.', embeds: [], components: [], allowedMentions: { parse: [] } });
+    if (!session) return interaction.editReply({ content: '⌛ Form expired. Open `/epl panel` and start again.', embeds: [], components: [], allowedMentions: { parse: [] } });
     try {
         const config = await getEmployeeLogsConfig(interaction.client, interaction.guildId);
         await validateSessionConfig(interaction, session.type, config);
@@ -282,9 +315,10 @@ async function handleInteraction(interaction) {
     );
     if (!isEmployeeLogsComponent) return;
     if (!hasManageGuild(interaction)) {
-        return sendPrivate(interaction, '🔒 You need the **Manage Server** permission to use Employee Logs.');
+        return sendPrivate(interaction, 'You dont have permission');
     }
     if (interaction.isButton?.()) {
+        if (interaction.customId.startsWith('skaw_el_edit_record:')) return handlePublishedRecordEditButton(interaction);
         if (interaction.customId.startsWith('skaw_el_start:')) return handleStart(interaction);
         if (interaction.customId.startsWith('skaw_el_back:')) return handleBackToPanel(interaction);
         if (interaction.customId.startsWith('skaw_el_edit:')) return handleEdit(interaction);
@@ -293,16 +327,17 @@ async function handleInteraction(interaction) {
     }
     if (interaction.isUserSelectMenu?.() && interaction.customId.startsWith('skaw_el_user:')) return handleUserSelect(interaction);
     if (interaction.isRoleSelectMenu?.() && interaction.customId.startsWith('skaw_el_role:')) return handleRoleSelect(interaction);
+    if (interaction.isModalSubmit?.() && interaction.customId.startsWith('skaw_el_edit_record_modal:')) return handlePublishedRecordEditModal(interaction);
     if (interaction.isModalSubmit?.() && interaction.customId.startsWith('skaw_el_form:')) return handleModal(interaction);
-    return sendPrivate(interaction, 'This Employee Logs action is not recognized or has expired. Reopen `/employee-logs panel` and try again.');
+    return sendPrivate(interaction, 'This Employee Logs action is not recognized or has expired. Reopen `/epl panel` and try again.');
 }
 
 export function buildEmployeeLogsPanel(config = null) {
     const missingChannels = config ? Object.entries(EMPLOYEE_LOG_TYPES).filter(([type]) => !config.channels?.[type]).map(([, entry]) => `${entry.emoji} ${entry.shortLabel}`) : [];
     const setupSummary = !config
-        ? 'Use /employee-logs status to inspect setup.'
+        ? 'Use /epl status to inspect setup.'
         : missingChannels.length
-            ? `⚙️ **Setup needed:** destination channel not configured for ${missingChannels.join(', ')}. Use /employee-logs set-channel for each activity.`
+            ? `⚙️ **Setup needed:** destination channel not configured for ${missingChannels.join(', ')}. Use /epl set-channel for each activity.`
             : '✅ **Setup complete:** all activity destination channels are configured.';
     const embed = new EmbedBuilder()
         .setColor(0x2563eb)

@@ -8,15 +8,16 @@ const FOOTER_TEXT = 'SKAW GROUP • PEOPLE OPERATIONS';
 const SNOWFLAKE_RE = /^\d{17,20}$/;
 
 export const EMPLOYEE_LOG_TYPES = Object.freeze({
-    sign_in: { label: 'Employee Sign In', shortLabel: 'Sign In', title: 'EMPLOYEE SIGN IN RECORD', emoji: '🟢', subtitle: 'WORKFORCE • DUTY COMMENCEMENT', channelLabel: 'Sign In channel', roleFields: ['position'], bannerEvent: 'employee-sign-in' },
-    sign_out: { label: 'Employee Sign Out', shortLabel: 'Sign Out', title: 'EMPLOYEE SIGN OUT RECORD', emoji: '🔵', subtitle: 'WORKFORCE • DUTY COMPLETION', channelLabel: 'Sign Out channel', roleFields: ['position'], bannerEvent: 'employee-sign-out' },
-    promotion: { label: 'Employee Promotion Letter', shortLabel: 'Promotion', title: 'EMPLOYEE PROMOTION LETTER', emoji: '🏆', subtitle: 'PEOPLE OPERATIONS • CAREER ADVANCEMENT', channelLabel: 'Promotion channel', roleFields: ['previousRank', 'nextRank'], bannerEvent: 'promotion' },
-    dismissal: { label: 'Employee Dismissal Notice', shortLabel: 'Dismissal', title: 'EMPLOYEE DISMISSAL NOTICE', emoji: '⛔', subtitle: 'PEOPLE OPERATIONS • EMPLOYMENT STATUS', channelLabel: 'Dismissal channel', roleFields: ['position'], bannerEvent: 'dismissal' },
-    resignation: { label: 'Employee Resignation Record', shortLabel: 'Resignation', title: 'EMPLOYEE RESIGNATION RECORD', emoji: '📄', subtitle: 'PEOPLE OPERATIONS • VOLUNTARY DEPARTURE', channelLabel: 'Resignation channel', roleFields: ['position'], bannerEvent: 'employee-resignation' },
-    mutation: { label: 'Employee Mutation Record', shortLabel: 'Mutation', title: 'EMPLOYEE MUTATION RECORD', emoji: '🔄', subtitle: 'WORKFORCE • POSITION CHANGE', channelLabel: 'Mutation channel', roleFields: ['fromRole', 'toRole'], bannerEvent: 'mutation' },
-    warning: { label: 'Employee Warning Notice', shortLabel: 'Warning', title: 'EMPLOYEE WARNING NOTICE', emoji: '⚠️', subtitle: 'COMPLIANCE • EMPLOYEE CONDUCT RECORD', channelLabel: 'Warning channel', roleFields: ['position'], bannerEvent: 'warning' },
-    blacklist: { label: 'Employee Blacklist Notice', shortLabel: 'Blacklist', title: 'EMPLOYEE BLACKLIST NOTICE', emoji: '🛡️', subtitle: 'COMPLIANCE • RESTRICTED PERSONNEL RECORD', channelLabel: 'Blacklist channel', roleFields: ['position'], bannerEvent: 'blacklist' },
-    others: { label: 'Other Employee Activity', shortLabel: 'Others', title: 'EMPLOYEE ACTIVITY RECORD', emoji: '📝', subtitle: 'PEOPLE OPERATIONS • ADDITIONAL RECORD', channelLabel: 'Others channel', roleFields: ['position'], bannerEvent: 'employee-other' },
+    sign_in: { label: 'Employee Sign In', shortLabel: 'Sign In', title: 'EMPLOYEE SIGN-IN RECORD', emoji: '🟢', subtitle: 'OFFICIAL PERSONNEL RECORD · DUTY COMMENCEMENT', channelLabel: 'Sign In channel', roleFields: ['position'], bannerEvent: 'employee-sign-in', actorLabel: 'Recorded by' },
+    sign_out: { label: 'Employee Sign Out', shortLabel: 'Sign Out', title: 'EMPLOYEE SIGN-OUT RECORD', emoji: '🔵', subtitle: 'OFFICIAL PERSONNEL RECORD · DUTY COMPLETION', channelLabel: 'Sign Out channel', roleFields: ['position'], bannerEvent: 'employee-sign-out', actorLabel: 'Recorded by' },
+    promotion: { label: 'Employee Promotion Letter', shortLabel: 'Promotion', title: 'EMPLOYEE PROMOTION NOTICE', emoji: '🏆', subtitle: 'CAREER DEVELOPMENT · OFFICIAL RECORD', channelLabel: 'Promotion channel', roleFields: ['previousRank', 'newRank'], bannerEvent: 'promotion', actorLabel: 'Issued by' },
+    demote: { label: 'Employee Demotion Notice', shortLabel: 'Demote', title: 'EMPLOYEE DEMOTION NOTICE', emoji: '🔻', subtitle: 'RANK ADJUSTMENT · OFFICIAL RECORD', channelLabel: 'Demotion channel', roleFields: ['previousRank', 'newRank'], bannerEvent: 'demotion', actorLabel: 'Issued by' },
+    dismissal: { label: 'Employee Dismissal Notice', shortLabel: 'Dismissal', title: 'EMPLOYEE DISMISSAL NOTICE', emoji: '⛔', subtitle: 'EMPLOYMENT STATUS · OFFICIAL RECORD', channelLabel: 'Dismissal channel', roleFields: ['position'], bannerEvent: 'dismissal', actorLabel: 'Issued by' },
+    resignation: { label: 'Employee Resignation Record', shortLabel: 'Resignation', title: 'EMPLOYEE RESIGNATION RECORD', emoji: '📄', subtitle: 'EMPLOYMENT STATUS · OFFICIAL RECORD', channelLabel: 'Resignation channel', roleFields: ['position'], bannerEvent: 'employee-resignation', actorLabel: 'Recorded by' },
+    mutation: { label: 'Employee Mutation Notice', shortLabel: 'Mutation', title: 'EMPLOYEE MUTATION NOTICE', emoji: '🔄', subtitle: 'POSITION TRANSFER · OFFICIAL RECORD', channelLabel: 'Mutation channel', roleFields: ['fromRole', 'toRole'], bannerEvent: 'mutation', actorLabel: 'Recorded by' },
+    warning: { label: 'Employee Warning Notice', shortLabel: 'Warning', title: 'EMPLOYEE WARNING NOTICE', emoji: '⚠️', subtitle: 'CONDUCT & COMPLIANCE · OFFICIAL RECORD', channelLabel: 'Warning channel', roleFields: ['position'], bannerEvent: 'warning', actorLabel: 'Issued by' },
+    blacklist: { label: 'Personnel Blacklist Record', shortLabel: 'Blacklist', title: 'PERSONNEL BLACKLIST RECORD', emoji: '🛡️', subtitle: 'COMPLIANCE & SECURITY · RESTRICTED RECORD', channelLabel: 'Blacklist channel', roleFields: ['position'], bannerEvent: 'blacklist', actorLabel: 'Issued by' },
+    others: { label: 'Other Employee Activity', shortLabel: 'Others', title: 'PERSONNEL ACTIVITY RECORD', emoji: '📝', subtitle: 'GENERAL ADMINISTRATION · CUSTOM RECORD', channelLabel: 'Others channel', roleFields: ['position'], bannerEvent: 'employee-other', actorLabel: 'Recorded by' },
 });
 
 export const EMPLOYEE_LOG_BANNER_EVENTS = Object.freeze({
@@ -25,10 +26,11 @@ export const EMPLOYEE_LOG_BANNER_EVENTS = Object.freeze({
     'employee-resignation': { label: 'Employee • Resignation' },
     'employee-other': { label: 'Employee • Others' },
     promotion: { label: 'Promotion' },
+    demotion: { label: 'Demotion' },
     mutation: { label: 'Mutation' },
-    blacklist: { label: 'Blacklist' },
     dismissal: { label: 'Dismissal' },
     warning: { label: 'Warning' },
+    blacklist: { label: 'Blacklist' },
 });
 
 const DEFAULT_CONFIG = Object.freeze({ channels: {}, bannerUrl: null, banners: {}, stickers: {} });
@@ -169,7 +171,7 @@ function formatTimestampWIB(value = new Date()) {
     const parts = new Intl.DateTimeFormat('en-GB', {
         timeZone: 'Asia/Jakarta',
         day: '2-digit', month: 'short', year: 'numeric',
-        hour: '2-digit', minute: '2-digit', hour12: false,
+        hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
     }).format(date);
     return `${parts} WIB`;
 }
@@ -193,66 +195,28 @@ export function buildEmployeeLogBody(type, data = {}) {
     const template = EMPLOYEE_LOG_TYPES[type];
     if (!template) throw new Error('Jenis log tidak valid.');
     const name = userMention(data.userId);
-    let lines;
+    const lines = [];
     if (type === 'sign_in' || type === 'sign_out') {
-        lines = [
-            `👤 **Employee:** ${name}`,
-            `🏢 **Position:** ${roleMention(data.position, 'Position')}`,
-            `📝 **Recorded By:** ${actorMention(data)}`,
-        ];
+        lines.push(`👤 **Employee:** ${name}`, `🏢 **Position:** ${roleMention(data.position, 'Position')}`);
     } else if (type === 'resignation') {
-        lines = [
-            `👤 **Employee:** ${name}`,
-            `🏢 **Position:** ${roleMention(data.position, 'Position')}`,
-            `📌 **Reason:** ${cleanText(data.reason, 'Resignation reason', { maxLength: 850 })}`,
-            `📝 **Recorded By:** ${actorMention(data)}`,
-        ];
-    } else if (type === 'promotion') {
-        if (data.previousRank === data.nextRank) throw new Error('Previous Rank dan New Rank tidak boleh sama.');
-        lines = [
-            `👤 **Employee:** ${name}`,
-            `⬆️ **Previous Rank:** ${roleMention(data.previousRank, 'Previous Rank')}`,
-            `🏆 **New Rank:** ${roleMention(data.nextRank, 'New Rank')}`,
-            `📝 **Recorded By:** ${actorMention(data)}`,
-        ];
+        lines.push(`👤 **Employee:** ${name}`, `🏢 **Position:** ${roleMention(data.position, 'Position')}`, `📌 **Reason:** ${cleanText(data.reason, 'Resignation reason', { maxLength: 850 })}`);
+    } else if (type === 'promotion' || type === 'demote') {
+        if (data.previousRank === data.newRank) throw new Error('Previous Rank dan New Rank tidak boleh sama.');
+        lines.push(`👤 **Employee:** ${name}`, `🔹 **Previous Rank:** ${roleMention(data.previousRank, 'Previous Rank')}`, `${type === 'promotion' ? '🏆' : '🔻'} **New Rank:** ${roleMention(data.newRank, 'New Rank')}`);
+        if (type === 'demote') lines.push(`📌 **Reason:** ${cleanText(data.reason, 'Demotion reason', { maxLength: 850 })}`);
     } else if (type === 'mutation') {
         if (data.fromRole === data.toRole) throw new Error('Role asal dan tujuan mutation tidak boleh sama.');
-        lines = [
-            `👤 **Employee:** ${name}`,
-            `◽ **Previous Position:** ${roleMention(data.fromRole, 'Previous Position')}`,
-            `🔄 **New Position:** ${roleMention(data.toRole, 'New Position')}`,
-            `📝 **Recorded By:** ${actorMention(data)}`,
-        ];
+        lines.push(`👤 **Employee:** ${name}`, `🔹 **Previous Position:** ${roleMention(data.fromRole, 'Previous Position')}`, `➡️ **New Position:** ${roleMention(data.toRole, 'New Position')}`);
     } else if (type === 'dismissal' || type === 'blacklist') {
-        lines = [
-            `👤 **Individual:** ${name}`,
-            `🏢 **Last Known Position:** ${roleMention(data.position, 'Position')}`,
-            `📌 **Reason:** ${cleanText(data.reason, 'Reason', { maxLength: 900 })}`,
-            `📝 **Issued By:** ${actorMention(data)}`,
-        ];
+        lines.push(`👤 **Individual:** ${name}`, `🏢 **Last Known Position:** ${roleMention(data.position, 'Position')}`, `📌 **${type === 'blacklist' ? 'Blacklist Reason' : 'Dismissal Reason'}:** ${cleanText(data.reason, 'Reason', { maxLength: 900 })}`);
     } else if (type === 'warning') {
         const warn = cleanText(data.warn, 'Warning Level', { maxLength: 10 });
         if (!/^([1-9]\d?)\/([1-9]\d?)$/.test(warn)) throw new Error('Warning Level harus berformat seperti 1/2.');
         const [current, maximum] = warn.split('/').map(Number);
         if (current > maximum) throw new Error('Angka pertama Warning Level tidak boleh lebih besar dari angka kedua.');
-        lines = [
-            `👤 **Employee:** ${name}`,
-            `🏢 **Position:** ${roleMention(data.position, 'Position')}`,
-            `⚠️ **Warning Level:** ${warn}`,
-            `📌 **Reason:** ${cleanText(data.reason, 'Reason', { maxLength: 850 })}`,
-            `📝 **Issued By:** ${actorMention(data)}`,
-        ];
+        lines.push(`👤 **Employee:** ${name}`, `🏢 **Position:** ${roleMention(data.position, 'Position')}`, `⚠️ **Warning Level:** ${warn}`, `📌 **Reason:** ${cleanText(data.reason, 'Warning reason', { maxLength: 850 })}`);
     } else if (type === 'others') {
-        lines = [
-            `🏷️ **Activity:** ${cleanText(data.activityTitle, 'Activity title', { maxLength: 80 })}`,
-            `👤 **Employee:** ${name}`,
-            `🏢 **Position:** ${roleMention(data.position, 'Position')}`,
-            '',
-            '**📌 ACTIVITY DETAILS**',
-            cleanText(data.activityDescription, 'Activity details', { maxLength: 850 }),
-            '',
-            `📝 **Recorded By:** ${actorMention(data)}`,
-        ];
+        lines.push(`🏷️ **Activity:** ${cleanText(data.activityTitle, 'Activity title', { maxLength: 80 })}`, `👤 **Employee:** ${name}`, `🏢 **Position:** ${roleMention(data.position, 'Position')}`, '', '## 📌 ACTIVITY DETAILS', cleanText(data.activityDescription, 'Activity details', { maxLength: 850 }));
     } else {
         throw new Error('Template employee log belum tersedia.');
     }
@@ -261,15 +225,16 @@ export function buildEmployeeLogBody(type, data = {}) {
 
 function getActivitySummary(type) {
     const summaries = {
-        sign_in: "This record confirms the employee's commencement of duty.",
-        sign_out: "This record documents the completion of the employee's duty period.",
-        promotion: 'This notice formally records a career advancement within SKAW GROUP.',
-        dismissal: 'This notice records an employee status change for official personnel administration.',
-        resignation: 'This record documents an employee resignation from their position.',
-        mutation: 'This record documents an updated organizational assignment.',
-        warning: 'This notice documents a formal employee warning for compliance records.',
-        blacklist: 'This record documents a blacklist decision maintained for SKAW GROUP compliance and administrative purposes.',
-        others: 'This entry documents an additional personnel activity registered by SKAW Management.',
+        sign_in: "Official record confirming the employee's commencement of duty.",
+        sign_out: "Official record confirming the completion of the employee's duty.",
+        promotion: "Official notice documenting an employee's career advancement within SKAW GROUP.",
+        demote: "Official notice documenting an employee's rank reduction within SKAW GROUP.",
+        dismissal: "Official notice documenting an employee's dismissal.",
+        resignation: "Official record documenting an employee's resignation.",
+        mutation: "Official record documenting an employee's position transfer.",
+        warning: "Official notice regarding employee conduct and compliance.",
+        blacklist: "Restricted personnel record maintained for compliance and security reference.",
+        others: "Official record of an additional personnel activity registered by SKAW Management.",
     };
     return summaries[type] || 'Official personnel record maintained by SKAW Management.';
 }
@@ -278,43 +243,49 @@ export function buildEmployeeLogEmbed(type, data = {}, bannerUrl = null) {
     const template = EMPLOYEE_LOG_TYPES[type];
     if (!template) throw new Error('Jenis log tidak valid.');
     const now = data.recordedAt ? new Date(data.recordedAt) : new Date();
+    if (Number.isNaN(now.getTime())) throw new Error('Waktu pencatatan tidak valid.');
     const recordId = cleanText(data.recordId || createEmployeeLogRecordId(now), 'Record ID', { maxLength: 64 });
     const title = type === 'others'
         ? `📝 ${cleanText(data.activityTitle, 'Activity title', { maxLength: 80 })}`
         : `${template.emoji} ${template.title}`;
-    const intro = getActivitySummary(type);
     const lines = [
-        `**${template.subtitle}**`,
+        '-# SKAW GROUP · PEOPLE OPERATIONS',
         '',
-        intro,
+        `# ${title}`,
+        `-# ${template.subtitle}`,
         '',
-        '━━━━━━━━━━━━━━━━━━━━━━━━',
+        getActivitySummary(type),
         '',
-        '**📋 RECORD INFORMATION**',
+        '━━━━━━━━━━━━━━━━━━━━',
         '',
+        '## 📋 RECORD INFORMATION',
         buildEmployeeLogBody(type, data),
     ];
     const notes = cleanText(data.notes, 'Notes', { required: false, maxLength: 900 });
-    if (notes) {
-        lines.push('', '━━━━━━━━━━━━━━━━━━━━━━━━', '', '**🗒️ ADDITIONAL NOTES**', '', notes);
-    }
-    lines.push('', '━━━━━━━━━━━━━━━━━━━━━━━━', '', 'Regards,', '', '**SKAW Management.**');
+    if (notes) lines.push('', '━━━━━━━━━━━━━━━━━━━━', '', '## 🗒️ ADDITIONAL NOTES', notes);
+    lines.push(
+        '',
+        '━━━━━━━━━━━━━━━━━━━━',
+        '',
+        'Regards,',
+        '**SKAW Management.**',
+        '',
+        `-# ${template.actorLabel === 'Issued by' ? '📝 Issued by' : '📝 Recorded by'} ${actorMention(data)}`,
+    );
     const description = lines.join('\n');
     if (description.length > 4096) throw new Error('Isi log terlalu panjang untuk embed Discord. Ringkas deskripsi atau Notes.');
+    const safeBanner = normalizeBannerUrl(bannerUrl);
     const embed = new EmbedBuilder()
         .setColor(BRAND_BLUE)
-        .setAuthor({ name: 'SKAW GROUP  ·  PEOPLE OPERATIONS' })
-        .setTitle(title.slice(0, 256))
         .setDescription(description)
         .setFooter({ text: `${FOOTER_TEXT}  •  ${recordId}  •  ${formatTimestampWIB(now)}`.slice(0, 2048) });
-    const safeBanner = normalizeBannerUrl(bannerUrl);
     if (safeBanner) embed.setImage(safeBanner);
     return embed;
 }
 
 function isStickerSpecificDiscordError(error) {
     const code = Number(error?.code ?? error?.rawError?.code);
-    return code === 50035 || code === 50024 || code === 50013;
+    return code === 10014 || code === 50035 || code === 50024 || code === 50013;
 }
 
 export async function sendEmployeeLog(client, guild, type, data) {

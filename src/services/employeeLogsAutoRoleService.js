@@ -282,7 +282,7 @@ async function findAuditActor(guild, memberId, addedIds, removedIds) {
 const pendingRoleChanges = new Map();
 const ROLE_CHANGE_COALESCE_MS = 1_200;
 
-async function processEmployeeLogsRoleSnapshot(client, guild, memberId, oldRoleIds, newRoleIds) {
+async function processEmployeeLogsRoleSnapshot(client, guild, memberId, oldRoleIds, newRoleIds, displayName = '') {
     if (!client?.db || !guild || !memberId) return { skipped: 'missing-context' };
     const autoConfig = await getEmployeeAutoRoleConfig(client, guild.id);
     // Re-check at flush time so disabling Auto Role cancels pending publications.
@@ -303,6 +303,7 @@ async function processEmployeeLogsRoleSnapshot(client, guild, memberId, oldRoleI
             const payload = {
                 ...decision.data,
                 userId: memberId,
+                displayName: displayName || '',
                 recordedBy: actorId || '',
                 automatic: true,
                 recordId: undefined,
@@ -348,6 +349,7 @@ export async function handleEmployeeLogsRoleUpdate(oldMember, newMember, explici
         client,
         guild,
         memberId: String(newMember.id),
+        displayName: String(newMember.displayName || '').replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 100),
         // Preserve the state before the first quick change and the latest state after it.
         oldRoleIds: previous?.oldRoleIds || oldRoleIds,
         newRoleIds,
@@ -361,6 +363,7 @@ export async function handleEmployeeLogsRoleUpdate(oldMember, newMember, explici
             pending.memberId,
             pending.oldRoleIds,
             pending.newRoleIds,
+            pending.displayName,
         ).catch(error => {
             console.error('[Employee Auto Logs] Failed to process coalesced role update:', error?.stack || error);
         });

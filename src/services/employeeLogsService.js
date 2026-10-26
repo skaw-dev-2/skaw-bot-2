@@ -1,10 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, PermissionFlagsBits, escapeMarkdown } from 'discord.js';
+import { upsertEmployeeDirectoryFromLog } from './employeeDirectoryService.js';
 
 const CONFIG_KEY = guildId => `guild:${guildId}:employee_logs`;
 const AUDIT_KEY = guildId => `guild:${guildId}:employee_logs:audit`;
 const RECORD_KEY = (guildId, recordId) => `guild:${guildId}:employee_logs:record:${recordId}`;
 const AUTO_ROLE_CONFIG_KEY = guildId => `guild:${guildId}:employee_logs:auto_role`;
+const DIRECTORY_BACKFILL_KEY = guildId => `guild:${guildId}:employee_directory:backfill_v1`;
+const directoryBackfills = new Map();
 const BRAND_BLUE = 0x2563eb;
 const SNOWFLAKE_RE = /^\d{17,20}$/;
 
@@ -367,6 +370,45 @@ export async function getEmployeeLogRecord(client, guildId, recordId) {
     return raw?.recordId === recordId && raw?.guildId === String(guildId) ? raw : null;
 }
 
+/**
+ * One-time migration of the latest durable Employee Log records into the
+ * directory. This lets /find discover records published before the directory
+ * feature was installed, provided those records still exist in the bot DB.
+ */
+export async function ensureEmployeeDirectoryBackfilled(client, guild) {
+    if (!client?.db || !guild?.id) throw new Error('Employee directory database is not ready.');
+    const guildId = String(guild.id);
+    const existingRun = directoryBackfills.get(guildId);
+    if (existingRun) return existingRun;
+
+    const run = (async () => {
+        const marker = await client.db.get(DIRECTORY_BACKFILL_KEY(guildId), null);
+        if (marker?.completedAt) return marker;
+
+        const rawAudit = await client.db.get(AUDIT_KEY(guildId), []);
+        const audit = Array.isArray(rawAudit) ? [...rawAudit] : [];
+        audit.sort((a, b) => new Date(a.publishedAt || 0).getTime() - new Date(b.publishedAt || 0).getTime());
+        let processed = 0;
+        for (const item of audit) {
+            if (!item?.recordId) continue;
+            const record = await getEmployeeLogRecord(client, guildId, String(item.recordId));
+            if (!record) continue;
+            await upsertEmployeeDirectoryFromLog(client, guild, record);
+            processed += 1;
+        }
+
+        const completed = { completedAt: new Date().toISOString(), processedRecords: processed };
+        await client.db.set(DIRECTORY_BACKFILL_KEY(guildId), completed);
+        return completed;
+    })();
+    directoryBackfills.set(guildId, run);
+    try {
+        return await run;
+    } finally {
+        if (directoryBackfills.get(guildId) === run) directoryBackfills.delete(guildId);
+    }
+}
+
 async function saveEmployeeLogRecord(client, guildId, record) {
     if (!client?.db) throw new Error('Database belum siap. Record tetap terkirim, tetapi tombol Edit tidak dapat disimpan.');
     await client.db.set(RECORD_KEY(guildId, record.recordId), record);
@@ -405,6 +447,10 @@ export async function updateEmployeeLogRecord(client, guildId, recordId, { reaso
         await saveEmployeeLogRecord(client, guildId, existing).catch(() => {});
         throw error;
     }
+    const guild = client.guilds?.cache?.get?.(String(guildId)) || null;
+    await upsertEmployeeDirectoryFromLog(client, guild, nextRecord).catch(error => {
+        console.warn('[Employee Directory] Updated the log message but could not refresh directory data:', error?.message || error);
+    });
     return { message, record: nextRecord };
 }
 
@@ -482,6 +528,10 @@ export async function sendEmployeeLog(client, guild, type, data) {
         }
         throw new Error(`Employee Log could not be safely published with its Edit button: ${recordError?.message || recordError}`);
     }
+
+    await upsertEmployeeDirectoryFromLog(client, guild, record).catch(directoryError => {
+        console.warn('[Employee Directory] Published the log but could not refresh directory data:', directoryError?.message || directoryError);
+    });
 
     try {
         const oldEntries = await client.db.get(AUDIT_KEY(guild.id), []);

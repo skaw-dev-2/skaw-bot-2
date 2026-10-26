@@ -293,9 +293,13 @@ export default {
         .setDescription('Search SKAW employee records privately.')
         .addStringOption(option => option
             .setName('employee')
-            .setDescription('Select a person by server display name, mention, or Discord User ID.')
-            .setRequired(true)
-            .setAutocomplete(true)),
+            .setDescription('Search by server display name, pasted mention, or Discord User ID.')
+            .setRequired(false)
+            .setAutocomplete(true))
+        .addUserOption(option => option
+            .setName('user')
+            .setDescription('Select a Discord account directly using the user picker.')
+            .setRequired(false)),
 
     async autocomplete(interaction) {
         try {
@@ -317,10 +321,30 @@ export default {
             });
         }
 
+        // Discord cannot make one slash-command option act as both free text and a User picker.
+        // Keep the existing autocomplete text option and add a separate User option.
+        const employeeQuery = String(interaction.options.getString('employee', false) ?? '').trim();
+        const selectedUser = interaction.options.getUser?.('user', false) ?? null;
+
+        if (employeeQuery && selectedUser) {
+            return interaction.reply({
+                content: 'Please use only one search option: `employee` for a name/mention/User ID, or `user` to select a Discord account.',
+                flags: MessageFlags.Ephemeral,
+                allowedMentions: { parse: [] },
+            });
+        }
+        if (!employeeQuery && !selectedUser) {
+            return interaction.reply({
+                content: 'Choose a person using `employee` (name, mention, or User ID) or select an account with `user`.',
+                flags: MessageFlags.Ephemeral,
+                allowedMentions: { parse: [] },
+            });
+        }
+
+        const query = selectedUser ? String(selectedUser.id) : employeeQuery;
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         try {
             await ensureEmployeeDirectoryBackfilled(interaction.client, interaction.guild);
-            const query = interaction.options.getString('employee', true).trim();
             const result = await getProfileForQuery(interaction, query);
             let embed;
             if (result.notRegistered) {

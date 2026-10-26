@@ -7,7 +7,7 @@ const GUILD_ID = '77777777777777777';
 const USER_ID = '12345678901234567';
 const ROLE_ID = '1414629274282885120';
 
-function runtime({ hasRecord = true } = {}) {
+function runtime({ hasRecord = true, selectedUser = null, employeeQuery } = {}) {
     const store = new Map();
     const client = {
         db: {
@@ -37,13 +37,34 @@ function runtime({ hasRecord = true } = {}) {
         guild,
         guildId: GUILD_ID,
         inGuild: () => true,
-        options: { getString: () => hasRecord ? USER_ID : 'Unknown Person' },
+        options: {
+            getString: () => employeeQuery !== undefined
+                ? employeeQuery
+                : selectedUser ? null : hasRecord ? USER_ID : 'Unknown Person',
+            getUser: () => selectedUser,
+        },
         async deferReply(payload) { this.deferredPayload = payload; },
         async editReply(payload) { this.resultPayload = payload; return payload; },
         async reply(payload) { this.resultPayload = payload; return payload; },
     };
     return { client, guild, member, interaction, store };
 }
+
+
+test('/find exposes optional employee autocomplete and optional Discord user picker options', () => {
+    const schema = findCommand.data.toJSON();
+    const employeeOption = schema.options.find(option => option.name === 'employee');
+    const userOption = schema.options.find(option => option.name === 'user');
+
+    assert.ok(employeeOption, 'employee text option exists');
+    assert.equal(employeeOption.type, 3, 'employee is a STRING option');
+    assert.equal(employeeOption.required, false, 'employee is optional so user can be used alone');
+    assert.equal(employeeOption.autocomplete, true, 'employee name autocomplete stays enabled');
+
+    assert.ok(userOption, 'user picker option exists');
+    assert.equal(userOption.type, 6, 'user uses the Discord USER option type');
+    assert.equal(userOption.required, false, 'user picker is optional so employee can be used alone');
+});
 
 test('/find returns an ephemeral profile with live server display name and status', async () => {
     const { client, guild, member, interaction } = runtime();
@@ -71,4 +92,44 @@ test('/find shows NOT REGISTERED for an unknown search without leaking a public 
     const embed = interaction.resultPayload.embeds[0].toJSON();
     assert.match(embed.description, /NOT REGISTERED/);
     assert.match(embed.description, /Unknown Person/);
+});
+
+
+test('/find accepts a selected Discord user through the dedicated user option', async () => {
+    const selectedUser = { id: USER_ID, username: 'kevin' };
+    const { client, guild, interaction } = runtime({ selectedUser });
+    await upsertEmployeeDirectoryFromLog(client, guild, {
+        guildId: GUILD_ID,
+        recordId: 'SKAW-EL-USER-PICKER',
+        type: 'sign_in',
+        publishedAt: '2026-10-26T06:00:00.000Z',
+        data: { userId: USER_ID, displayName: 'Kevin Monterrey', position: ROLE_ID, recordedAt: '2026-10-26T06:00:00.000Z' },
+    });
+
+    await findCommand.execute(interaction);
+    assert.equal(interaction.deferredPayload.flags, 64);
+    const embed = interaction.resultPayload.embeds[0].toJSON();
+    assert.equal(embed.title, 'SKAW EMPLOYEE PROFILE');
+    assert.match(embed.description, /Kevin Monterrey \(\*\*<@12345678901234567>\*\*\)/);
+});
+
+test('/find rejects choosing both employee text and a user to avoid ambiguous input', async () => {
+    const { interaction } = runtime({
+        selectedUser: { id: USER_ID, username: 'kevin' },
+        employeeQuery: 'Kevin Monterrey',
+    });
+
+    await findCommand.execute(interaction);
+    assert.equal(interaction.deferredPayload, undefined);
+    assert.equal(interaction.resultPayload.flags, 64);
+    assert.match(interaction.resultPayload.content, /Please use only one search option/);
+});
+
+test('/find asks for a search input when neither option is supplied', async () => {
+    const { interaction } = runtime({ employeeQuery: null, selectedUser: null });
+
+    await findCommand.execute(interaction);
+    assert.equal(interaction.deferredPayload, undefined);
+    assert.equal(interaction.resultPayload.flags, 64);
+    assert.match(interaction.resultPayload.content, /Choose a person/);
 });

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, PermissionFlagsBits } from 'discord.js';
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, PermissionFlagsBits, escapeMarkdown } from 'discord.js';
 
 const CONFIG_KEY = guildId => `guild:${guildId}:employee_logs`;
 const AUDIT_KEY = guildId => `guild:${guildId}:employee_logs:audit`;
@@ -163,6 +163,13 @@ function validId(value, label) {
     return String(value);
 }
 function userMention(id) { return `<@${validId(id, 'Employee')}>`; }
+function formatEmployeeIdentity(data = {}) {
+    const mention = userMention(data.userId);
+    // displayName is captured from GuildMember.displayName (server display name),
+    // never from User.username. Escape Markdown so a nickname cannot alter the record layout.
+    const displayName = String(data.displayName ?? '').replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 100);
+    return displayName ? `${escapeMarkdown(displayName)} (**${mention}**)` : mention;
+}
 function optionalRoleMention(id) { return SNOWFLAKE_RE.test(String(id || '')) ? `<@&${id}>` : null; }
 function actorMention(data) { return SNOWFLAKE_RE.test(String(data.recordedBy || '')) ? `<@${data.recordedBy}>` : 'Not recorded'; }
 
@@ -210,7 +217,7 @@ function getReasonLabel(type) {
 export function buildEmployeeLogBody(type, data = {}) {
     const template = EMPLOYEE_LOG_TYPES[type];
     if (!template) throw new Error('Jenis log tidak valid.');
-    const employee = userMention(data.userId);
+    const employee = formatEmployeeIdentity(data);
     const reason = cleanText(data.reason, 'Reason', { required: false, maxLength: 900 });
     const lines = [];
     const addPosition = (label = 'Position', id = data.position) => {
@@ -419,7 +426,23 @@ export async function sendEmployeeLog(client, guild, type, data) {
 
     const publishedAt = new Date();
     const recordId = data.recordId || createEmployeeLogRecordId(publishedAt);
-    const publishedData = { ...data, recordId, recordedAt: publishedAt.toISOString(), recordedBy: data.recordedBy || '' };
+    let displayName = String(data.displayName ?? '').replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 100);
+    if (!displayName) {
+        const memberId = String(data.userId || '');
+        let member = guild.members?.cache?.get?.(memberId) || null;
+        if (!member && SNOWFLAKE_RE.test(memberId) && typeof guild.members?.fetch === 'function') {
+            member = await guild.members.fetch(memberId).catch(() => null);
+        }
+        // Do not fall back to username: it may differ from the server display name.
+        displayName = String(member?.displayName || '').replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 100);
+    }
+    const publishedData = {
+        ...data,
+        displayName: displayName || 'Unknown member',
+        recordId,
+        recordedAt: publishedAt.toISOString(),
+        recordedBy: data.recordedBy || '',
+    };
     const bannerUrl = resolveEmployeeLogsBanner(config, type);
     const embed = buildEmployeeLogEmbed(type, publishedData, bannerUrl);
     const allowedMentions = { parse: [] };
@@ -486,3 +509,4 @@ export async function getEmployeeLogAudit(client, guildId, { type = null, limit 
     const filtered = type ? entries.filter(entry => entry.type === type) : entries;
     return filtered.slice(-Math.max(1, Math.min(25, Number(limit) || 10))).reverse();
 }
+

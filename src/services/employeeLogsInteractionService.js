@@ -208,10 +208,11 @@ async function handleUserSelect(interaction) {
     const member = await interaction.guild.members.fetch(memberId).catch(() => null);
     if (!member) return interaction.editReply({ content: '❌ Employee could not be found in this server.', embeds: [], components: [], allowedMentions: { parse: [] } });
     session.data.userId = member.id;
+    session.data.displayName = member.displayName;
     session.stepIndex = 0;
     const roleFields = EMPLOYEE_LOG_TYPES[session.type].roleFields;
     return interaction.editReply({
-        content: `**${EMPLOYEE_LOG_TYPES[session.type].shortLabel}**\nEmployee: <@${member.id}>\nStep 2 of ${roleFields.length + 2}: select **${roleFieldLabel(roleFields[0])}**.`,
+        content: `**${EMPLOYEE_LOG_TYPES[session.type].shortLabel}**\nEmployee: ${member.displayName} (<@${member.id}>)\nStep 2 of ${roleFields.length + 2}: select **${roleFieldLabel(roleFields[0])}**.`,
         embeds: [], components: [roleSelectRow(session), backToPanelRow(session.id)], allowedMentions: { parse: [] },
     });
 }
@@ -229,7 +230,7 @@ async function handleRoleSelect(interaction) {
     if (session.stepIndex < fields.length) {
         const nextField = fields[session.stepIndex];
         return interaction.update({
-            content: `**${EMPLOYEE_LOG_TYPES[session.type].shortLabel}**\nEmployee: <@${session.data.userId}>\nSelected: ${session.stepIndex}/${fields.length} roles\nNext: choose **${roleFieldLabel(nextField)}**.`,
+            content: `**${EMPLOYEE_LOG_TYPES[session.type].shortLabel}**\nEmployee: ${session.data.displayName || 'Unknown member'} (<@${session.data.userId}>)\nSelected: ${session.stepIndex}/${fields.length} roles\nNext: choose **${roleFieldLabel(nextField)}**.`,
             components: [roleSelectRow(session), backToPanelRow(session.id)], allowedMentions: { parse: [] },
         });
     }

@@ -60,7 +60,11 @@ function getLiveMemberInfo(member) {
 }
 
 function getStatus(record, liveInfo) {
+    // Current server roles are authoritative for present-day status.
+    // A Retired role identifies former employees even when their old Sign-Out
+    // happened before Employee Logs existed and therefore has no stored record.
     if (liveInfo.position) return record?.firstSignInAt ? 'ACTIVE' : 'INCOMPLETE RECORD';
+    if (liveInfo.isRetired) return 'FORMER EMPLOYEE';
     if (record?.status === 'former') return 'FORMER EMPLOYEE';
     if (record?.status === 'active') return 'INCOMPLETE RECORD';
     if (record || liveInfo.isEmployeeCandidate) return 'INCOMPLETE RECORD';
@@ -123,10 +127,12 @@ function buildProfileEmbed(record, member, query) {
     const position = liveInfo.position || (isActive ? currentPosition : lastPosition);
     const hasLivePosition = Boolean(liveInfo.position);
 
-    let blacklistStatus = 'No recorded blacklist';
-    if (liveInfo.isBlacklisted) blacklistStatus = 'Currently blacklisted';
-    else if (record?.everBlacklisted) blacklistStatus = 'Previously blacklisted';
-    else if (!record && status === 'INCOMPLETE RECORD') blacklistStatus = 'No blacklist record';
+    // The live Blacklist role is checked independently of historical logs.
+    // When it is absent, report only what the role/log data supports; do not
+    // claim that the member was never blacklisted.
+    let blacklistStatus = 'Not currently blacklisted (role not assigned)';
+    if (liveInfo.isBlacklisted) blacklistStatus = 'BLACKLISTED (current Discord role)';
+    else if (record?.everBlacklisted) blacklistStatus = 'Previously blacklisted (Employee Logs)';
 
     const statusColor = isActive ? COLORS.active
         : isFormer ? COLORS.former
@@ -229,7 +235,11 @@ async function getProfileForQuery(interaction, query) {
     if (liveMatches.length > 1) {
         return {
             ambiguous: true,
-            matches: liveMatches.map(member => ({ userId: member.id, displayName: member.displayName, status: 'unknown' })),
+            matches: liveMatches.map(member => ({
+                userId: member.id,
+                displayName: member.displayName,
+                status: getLiveMemberInfo(member).isRetired ? 'former' : 'unknown',
+            })),
             query,
         };
     }
@@ -278,8 +288,10 @@ async function buildAutocompleteChoices(interaction, focused) {
         if (choices.size >= 25) break;
         const id = String(member.id);
         if (choices.has(id)) continue;
+        const liveInfo = getLiveMemberInfo(member);
+        const statusLabel = liveInfo.isRetired ? 'FORMER' : 'INCOMPLETE';
         choices.set(id, {
-            name: `${member.displayName || 'Unknown member'} — INCOMPLETE`.slice(0, 100),
+            name: `${member.displayName || 'Unknown member'} — ${statusLabel}`.slice(0, 100),
             value: id,
         });
     }

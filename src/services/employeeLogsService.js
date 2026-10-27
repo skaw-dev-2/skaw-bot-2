@@ -557,6 +557,6 @@ export async function getEmployeeLogAudit(client, guildId, { type = null, limit 
     const raw = await client.db.get(AUDIT_KEY(guildId), []);
     const entries = Array.isArray(raw) ? raw : [];
     const filtered = type ? entries.filter(entry => entry.type === type) : entries;
-    return filtered.slice(-Math.max(1, Math.min(25, Number(limit) || 10))).reverse();
+    return filtered.slice(-Math.max(1, Math.min(1000, Number(limit) || 10))).reverse();
 }
 

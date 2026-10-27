@@ -96,7 +96,7 @@ test('editing Reason and Additional Notes updates the same message and keeps Rec
     assert.match(description, /\*\*ADDITIONAL NOTES\*\*/);
     assert.match(description, /Documents verified\./);
     assert.match(description, new RegExp(`Record ID: ${result.recordId}`));
-    assert.equal(message.payload.components[0].components[0].label, 'Edit');
+    assert.equal(message.payload.components[0].components[0]?.data?.label ?? message.payload.components[0].components[0]?.label, 'Edit');
     const saved = await getEmployeeLogRecord(client, guild.id, result.recordId);
     assert.equal(saved.data.reason, 'New employee assignment.');
     assert.equal(saved.data.notes, 'Documents verified.');

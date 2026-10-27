@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
     getEmployeeLogRecord,
+    repairEmployeeLogEditButtons,
     sendEmployeeLog,
     updateEmployeeLogRecord,
 } from '../services/employeeLogsService.js';
@@ -146,4 +147,58 @@ test('editing Sign-Out category and details preserves the original Record ID and
     assert.equal(saved.editHistory.length, 1);
     assert.deepEqual(saved.editHistory[0].changes.reasonCategory, { before: 'blacklist', after: 'personal_resignation' });
     assert.deepEqual(saved.editHistory[0].changes.notes, { before: 'Supporting documents archived.', after: 'Exit conversation completed.' });
+});
+
+test('publishing an automatic-style warning includes Edit controls in the initial message payload', async () => {
+    const { client, message, guild, store, channel } = createMockRuntime();
+    const config = store.get('guild:' + guild.id + ':employee_logs');
+    config.channels.warning = channel.id;
+    store.set('guild:' + guild.id + ':employee_logs', config);
+
+    const result = await sendEmployeeLog(client, guild, 'warning', {
+        userId: '12345678901234567',
+        displayName: 'Kevin Monterrey',
+        position: '1414629137389322244',
+        warn: '2/2',
+        reason: '',
+        notes: '',
+        automatic: true,
+        recordedBy: '12345678901234567',
+    });
+
+    assert.equal(result.editButtonAttached, true);
+    assert.ok(message.payload.components?.[0]?.components?.some(component =>
+        (component.data?.custom_id ?? component.customId) === 'skaw_el_edit_record:' + result.recordId
+        || (component.data?.label ?? component.label) === 'Edit'));
+    assert.ok(message.payload.components?.[0]?.components?.some(component =>
+        (component.data?.custom_id ?? component.customId) === 'skaw_el_audit_record:' + result.recordId
+        || (component.data?.label ?? component.label) === 'Audit Trail'));
+});
+
+test('repair restores missing Edit/Audit buttons on an existing warning without changing its Record ID', async () => {
+    const { client, message, guild, store, channel } = createMockRuntime();
+    const config = store.get('guild:' + guild.id + ':employee_logs');
+    config.channels.warning = channel.id;
+    store.set('guild:' + guild.id + ':employee_logs', config);
+
+    const published = await sendEmployeeLog(client, guild, 'warning', {
+        userId: '12345678901234567',
+        displayName: 'Kevin Monterrey',
+        position: '1414629137389322244',
+        warn: '2/2',
+        reason: '',
+        notes: '',
+        automatic: true,
+        recordedBy: '12345678901234567',
+    });
+    message.components = [];
+    message.payload.components = [];
+
+    const repaired = await repairEmployeeLogEditButtons(client, guild.id, { type: 'warning' });
+    assert.equal(repaired.scanned, 1);
+    assert.equal(repaired.repaired, 1);
+    assert.equal(message.payload.components[0].components[0]?.data?.label ?? message.payload.components[0].components[0]?.label, 'Edit');
+    const record = await getEmployeeLogRecord(client, guild.id, published.recordId);
+    assert.equal(record.recordId, published.recordId);
+    assert.equal(record.messageId, message.id);
 });

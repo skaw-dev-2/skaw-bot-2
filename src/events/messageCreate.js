@@ -18,6 +18,7 @@ import {
   isValidCountingMessage,
   recordCorrectCount,
 } from '../services/countingGameService.js';
+import { handleAutoResponderMessage } from '../services/autoResponderPanelService.js';
 
 const MESSAGE_XP_RATE_LIMIT_ATTEMPTS = 12;
 const MESSAGE_XP_RATE_LIMIT_WINDOW_MS = 10000;
@@ -35,7 +36,15 @@ export default {
         return;
       }
 
-      await handlePrefixCommand(message, client);
+      // Load guild settings once so Auto Responder and the native prefix-command
+      // handler use the same effective prefix for this message.
+      const guildConfig = await getGuildConfig(client, message.guild.id).catch(() => null);
+      const autoResponderProcessed = await handleAutoResponderMessage(message, client, guildConfig);
+      if (autoResponderProcessed) {
+        return;
+      }
+
+      await handlePrefixCommand(message, client, guildConfig);
 
       await handleLeveling(message, client);
     } catch (error) {
@@ -44,9 +53,9 @@ export default {
   }
 };
 
-async function handlePrefixCommand(message, client) {
+async function handlePrefixCommand(message, client, guildConfigOverride = null) {
   try {
-    const guildConfig = await getGuildConfig(client, message.guild.id);
+    const guildConfig = guildConfigOverride || await getGuildConfig(client, message.guild.id);
     const prefix = guildConfig?.prefix || getCommandPrefix();
     const parsed = parsePrefixCommand(message.content, prefix);
     

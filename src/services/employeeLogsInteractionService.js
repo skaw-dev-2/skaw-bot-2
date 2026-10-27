@@ -867,6 +867,48 @@ async function handleAdminInteraction(interaction) {
         return interaction.editReply({ content: '✅ Role mapping saved. Automatic classification will use it for future role changes.', ...buildRoleRegistryPanelPayload(next), allowedMentions: { parse: [] } });
     }
 
+    if (interaction.isModalSubmit?.() && id === 'skaw_el_default_banner_form') {
+        const url = interaction.fields.getTextInputValue('url').trim();
+        await interaction.deferUpdate();
+        await setEmployeeLogsBanner(interaction.client, interaction.guildId, url, interaction.user.id);
+        const values = await Promise.all([getEmployeeLogsConfig(interaction.client, interaction.guildId), getEmployeeAutoRoleConfig(interaction.client, interaction.guildId)]);
+        return interaction.editReply({ content: '✅ Default banner saved.', ...buildSettingsPanel(values[0], values[1]), allowedMentions: { parse: [] } });
+    }
+
+    if (interaction.isModalSubmit?.() && id.startsWith('skaw_el_event_banner_form:')) {
+        const eventKey = id.slice('skaw_el_event_banner_form:'.length);
+        if (!Object.hasOwn(EMPLOYEE_LOG_BANNER_EVENTS, eventKey)) return sendPrivate(interaction, 'Unknown event banner.');
+        const url = interaction.fields.getTextInputValue('url').trim();
+        await interaction.deferUpdate();
+        await setEmployeeLogsEventBanner(interaction.client, interaction.guildId, eventKey, url, interaction.user.id);
+        const values = await Promise.all([getEmployeeLogsConfig(interaction.client, interaction.guildId), getEmployeeAutoRoleConfig(interaction.client, interaction.guildId)]);
+        return interaction.editReply({ content: '✅ Event-specific banner saved for ' + EMPLOYEE_LOG_BANNER_EVENTS[eventKey].label + '.', ...buildSettingsPanel(values[0], values[1]), allowedMentions: { parse: [] } });
+    }
+
+    if (interaction.isModalSubmit?.() && id === 'skaw_el_find_form') {
+        const query = interaction.fields.getTextInputValue('query').trim();
+        await interaction.deferUpdate();
+        const matches = await searchEmployeeDirectory(interaction.client, interaction.guildId, query, { limit: 10 });
+        const cleanQuery = query.replace(/[\r\n]/g, ' ').slice(0, 100);
+        const embed = new EmbedBuilder().setColor(0x2563eb).setTitle('EMPLOYEE DIRECTORY SEARCH')
+            .setDescription(matches.length ? 'Results for **' + cleanQuery + '**' : 'No employee records matched **' + cleanQuery + '**.');
+        for (const record of matches.slice(0, 10)) {
+            const position = record.currentPosition?.name || record.lastKnownPosition?.name || 'Not recorded';
+            embed.addFields({
+                name: (record.displayName || 'Unknown member').slice(0, 250),
+                value: [
+                    '<@' + record.userId + '> · ' + (record.status || 'unknown').toUpperCase(),
+                    'Position: ' + position,
+                    'First Sign In: ' + formatDirectoryTimestamp(record.firstSignInAt),
+                    'Last Sign Out: ' + formatDirectoryTimestamp(record.lastSignOutAt),
+                    'History entries: ' + (Array.isArray(record.history) ? record.history.length : 0),
+                ].join('\n').slice(0, 1000),
+                inline: false,
+            });
+        }
+        return interaction.editReply({ content: '', embeds: [embed], components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('skaw_el_dashboard:home').setLabel('Dashboard').setStyle(ButtonStyle.Secondary))], allowedMentions: { parse: [] } });
+    }
+
     return false;
 }
 

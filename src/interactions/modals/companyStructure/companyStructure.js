@@ -190,16 +190,22 @@ const rosterModal = {
       // roster draft itself. If the prior preview can no longer be edited,
       // reply with a fresh private preview and use that interaction as the new
       // refresh target for subsequent edits.
+      let previewRefreshed = false;
       if (draft.previewInteraction?.token && typeof draft.previewInteraction.editReply === 'function') {
         try {
           await draft.previewInteraction.editReply(updatePayload);
-          return interaction.reply({
-            content: 'Preview roster saved and refreshed. These edits apply only to this draft; the next /cs update reads Discord roles again.',
-            flags: MessageFlags.Ephemeral,
-          });
+          previewRefreshed = true;
         } catch {
-          // Fall through and create a fresh ephemeral preview below.
+          // The original interaction webhook may have expired. Create a new
+          // ephemeral preview below, using this interaction as the new target.
         }
+      }
+
+      if (previewRefreshed) {
+        return interaction.reply({
+          content: 'Preview roster saved and refreshed. These edits apply only to this draft; the next /cs update reads Discord roles again.',
+          flags: MessageFlags.Ephemeral,
+        });
       }
 
       draft.previewInteraction = interaction;

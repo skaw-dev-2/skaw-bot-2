@@ -81,7 +81,7 @@ test('role event is coalesced and publishes one editable automatic Sign-In recor
     assert.match(description, new RegExp(`\\*\\*Employee:\\*\\* Kevin Monterrey \\(\\*\\*<@${MEMBER_ID}>\\*\\*\\)`));
     assert.match(description, /\*\*Position:\*\* <@&1414629137389322244>/);
     assert.match(description, /Recorded by SKAW Bot/);
-    assert.equal(message.payload.components[0].components[0].label, 'Edit');
+    assert.equal((message.payload.components[0].components[0]?.data?.label ?? message.payload.components[0].components[0]?.label), 'Edit');
     const records = [...store.entries()].filter(([key]) => key.startsWith(`guild:${GUILD_ID}:employee_logs:record:`));
     assert.equal(records.length, 1);
     assert.equal(records[0][1].automatic, true);

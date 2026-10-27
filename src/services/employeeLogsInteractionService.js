@@ -316,7 +316,7 @@ async function handleBackToPanel(interaction) {
     await acknowledgeComponentUpdate(interaction);
     if (session) sessions.delete(sessionKey(session.guildId, session.userId));
     const config = await getEmployeeLogsConfig(interaction.client, interaction.guildId);
-    return interaction.editReply({ content: 'Session cancelled. Choose another activity or close this private panel.', ...buildEmployeeLogsPanel(config), allowedMentions: { parse: [] } });
+    return interaction.editReply({ content: 'Session cancelled. Choose another activity or close this private panel.', ...buildEmployeeLogsActivitiesPanel(config), allowedMentions: { parse: [] } });
 }
 
 async function handleCancel(interaction) {
@@ -356,29 +356,64 @@ async function handleInteraction(interaction) {
     return sendPrivate(interaction, 'This Employee Logs action is not recognized or has expired. Reopen `/epl panel` and try again.');
 }
 
+
 export function buildEmployeeLogsPanel(config = null) {
-    const missingChannels = config ? Object.entries(EMPLOYEE_LOG_TYPES).filter(([type]) => !config.channels?.[type]).map(([, entry]) => `${entry.emoji} ${entry.shortLabel}`) : [];
-    const setupSummary = !config
-        ? 'Use /epl status to inspect setup.'
-        : missingChannels.length
-            ? `⚙️ **Setup needed:** destination channel not configured for ${missingChannels.join(', ')}. Use /epl set-channel for each activity.`
-            : '✅ **Setup complete:** all activity destination channels are configured.';
     const embed = new EmbedBuilder()
         .setColor(0x2563eb)
         .setAuthor({ name: 'SKAW GROUP · PEOPLE OPERATIONS' })
-        .setTitle('📑 EMPLOYEE RECORDS CONSOLE')
+        .setTitle('EMPLOYEE MANAGEMENT SYSTEM')
         .setDescription([
-            '**CORPORATE PERSONNEL MANAGEMENT**',
-            'Choose an activity to create an official record. Your workflow and preview are private.',
+            '**CENTRAL PERSONNEL CONSOLE**',
+            'Manage employee records, role mappings, membership exits, and system configuration from one place.',
+            '',
+            '• Manual logs and editable employee records',
+            '• Role Registry and automatic role classification',
+            '• Employee profile search and activity reports',
+            '• Exit review queue for Company Staff membership changes',
+        ].join('\\n'))
+        .setFooter({ text: 'SKAW GROUP • EMPLOYEE LOGS' })
+        .setTimestamp(new Date());
+    return {
+        embeds: [embed],
+        components: [
+            new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('skaw_el_dashboard:logs').setLabel('Manual Logs').setEmoji('📝').setStyle(ButtonStyle.Primary),
+                new ButtonBuilder().setCustomId('skaw_el_dashboard:find').setLabel('Find Employee').setEmoji('🔎').setStyle(ButtonStyle.Secondary),
+                new ButtonBuilder().setCustomId('skaw_el_dashboard:report').setLabel('Reports').setEmoji('📊').setStyle(ButtonStyle.Secondary),
+                new ButtonBuilder().setCustomId('skaw_el_dashboard:settings').setLabel('Settings').setEmoji('⚙️').setStyle(ButtonStyle.Secondary),
+                new ButtonBuilder().setCustomId('skaw_el_dashboard:roles').setLabel('Role Registry').setEmoji('🏷️').setStyle(ButtonStyle.Secondary),
+            ),
+            new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('skaw_el_dashboard:reviews').setLabel('Exit Reviews').setEmoji('📥').setStyle(ButtonStyle.Danger),
+            ),
+        ],
+        allowedMentions: { parse: [] },
+    };
+}
+
+export function buildEmployeeLogsActivitiesPanel(config = null) {
+    const missingChannels = config ? Object.entries(EMPLOYEE_LOG_TYPES).filter(([type]) => !config.channels?.[type]).map(([, entry]) => entry.shortLabel) : [];
+    const setupSummary = !config
+        ? 'System setup details are available from the Employee Logs dashboard.'
+        : missingChannels.length
+            ? '⚙️ Channels still needed: ' + missingChannels.join(', ') + '. Open Dashboard → Settings.'
+            : '✅ All activity destination channels are configured.';
+    const embed = new EmbedBuilder()
+        .setColor(0x2563eb)
+        .setAuthor({ name: 'SKAW GROUP · PEOPLE OPERATIONS' })
+        .setTitle('MANUAL EMPLOYEE LOGS')
+        .setDescription([
+            '**CREATE AN OFFICIAL PERSONNEL RECORD**',
+            'Choose an activity below. Your selection, details, and preview are private.',
             '',
             '🟢 Sign In · 🔵 Sign Out · 🏆 Promotion · 🔻 Demote',
             '⛔ Dismissal · 📄 Resignation · 🔄 Mutation',
             '⚠️ Warning · 🛡️ Blacklist · 📝 Others',
             '',
-            'The final embed is sent automatically to the configured channel for that activity.',
+            'The final embed is sent to the destination channel configured for that activity.',
             '',
             setupSummary,
-        ].join('\n'))
+        ].join('\\n'))
         .setFooter({ text: 'SKAW GROUP • PEOPLE OPERATIONS' })
         .setTimestamp(new Date());
     const types = Object.entries(EMPLOYEE_LOG_TYPES);
@@ -394,7 +429,7 @@ export function buildEmployeeLogsPanel(config = null) {
                 : ['dismissal', 'blacklist', 'warning', 'demote'].includes(type) ? ButtonStyle.Danger
                 : ['promotion', 'sign_out'].includes(type) ? ButtonStyle.Primary : ButtonStyle.Secondary;
             row.addComponents(new ButtonBuilder()
-                .setCustomId(`skaw_el_start:${type}`)
+                .setCustomId('skaw_el_start:' + type)
                 .setLabel(entry.shortLabel)
                 .setEmoji(entry.emoji)
                 .setStyle(style));
@@ -402,6 +437,7 @@ export function buildEmployeeLogsPanel(config = null) {
         rows.push(row);
         offset += rowSize;
     }
+    rows.push(new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('skaw_el_dashboard:home').setLabel('Dashboard').setStyle(ButtonStyle.Secondary)));
     return { embeds: [embed], components: rows, allowedMentions: { parse: [] } };
 }
 

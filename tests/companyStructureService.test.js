@@ -138,6 +138,20 @@ test('custom category titles still render as Discord role mentions in Company St
 });
 
 
+test('Company Structure compacts roster entries, blockquotes role headings, and separates non-management sections', async () => {
+  const { guild, config } = makeRuntime();
+  const snapshot = await buildCompanyStructureSnapshot(guild, config);
+  const embeds = buildCompanyStructureEmbeds(snapshot, { ...config, bannerUrl: null, lastUpdatedAt: null });
+  const description = embeds.map(embed => embed.toJSON().description || '').join('\n');
+
+  assert.ok(description.includes('**<@&1432365826136080625>**\n• Kevin_Monterrey\n> **<@&1414623053471547474>**\n• Maya_Florenzia'));
+  assert.ok(!description.includes('• Kevin_Monterrey\n\n> **'));
+  assert.ok(description.includes('• Maya_Florenzia\n\n-------------------------------------------------\n\n> **<@&1414623346452336823>**'));
+  assert.ok(description.includes('> **<@&1414623229288513586>**\n• Kevin_Monterrey'));
+  assert.ok(description.includes('> **<@&1436228415492456448>**\nN/A'));
+});
+
+
 test('published Company Structure shows a visible Last Updated timestamp in Jakarta time', async () => {
   const { guild, config } = makeRuntime();
   const snapshot = await buildCompanyStructureSnapshot(guild, config);

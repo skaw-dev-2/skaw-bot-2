@@ -39,8 +39,8 @@ function normalizeTrigger(trigger) {
     const value = cleanString(trigger?.value, 100).replace(/\s+/g, ' ');
     if (!value) return null;
     if (/@everyone\b|@here\b/i.test(value)) throw new Error('Trigger tidak boleh berisi @everyone atau @here.');
-    if (type === 'command' && value.startsWith('!')) {
-        // Store command names without the default prefix; runtime prefix is server-configurable.
+    if (type === 'command' && /^[^\p{L}\p{N}_]/u.test(value)) {
+        // Store command names without a prefix; runtime prefix is server-configurable.
         return { type, value: value.slice(1).trim() };
     }
     return { type, value };
@@ -318,12 +318,19 @@ export async function dispatchAutoResponderMessage(message, client) {
         const match = findAutoResponderMatch(config, message.content, message.channel.id);
         if (!match) return false;
         const cooldownKey = String(message.guild.id) + ':' + match.template.id + ':' + String(message.author.id);
-        if (getCooldownExpiry(cooldownKey)) return false;
+        if (match.template.cooldownSeconds > 0 && getCooldownExpiry(cooldownKey)) return false;
+        if (match.template.cooldownSeconds === 0) cooldowns.delete(cooldownKey);
 
         const payload = buildAutoResponderPayload(match.template, message);
         await message.channel.send(payload);
         if (match.template.cooldownSeconds > 0) {
             cooldowns.set(cooldownKey, Date.now() + match.template.cooldownSeconds * 1000);
+        }
+        if (cooldowns.size > 50000) {
+            const now = Date.now();
+            for (const [key, expiry] of cooldowns) {
+                if (expiry <= now) cooldowns.delete(key);
+            }
         }
         await message.delete().catch(error => {
             console.warn('[Auto Responder] Response was sent, but the trigger message could not be deleted:', error?.message || error);

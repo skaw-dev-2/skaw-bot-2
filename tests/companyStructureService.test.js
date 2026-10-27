@@ -131,10 +131,10 @@ test('custom category titles still render as Discord role mentions in Company St
 
   const snapshot = await buildCompanyStructureSnapshot(guild, config);
   const embeds = buildCompanyStructureEmbeds(snapshot, { ...config, bannerUrl: null, lastUpdatedAt: null });
-  const description = embeds.map(embed => embed.toJSON().description || '').join('\\n');
+  const description = embeds.map(embed => embed.toJSON().description || '').join('\n');
 
-  assert.match(description, /\\*\\*<@&1432365826136080625>\\*\\*/);
-  assert.doesNotMatch(description, /\\*\\*Modshoper \\| SKAW\\*\\*/);
+  assert.ok(description.includes('**<@&1432365826136080625>**'));
+  assert.ok(!description.includes('**Modshoper | SKAW**'));
 });
 
 

@@ -32,6 +32,7 @@ import {
     clearEmployeeLogsEventBanner,
     getEmployeeAutoRoleConfig,
     setEmployeeAutoRoleEnabled,
+    getEmployeeLogAudit,
 } from './employeeLogsService.js';
 import {
     BASE_EMPLOYEE_ROLE,
@@ -45,6 +46,7 @@ import {
     completeEmployeeExitReview,
 } from './employeeRoleRegistryService.js';
 import { SKAW_EMPLOYEE_ROLE_CATALOG } from './employeeLogsAutoRoleService.js';
+import { formatDirectoryTimestamp, searchEmployeeDirectory, getEmployeeDirectoryIndex } from './employeeDirectoryService.js';
 
 const SESSION_TTL_MS = 15 * 60 * 1000;
 const sessions = new Map();

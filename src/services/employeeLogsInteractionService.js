@@ -34,6 +34,7 @@ import {
     getEmployeeAutoRoleConfig,
     setEmployeeAutoRoleEnabled,
     getEmployeeLogAudit,
+    repairEmployeeLogEditButtons,
 } from './employeeLogsService.js';
 import {
     BASE_EMPLOYEE_ROLE,
@@ -462,6 +463,7 @@ function buildSettingsPanel(config, autoConfig) {
             new ActionRowBuilder().addComponents(
                 new ButtonBuilder().setCustomId('skaw_el_settings:event-banner').setLabel('Set Event Banner').setEmoji('🎨').setStyle(ButtonStyle.Secondary),
                 new ButtonBuilder().setCustomId('skaw_el_settings:clear-event-banner').setLabel('Clear Event Banner').setStyle(ButtonStyle.Secondary),
+                new ButtonBuilder().setCustomId('skaw_el_settings:repair-warning-buttons').setLabel('Repair Warning Buttons').setEmoji('🧰').setStyle(ButtonStyle.Success),
                 new ButtonBuilder().setCustomId('skaw_el_dashboard:home').setLabel('Dashboard').setEmoji('↩️').setStyle(ButtonStyle.Secondary),
             ),
         ],
@@ -719,6 +721,31 @@ async function handleAdminInteraction(interaction) {
             await clearEmployeeLogsBanner(interaction.client, interaction.guildId, interaction.user.id);
             const values = await Promise.all([getEmployeeLogsConfig(interaction.client, interaction.guildId), getEmployeeAutoRoleConfig(interaction.client, interaction.guildId)]);
             return interaction.editReply({ content: '✅ Default banner cleared. Event-specific banners remain configured.', ...buildSettingsPanel(values[0], values[1]), allowedMentions: { parse: [] } });
+        }
+        if (action === 'repair-warning-buttons') {
+            await interaction.deferUpdate();
+            const result = await repairEmployeeLogEditButtons(interaction.client, interaction.guildId, {
+                type: 'warning',
+                limit: 1000,
+            });
+            const values = await Promise.all([
+                getEmployeeLogsConfig(interaction.client, interaction.guildId),
+                getEmployeeAutoRoleConfig(interaction.client, interaction.guildId),
+            ]);
+            const summary = [
+                '✅ Warning Edit-button repair completed.',
+                'Warnings scanned: ' + result.scanned,
+                'Buttons restored: ' + result.repaired,
+                'Already complete: ' + result.alreadyComplete,
+                'Records unavailable: ' + result.missingRecords,
+                'Messages unavailable: ' + result.missingMessages,
+                'Failed updates: ' + result.failed,
+            ].join('\n');
+            return interaction.editReply({
+                content: summary,
+                ...buildSettingsPanel(values[0], values[1]),
+                allowedMentions: { parse: [] },
+            });
         }
         if (action === 'event-banner' || action === 'clear-event-banner') {
             await interaction.deferUpdate();

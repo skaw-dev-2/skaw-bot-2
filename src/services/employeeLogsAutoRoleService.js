@@ -364,18 +364,22 @@ async function processEmployeeLogsRoleSnapshot(client, guild, memberId, oldRoleI
     // Company Staff is the membership switch. Removing it publishes Sign-Out
     // immediately; Management can edit its category later without a review queue.
     if (hadMembership && !hasMembership) {
-        const context = await getExitContext(client, guild, profile, oldRoleIds, catalog);
-        decisions.push({
-            type: 'sign_out',
-            data: {
-                userId: memberId,
-                division: context.division,
-                position: context.position,
-                reasonCategory: isBlacklisted ? 'blacklist' : '',
-                reason: '',
-                notes: '',
-            },
-        });
+        // A preceding explicit Retired/Civilian transition may already have
+        // closed this employee. Do not publish a second Sign-Out for the same exit.
+        if (profile?.status !== 'former') {
+            const context = await getExitContext(client, guild, profile, oldRoleIds, catalog);
+            decisions.push({
+                type: 'sign_out',
+                data: {
+                    userId: memberId,
+                    division: context.division,
+                    position: context.position,
+                    reasonCategory: isBlacklisted ? 'blacklist' : '',
+                    reason: '',
+                    notes: '',
+                },
+            });
+        }
         // Blacklist/Warning remain independent logs, even when Sign-Out happens
         // in the same role update. This deliberately allows two messages.
         decisions.push(...classifyEmployeeRoleChange(oldRoleIds, newRoleIds, memberId, catalog)
@@ -392,23 +396,45 @@ async function processEmployeeLogsRoleSnapshot(client, guild, memberId, oldRoleI
         decisions.push(...classifyEmployeeRoleChange(oldRoleIds, newRoleIds, memberId, catalog)
             .filter(decision => ['blacklist', 'warning'].includes(decision.type)));
     } else if (hadMembership && hasMembership) {
-        decisions.push(...classifyEmployeeRoleChange(oldRoleIds, newRoleIds, memberId, catalog)
-            .filter(decision => ['blacklist', 'warning'].includes(decision.type)));
-
-        const previousPosition = directoryPositionRole(profile, catalog);
-        const newPosition = bestPositionRole(newRoleIds, catalog);
-        const changedPositionRole = [...added, ...removed].some(id =>
-            catalog[id]?.active && catalog[id]?.position !== false && catalog[id]?.kind !== 'division');
-        if (changedPositionRole && profile?.status === 'active' && previousPosition && newPosition) {
-            const career = makeCareerDecision(previousPosition, newPosition, memberId);
-            if (career) decisions.push(career);
-        }
-        if (!decisions.some(decision => ['promotion', 'demote', 'mutation'].includes(decision.type))) {
-            updatedSignInContext = await syncInitialSignInContext(client, guild, memberId, newRoleIds, catalog, profile)
-                .catch(error => {
-                    console.warn('[Employee Auto Logs] Could not update initial Sign-In context:', error?.message || error);
-                    return false;
+        const roleDecisions = classifyEmployeeRoleChange(oldRoleIds, newRoleIds, memberId, catalog);
+        const explicitExit = roleDecisions.some(decision => decision.type === 'sign_out');
+        if (explicitExit) {
+            // Retired/Civilian plus removal of an active position is an explicit
+            // exit transition in SKAW's role workflow, even if Company Staff is
+            // still present during the same gateway event.
+            if (profile?.status !== 'former') {
+                const context = await getExitContext(client, guild, profile, oldRoleIds, catalog);
+                decisions.push({
+                    type: 'sign_out',
+                    data: {
+                        userId: memberId,
+                        division: context.division,
+                        position: context.position,
+                        reasonCategory: isBlacklisted ? 'blacklist' : '',
+                        reason: '',
+                        notes: '',
+                    },
                 });
+            }
+        }
+        decisions.push(...roleDecisions.filter(decision => ['blacklist', 'warning'].includes(decision.type)));
+
+        if (!explicitExit) {
+            const previousPosition = directoryPositionRole(profile, catalog);
+            const newPosition = bestPositionRole(newRoleIds, catalog);
+            const changedPositionRole = [...added, ...removed].some(id =>
+                catalog[id]?.active && catalog[id]?.position !== false && catalog[id]?.kind !== 'division');
+            if (changedPositionRole && profile?.status === 'active' && previousPosition && newPosition) {
+                const career = makeCareerDecision(previousPosition, newPosition, memberId);
+                if (career) decisions.push(career);
+            }
+            if (!decisions.some(decision => ['promotion', 'demote', 'mutation'].includes(decision.type))) {
+                updatedSignInContext = await syncInitialSignInContext(client, guild, memberId, newRoleIds, catalog, profile)
+                    .catch(error => {
+                        console.warn('[Employee Auto Logs] Could not update initial Sign-In context:', error?.message || error);
+                        return false;
+                    });
+            }
         }
     } else {
         // Division and Position roles assigned before Company Staff are context

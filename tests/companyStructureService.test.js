@@ -149,8 +149,8 @@ test('Mechanic Division shows every assigned Workshop role inline without separa
   assert.match(description, /<@&1414623229288513586>/);
   assert.ok(description.includes('• Kevin\\_Monterrey (<@&1436228415492456448>, <@&1436228814949715998>)'));
   assert.ok(description.includes('• Maya\\_Florenzia (<@&1436228415492456448>, <@&1436228814949715998>)'));
-  assert.doesNotMatch(description, /\\*\\*<@&1436228415492456448>\\*\\*/);
-  assert.doesNotMatch(description, /\\*\\*<@&1436228814949715998>\\*\\*/);
+  assert.ok(!description.includes('**<@&1436228415492456448>**'));
+  assert.ok(!description.includes('**<@&1436228814949715998>**'));
   assert.deepEqual(snapshot.workshopConflicts, []);
 });
 

@@ -148,7 +148,7 @@ test('Company Structure compacts roster entries, blockquotes role headings, and 
   assert.ok(!description.includes('• Kevin\\_Monterrey\n\n> **'));
   assert.ok(description.includes('• Maya\\_Florenzia\n\n-------------------------------------------------\n\n> **<@&1414623346452336823>**'));
   assert.ok(description.includes('> **<@&1414623229288513586>**\n• Kevin\\_Monterrey'));
-  assert.ok(description.includes('> **<@&1436228415492456448>**\nN/A'));
+  assert.ok(description.includes('> **<@&1436228415492456448>**\n• Kevin\\_Monterrey'));
 });
 
 

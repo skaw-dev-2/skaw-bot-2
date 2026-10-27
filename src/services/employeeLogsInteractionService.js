@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
     ActionRowBuilder,
+    escapeMarkdown,
     ChannelType,
     ChannelSelectMenuBuilder,
     ButtonBuilder,
@@ -165,6 +166,50 @@ async function handlePublishedRecordEditButton(interaction) {
         return sendPrivate(interaction, 'This Edit button is not linked to the original Employee Log message.');
     }
     return interaction.showModal(buildPublishedRecordEditModal(record));
+}
+
+async function handlePublishedRecordAuditButton(interaction) {
+    const recordId = interaction.customId.slice('skaw_el_audit_record:'.length);
+    const record = await getEmployeeLogRecord(interaction.client, interaction.guildId, recordId);
+    if (!record) return sendPrivate(interaction, 'This record is no longer available.');
+    if (String(record.guildId) !== String(interaction.guildId)) return sendPrivate(interaction, 'This record is not available in this server.');
+    if (String(interaction.message?.id || '') !== String(record.messageId)
+        || String(interaction.message?.author?.id || '') !== String(interaction.client.user?.id || '')) {
+        return sendPrivate(interaction, 'This Audit Trail button is not linked to the original Employee Log message.');
+    }
+
+    const history = Array.isArray(record.editHistory) ? record.editHistory.slice(-10).reverse() : [];
+    const embed = new EmbedBuilder()
+        .setColor(0x2563eb)
+        .setTitle('EMPLOYEE RECORD AUDIT TRAIL')
+        .setDescription([
+            '**Record ID:** ' + record.recordId,
+            '**Employee:** ' + (record.data?.displayName || 'Unknown member') + ' (<@' + record.data?.userId + '>)',
+            '**Record type:** ' + (EMPLOYEE_LOG_TYPES[record.type]?.shortLabel || record.type),
+            '**Created:** ' + formatDirectoryTimestamp(record.publishedAt),
+            '**Total recorded edits:** ' + (Array.isArray(record.editHistory) ? record.editHistory.length : 0),
+            '',
+            history.length ? 'Latest changes are shown below.' : 'No recorded content edits have been made to this record.',
+        ].join('\n'))
+        .setFooter({ text: 'Audit entries are saved with the durable record and do not change its Record ID.' });
+    for (const item of history) {
+        const details = [];
+        for (const [field, change] of Object.entries(item.changes || {})) {
+            const label = field === 'reason' ? 'Reason' : field === 'notes' ? 'Additional Notes' : field;
+            const before = escapeMarkdown(String(change?.before || '')).slice(0, 180) || '(empty)';
+            const after = escapeMarkdown(String(change?.after || '')).slice(0, 180) || '(empty)';
+            details.push('**' + label + ':** ' + before + ' → ' + after);
+        }
+        embed.addFields({
+            name: formatDirectoryTimestamp(item.editedAt) + ' · ' + (item.editedBy ? 'Editor recorded' : 'Editor unavailable'),
+            value: [
+                item.editedBy ? 'Edited by <@' + item.editedBy + '>' : 'Editor: Not recorded',
+                ...(details.length ? details : ['No field values changed.']),
+            ].join('\n').slice(0, 1000),
+            inline: false,
+        });
+    }
+    return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral, allowedMentions: { parse: [] } });
 }
 
 async function handlePublishedRecordEditModal(interaction) {
@@ -964,6 +1009,7 @@ async function handleInteraction(interaction) {
 
     if (interaction.isButton?.()) {
         if (interaction.customId.startsWith('skaw_el_edit_record:')) return handlePublishedRecordEditButton(interaction);
+        if (interaction.customId.startsWith('skaw_el_audit_record:')) return handlePublishedRecordAuditButton(interaction);
         if (interaction.customId.startsWith('skaw_el_start:')) return handleStart(interaction);
         if (interaction.customId.startsWith('skaw_el_back:')) return handleBackToPanel(interaction);
         if (interaction.customId.startsWith('skaw_el_edit:')) return handleEdit(interaction);

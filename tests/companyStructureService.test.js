@@ -70,7 +70,7 @@ test('multiple management roles produce only one primary role by configured prio
   assert.deepEqual(membersByKey['management-company'], ['Maya_Florenzia']);
 });
 
-test('division and workshop membership remain visible separately; rank and civilian markers are not sections', async () => {
+test('mechanic and workshop role memberships remain available separately to build the roster annotations', async () => {
   const { guild, config } = makeRuntime();
   const snapshot = await buildCompanyStructureSnapshot(guild, config);
   const membersByKey = Object.fromEntries(snapshot.sections.map(section => [section.key, section.members]));
@@ -103,7 +103,7 @@ test('primary management role follows the configured section order, not role pos
   assert.deepEqual(membersByKey.ceo, []);
 });
 
-test('empty configured workshops remain visible as N/A', async () => {
+test('unassigned mechanics stay in Mechanic Division while empty workshop sections are omitted', async () => {
   const { guild, config } = makeRuntime();
   const originalFetch = guild.members.fetch;
   guild.members.fetch = async () => {
@@ -116,10 +116,41 @@ test('empty configured workshops remain visible as N/A', async () => {
 
   const snapshot = await buildCompanyStructureSnapshot(guild, config);
   const embeds = buildCompanyStructureEmbeds(snapshot, { ...config, bannerUrl: null, lastUpdatedAt: null });
-  const description = embeds.map(embed => embed.data?.description ?? embed.toJSON?.().description ?? '').join('\n');
+  const description = embeds.map(embed => embed.toJSON().description || '').join('\n');
 
-  assert.match(description, /<@&1436228415492456448>/);
-  assert.match(description, /N\/A/);
+  assert.match(description, /<@&1414623229288513586>/);
+  assert.match(description, /Kevin\\_Monterrey \(Belum ditempatkan\)/);
+  assert.doesNotMatch(description, /\*\*<@&1436228415492456448>\*\*/);
+  assert.doesNotMatch(description, /N\/A/);
+});
+
+
+test('Mechanic Division shows every assigned Workshop role inline without separate workshop lists', async () => {
+  const { guild, config, sourceMembers } = makeRuntime();
+  const workshop2Id = '1436228814949715998';
+  guild.roles.cache.set(workshop2Id, { id: workshop2Id, name: 'Workshop 2' });
+  config.sections.push({
+    key: 'workshop-2',
+    title: 'Workshop 2',
+    roleId: workshop2Id,
+    kind: 'workshop',
+    order: 312,
+    enabled: true,
+  });
+  sourceMembers[0].roles.push(workshop2Id);
+  sourceMembers[1].roles.push(ROLE.mechanicDivision, ROLE.workshop1, workshop2Id);
+  sourceMembers[1].roles = [...new Set(sourceMembers[1].roles)];
+
+  const snapshot = await buildCompanyStructureSnapshot(guild, config);
+  const embeds = buildCompanyStructureEmbeds(snapshot, { ...config, bannerUrl: null, lastUpdatedAt: null });
+  const description = embeds.map(embed => embed.toJSON().description || '').join('\n');
+
+  assert.match(description, /<@&1414623229288513586>/);
+  assert.ok(description.includes('• Kevin\\_Monterrey (<@&1436228415492456448>, <@&1436228814949715998>)'));
+  assert.ok(description.includes('• Maya\\_Florenzia (<@&1436228415492456448>, <@&1436228814949715998>)'));
+  assert.doesNotMatch(description, /\\*\\*<@&1436228415492456448>\\*\\*/);
+  assert.doesNotMatch(description, /\\*\\*<@&1436228814949715998>\\*\\*/);
+  assert.deepEqual(snapshot.workshopConflicts, []);
 });
 
 

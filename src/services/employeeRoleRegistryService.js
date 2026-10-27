@@ -273,18 +273,27 @@ export async function getEmployeeExitReview(client, guildId, reviewId) {
 export async function cancelPendingEmployeeExitReviews(client, guildId, userId) {
     await requireDatabase(client);
     const id = String(userId || '');
-    if (!SNOWFLAKE_RE.test(id)) return [];
+    if (!SNOWFLAKE_RE.test(id)) return { cancelled: [], processing: false };
     const reviews = await readReviews(client, guildId);
     const now = new Date().toISOString();
     const cancelled = [];
+    const processing = reviews.some(review => review.userId === id && review.status === 'processing');
     const next = reviews.map(review => {
-        if (review.userId !== id || !['pending', 'processing'].includes(review.status)) return review;
-        const value = { ...review, status: 'cancelled', resolvedAt: now, resolvedBy: null, reason: 'Membership role was restored before Management finalized the exit review.', claimedAt: null, claimedBy: null };
+        if (review.userId !== id || review.status !== 'pending') return review;
+        const value = {
+            ...review,
+            status: 'cancelled',
+            resolvedAt: now,
+            resolvedBy: null,
+            reason: 'Membership role was restored before Management finalized the exit review.',
+            claimedAt: null,
+            claimedBy: null,
+        };
         cancelled.push(value);
         return value;
     });
     if (cancelled.length) await writeReviews(client, guildId, next);
-    return cancelled;
+    return { cancelled, processing };
 }
 
 export async function claimEmployeeExitReview(client, guildId, reviewId, claimedBy) {

@@ -29,7 +29,7 @@ function makeRuntime() {
   const roleIdsNeeded = [...roleIds, ROLE.mechanicSenior, ROLE.civilian];
   const roleCache = new Map(roleIdsNeeded.map(id => [id, { id, name: sections.find(section => section.roleId === id)?.title || id }]));
 
-  const members = [
+  const sourceMembers = [
     {
       id: '111111111111111111',
       displayName: 'Kevin_Monterrey',
@@ -42,7 +42,8 @@ function makeRuntime() {
       user: { username: 'maya' },
       roles: [ROLE.managementCompany, ROLE.partnership, ROLE.civilian],
     },
-  ].map(member => ({
+  ];
+  const members = sourceMembers.map(member => ({
     ...member,
     roles: { cache: { has: id => member.roles.includes(id) } },
   }));
@@ -54,6 +55,7 @@ function makeRuntime() {
     },
     config: { guildId: '1414500416724406315', sections },
     members,
+    sourceMembers,
   };
 }
 
@@ -136,7 +138,7 @@ test('footer image is attached to the final structure embed below roster text, i
   const structureEmbed = json.at(-1);
 
   assert.equal(json[0].image.url, bannerUrl);
-  assert.ok(structureEmbed.description.includes(String.raw`Kevin\\_Monterrey`));
+  assert.ok(structureEmbed.description.includes('Kevin' + String.fromCharCode(92) + '_Monterrey'));
   assert.equal(structureEmbed.image.url, footerImageUrl);
   assert.ok(structureEmbed.footer.text.includes('Preview only'));
 });
@@ -208,7 +210,7 @@ test('saved roster names are stable by Discord user ID while role membership rem
 test('roster names replace spaces with one underscore and accept old Markdown-escaped names', async () => {
   const { guild, config, members } = makeRuntime();
   members[0].displayName = 'Leonardo Maximilano';
-  members[1].displayName = String.raw`Eugene\\\\\\_Maleek`;
+  members[1].displayName = 'Eugene' + String.fromCharCode(92).repeat(3) + '_Maleek';
 
   const snapshot = await buildCompanyStructureSnapshot(guild, config);
   const byKey = Object.fromEntries(snapshot.sections.map(section => [section.key, section]));
@@ -220,8 +222,9 @@ test('roster names replace spaces with one underscore and accept old Markdown-es
 
   const embeds = buildCompanyStructureEmbeds(snapshot, { ...config, bannerUrl: null, lastUpdatedAt: null });
   const renderedDescription = embeds.map(embed => embed.toJSON().description || '').join('\n');
-  assert.ok(renderedDescription.includes(String.raw`Leonardo\\_Maximilano`));
-  assert.equal(renderedDescription.includes(String.raw`Leonardo\\\\_Maximilano`), false);
+  const slash = String.fromCharCode(92);
+  assert.ok(renderedDescription.includes('Leonardo' + slash + '_Maximilano'));
+  assert.equal(renderedDescription.includes('Leonardo' + slash + slash + '_Maximilano'), false);
 });
 
 test('manual display-name edits are stored against the matched Discord user ID', async () => {
@@ -239,8 +242,23 @@ test('manual display-name edits are stored against the matched Discord user ID',
   };
 
   const draft = await createCompanyStructureDraft(client, guild, '333333333333333333');
-  setCompanyStructureDraftRoster(draft, 'ceo', String.raw`Kevin\\_CustomName`);
+  setCompanyStructureDraftRoster(draft, 'ceo', 'Kevin' + String.fromCharCode(92) + '_CustomName');
   assert.equal(draft.overrides.ceo[0], 'Kevin_CustomName');
   assert.equal(draft.pendingRosterNamesByUserId['111111111111111111'], 'Kevin_CustomName');
   deleteCompanyStructureDraft(draft.id);
+});
+
+
+test('a member who loses a workshop role is removed from that workshop while the saved name remains available', async () => {
+  const { guild, config, sourceMembers } = makeRuntime();
+  const kevinId = '111111111111111111';
+  config.rosterNamesByUserId = { [kevinId]: 'Kevin_Saved_Name' };
+  sourceMembers[0].roles = sourceMembers[0].roles.filter(roleId => roleId !== ROLE.workshop1);
+
+  const snapshot = await buildCompanyStructureSnapshot(guild, config);
+  const byKey = Object.fromEntries(snapshot.sections.map(section => [section.key, section]));
+
+  assert.deepEqual(byKey['workshop-1'].members, []);
+  assert.deepEqual(byKey.ceo.members, ['Kevin_Saved_Name']);
+  assert.equal(snapshot.rosterNamesByUserId[kevinId], 'Kevin_Saved_Name');
 });

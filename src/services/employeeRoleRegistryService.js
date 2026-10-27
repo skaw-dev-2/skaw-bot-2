@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 const REGISTRY_KEY = guildId => `guild:${guildId}:employee_logs:role_registry`;
 const EXIT_REVIEW_KEY = guildId => `guild:${guildId}:employee_logs:exit_reviews`;
-const SNOWFLAKE_RE = /^\\d{17,20}$/;
+const SNOWFLAKE_RE = /^\d{17,20}$/;
 const ROLE_CATEGORIES = new Set(['rank', 'division', 'warning', 'blacklist', 'retired', 'civilian', 'other']);
 
 export const BASE_EMPLOYEE_ROLE = Object.freeze({
@@ -16,7 +16,7 @@ export const BASE_EMPLOYEE_ROLE = Object.freeze({
 });
 
 function cleanText(value, maxLength = 100) {
-    return String(value ?? '').replace(/[\\r\\n\\t]+/g, ' ').replace(/\\s+/g, ' ').trim().slice(0, maxLength);
+    return String(value ?? '').replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, maxLength);
 }
 
 function normalizeRole(role) {
@@ -29,7 +29,7 @@ function normalizeRole(role) {
     const department = cleanText(role?.department, 50).toLocaleLowerCase('en-US').replace(/[^a-z0-9_-]+/g, '-').replace(/^-|-$/g, '');
     if ((category === 'rank' || category === 'division') && !department) return null;
     if (category === 'rank' && (!Number.isInteger(level) || level < 1 || level > 100)) return null;
-    if (category === 'warning' && !/^([1-9]\\d?)\\/([1-9]\\d?)$/.test(warn)) return null;
+    if (category === 'warning' && !/^([1-9]\d?)\/([1-9]\d?)$/.test(warn)) return null;
     if (category === 'warning') {
         const [current, maximum] = warn.split('/').map(Number);
         if (current > maximum) return null;

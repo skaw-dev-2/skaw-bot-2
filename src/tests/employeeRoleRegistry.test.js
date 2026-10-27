@@ -10,6 +10,7 @@ import {
 
 const GUILD_ID = '77777777777777777';
 const RECORDER_ID = '98765432109876543';
+const POSITION_ID = '22222222222222222';
 
 function runtime() {
     const store = new Map();

@@ -59,8 +59,8 @@ test('publishing saves a durable record and attaches the Edit button', async () 
     });
     assert.equal(result.editButtonAttached, true);
     assert.match((message.payload.embeds[0]?.data?.description ?? message.payload.embeds[0]?.description), /\*\*Employee:\*\* Kevin Monterrey \(\*\*<@12345678901234567>\*\*\)/);
-    assert.equal(message.payload.components[0].components[0].label, 'Edit');
-    assert.equal(message.payload.components[0].components[0].emoji, '✏️');
+    assert.equal((message.payload.components[0].components[0]?.data?.label ?? message.payload.components[0].components[0]?.label), 'Edit');
+    assert.equal((message.payload.components[0].components[0]?.data?.emoji?.name ?? message.payload.components[0].components[0]?.data?.emoji ?? message.payload.components[0].components[0]?.emoji?.name ?? message.payload.components[0].components[0]?.emoji), '✏️');
     const record = await getEmployeeLogRecord(client, guild.id, result.recordId);
     assert.equal(record.messageId, message.id);
     assert.equal(record.channelId, channel.id);

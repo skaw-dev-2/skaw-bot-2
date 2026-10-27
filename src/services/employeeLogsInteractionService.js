@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import {
     ActionRowBuilder,
+    ChannelType,
+    ChannelSelectMenuBuilder,
     ButtonBuilder,
     ButtonStyle,
     EmbedBuilder,
@@ -8,12 +10,14 @@ import {
     ModalBuilder,
     PermissionFlagsBits,
     RoleSelectMenuBuilder,
+    StringSelectMenuBuilder,
     TextInputBuilder,
     TextInputStyle,
     UserSelectMenuBuilder,
 } from 'discord.js';
 import {
     EMPLOYEE_LOG_TYPES,
+    EMPLOYEE_LOG_BANNER_EVENTS,
     buildEmployeeLogEmbed,
     getEmployeeLogsConfig,
     resolveEmployeeLogsBanner,
@@ -21,7 +25,26 @@ import {
     createEmployeeLogRecordId,
     getEmployeeLogRecord,
     updateEmployeeLogRecord,
+    setEmployeeLogsChannel,
+    setEmployeeLogsBanner,
+    clearEmployeeLogsBanner,
+    setEmployeeLogsEventBanner,
+    clearEmployeeLogsEventBanner,
+    getEmployeeAutoRoleConfig,
+    setEmployeeAutoRoleEnabled,
 } from './employeeLogsService.js';
+import {
+    BASE_EMPLOYEE_ROLE,
+    getEmployeeRoleRegistry,
+    registerEmployeeRole,
+    disableEmployeeRole,
+    getEmployeeExitReview,
+    listEmployeeExitReviews,
+    claimEmployeeExitReview,
+    releaseEmployeeExitReview,
+    completeEmployeeExitReview,
+} from './employeeRoleRegistryService.js';
+import { SKAW_EMPLOYEE_ROLE_CATALOG } from './employeeLogsAutoRoleService.js';
 
 const SESSION_TTL_MS = 15 * 60 * 1000;
 const sessions = new Map();

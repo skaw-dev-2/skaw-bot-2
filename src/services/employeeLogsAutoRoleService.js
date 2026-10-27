@@ -11,6 +11,7 @@ import {
     createEmployeeExitReview,
     cancelPendingEmployeeExitReviews,
 } from './employeeRoleRegistryService.js';
+import { getEmployeeDirectoryRecord } from './employeeDirectoryService.js';
 
 const DEDUPE_KEY = guildId => `guild:${guildId}:employee_logs:auto_role_dedupe`;
 const DEDUPE_WINDOW_MS = 15_000;
@@ -324,6 +325,13 @@ async function processEmployeeLogsRoleSnapshot(client, guild, memberId, oldRoleI
     // review item; Management decides whether the exit is Sign Out, Resignation,
     // or Dismissal. Do not publish three competing exit records.
     if (hadMembership && !hasMembership) {
+        const existingProfile = await getEmployeeDirectoryRecord(client, guild.id, memberId).catch(() => null);
+        const hasRecentExitRecord = existingProfile?.status === 'former'
+            && ['sign_out', 'resignation', 'dismissal'].includes(existingProfile.lastExitType);
+        if (hasRecentExitRecord) {
+            await markProcessed(client, guild.id, signature);
+            return { skipped: 'exit-already-recorded' };
+        }
         const oldPosition = bestPositionRole(oldRoleIds, catalog);
         const actorId = await findAuditActor(guild, memberId, added, removed);
         const review = await createEmployeeExitReview(client, guild.id, {
@@ -339,7 +347,14 @@ async function processEmployeeLogsRoleSnapshot(client, guild, memberId, oldRoleI
 
     let decisions = [];
     if (!hadMembership && hasMembership) {
-        await cancelPendingEmployeeExitReviews(client, guild.id, memberId);
+        const cancelledReviews = await cancelPendingEmployeeExitReviews(client, guild.id, memberId);
+        if (cancelledReviews.length) {
+            // The member returned before Management finalized the exit. This was
+            // not a completed departure, so cancel the pending review without
+            // publishing a fake Sign-In/Sign-Out pair.
+            await markProcessed(client, guild.id, signature);
+            return { skipped: 'exit-review-cancelled', cancelledReview: true };
+        }
         const position = bestPositionRole(newRoleIds, catalog);
         decisions = [{
             type: 'sign_in',

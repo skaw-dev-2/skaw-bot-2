@@ -173,6 +173,22 @@ test('a split rank replacement still publishes Demotion using the last known pos
     assert.match(description(publishedMessages[1]), new RegExp(`\\*\\*New Rank:\\*\\* <@&${ROLE.junior}>`));
 });
 
+test('Retired/Civilian plus position removal publishes Sign-Out once even if Company Staff is removed afterward', async () => {
+    const { client, guild, store, publishedMessages } = createRuntime();
+    const activeStaff = member(client, guild, [ROLE.base, ROLE.division, ROLE.senior]);
+    const explicitlyRetired = member(client, guild, [ROLE.base, ROLE.division, ROLE.retired]);
+    const baseRemoved = member(client, guild, [ROLE.division, ROLE.retired]);
+
+    await handleEmployeeLogsRoleUpdate(activeStaff, explicitlyRetired, client);
+    assert.equal(publishedMessages.length, 1);
+    assert.match(description(publishedMessages[0]), /^## EMPLOYEE SIGN-OUT/m);
+    assert.match(description(publishedMessages[0]), new RegExp(`\\\\*\\\\*Position:\\\\*\\\\* <@&${ROLE.senior}>`));
+
+    await handleEmployeeLogsRoleUpdate(explicitlyRetired, baseRemoved, client);
+    assert.equal(publishedMessages.length, 1, 'removing Company Staff after an explicit exit must not duplicate Sign-Out');
+    assert.deepEqual(recordTypes(store), ['sign_out']);
+});
+
 test('Blacklisting while removing Company Staff publishes both Sign-Out and Blacklist logs', async () => {
     const { client, guild, store, publishedMessages } = createRuntime();
     const oldMember = member(client, guild, [ROLE.base, ROLE.division, ROLE.senior]);

@@ -954,6 +954,22 @@ async function handleAdminInteraction(interaction) {
         try {
             const review = await claimEmployeeExitReview(interaction.client, interaction.guildId, reviewId, interaction.user.id);
             claimed = true;
+            const liveMember = await interaction.guild.members.fetch(review.userId).catch(() =>
+                interaction.guild.members.cache.get(review.userId) || null);
+            if (liveMember?.roles?.cache?.has?.(BASE_EMPLOYEE_ROLE.id)) {
+                await releaseEmployeeExitReview(interaction.client, interaction.guildId, reviewId);
+                claimed = false;
+                await cancelPendingEmployeeExitReviews(interaction.client, interaction.guildId, review.userId);
+                return interaction.editReply({
+                    content: 'This Exit Review was cancelled because Company Staff membership was restored before the final log was published.',
+                    embeds: [],
+                    components: [new ActionRowBuilder().addComponents(
+                        new ButtonBuilder().setCustomId('skaw_el_dashboard:reviews').setLabel('Back to Exit Reviews').setStyle(ButtonStyle.Secondary),
+                        new ButtonBuilder().setCustomId('skaw_el_dashboard:home').setLabel('Dashboard').setStyle(ButtonStyle.Secondary),
+                    )],
+                    allowedMentions: { parse: [] },
+                });
+            }
             const result = await sendEmployeeLog(interaction.client, interaction.guild, outcome, {
                 userId: review.userId,
                 displayName: review.displayName,

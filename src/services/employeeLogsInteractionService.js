@@ -351,7 +351,7 @@ function buildSettingsPanel(config, autoConfig) {
             missing.length ? 'Auto Logs still needs channels: ' + missing.join(', ') : 'Auto Logs channels: Ready',
             '',
             'Use the controls below to update routing, banners, and automation. Changes are saved per server.',
-        ].join('\\n'))
+        ].join('\n'))
         .setFooter({ text: 'Settings changes are saved immediately' });
     const autoButton = new ButtonBuilder()
         .setCustomId('skaw_el_autorole:' + (autoConfig.enabled ? 'disable' : 'enable'))
@@ -441,7 +441,7 @@ function buildRoleRegistryPanelPayload(registry) {
         lines.push('No custom role mappings registered yet. Built-in mappings remain available.');
     }
     return {
-        embeds: [new EmbedBuilder().setColor(0x2563eb).setTitle('EMPLOYEE ROLE REGISTRY').setDescription(lines.join('\\n').slice(0, 3900))
+        embeds: [new EmbedBuilder().setColor(0x2563eb).setTitle('EMPLOYEE ROLE REGISTRY').setDescription(lines.join('\n').slice(0, 3900))
             .setFooter({ text: 'Deactivate mappings instead of deleting them so existing records remain intact.' })],
         components: [
             new ActionRowBuilder().addComponents(
@@ -560,7 +560,7 @@ function buildExitReviewDetail(review) {
         '**Former position:** ' + (review.formerPositionId ? '<@&' + review.formerPositionId + '>' : 'Not recorded'),
         '',
         'Choose one final classification. The log is only published after Management confirms the outcome.',
-    ].join('\\n');
+    ].join('\n');
     return {
         embeds: [new EmbedBuilder().setColor(0xd97706).setTitle('EMPLOYEE EXIT REVIEW').setDescription(text)
             .setFooter({ text: 'Sign Out is universal; Resignation and Dismissal explain the exit.' })],
@@ -856,7 +856,7 @@ async function handleAdminInteraction(interaction) {
         const query = interaction.fields.getTextInputValue('query').trim();
         await interaction.deferUpdate();
         const matches = await searchEmployeeDirectory(interaction.client, interaction.guildId, query, { limit: 10 });
-        const cleanQuery = query.replace(/[\\r\\n]/g, ' ').slice(0, 100);
+        const cleanQuery = query.replace(/[\r\n]/g, ' ').slice(0, 100);
         const embed = new EmbedBuilder().setColor(0x2563eb).setTitle('EMPLOYEE DIRECTORY SEARCH')
             .setDescription(matches.length ? 'Results for **' + cleanQuery + '**' : 'No employee records matched **' + cleanQuery + '**.');
         for (const record of matches.slice(0, 10)) {
@@ -869,7 +869,7 @@ async function handleAdminInteraction(interaction) {
                     'First Sign In: ' + formatDirectoryTimestamp(record.firstSignInAt),
                     'Last Sign Out: ' + formatDirectoryTimestamp(record.lastSignOutAt),
                     'History entries: ' + (Array.isArray(record.history) ? record.history.length : 0),
-                ].join('\\n').slice(0, 1000),
+                ].join('\n').slice(0, 1000),
                 inline: false,
             });
         }
@@ -904,7 +904,7 @@ async function handleAdminInteraction(interaction) {
                 resolvedBy: interaction.user.id,
             });
             return interaction.editReply({
-                content: '✅ Exit Review completed as ' + EMPLOYEE_LOG_TYPES[outcome].shortLabel + '. Log sent to ' + result.channel + '.\\nRecord ID: ' + result.recordId,
+                content: '✅ Exit Review completed as ' + EMPLOYEE_LOG_TYPES[outcome].shortLabel + '. Log sent to ' + result.channel + '.\nRecord ID: ' + result.recordId,
                 embeds: [],
                 components: [new ActionRowBuilder().addComponents(
                     new ButtonBuilder().setCustomId('skaw_el_dashboard:reviews').setLabel('Back to Exit Reviews').setStyle(ButtonStyle.Secondary),
@@ -968,7 +968,7 @@ export function buildEmployeeLogsPanel(config = null) {
             '• Role Registry and automatic role classification',
             '• Employee profile search and activity reports',
             '• Exit review queue for Company Staff membership changes',
-        ].join('\\n'))
+        ].join('\n'))
         .setFooter({ text: 'SKAW GROUP • EMPLOYEE LOGS' })
         .setTimestamp(new Date());
     return {
@@ -1011,7 +1011,7 @@ export function buildEmployeeLogsActivitiesPanel(config = null) {
             'The final embed is sent to the destination channel configured for that activity.',
             '',
             setupSummary,
-        ].join('\\n'))
+        ].join('\n'))
         .setFooter({ text: 'SKAW GROUP • PEOPLE OPERATIONS' })
         .setTimestamp(new Date());
     const types = Object.entries(EMPLOYEE_LOG_TYPES);

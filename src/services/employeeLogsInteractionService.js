@@ -619,16 +619,327 @@ async function buildReportPayload(client, guildId, days = 30) {
     return { embeds: [embed], components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('skaw_el_dashboard:home').setLabel('Dashboard').setStyle(ButtonStyle.Secondary))], allowedMentions: { parse: [] } };
 }
 
+
+async function handleAdminInteraction(interaction) {
+    const id = String(interaction.customId || '');
+
+    if (interaction.isButton?.() && id.startsWith('skaw_el_dashboard:')) {
+        const action = id.slice('skaw_el_dashboard:'.length);
+        if (action === 'home') {
+            await interaction.deferUpdate();
+            return interaction.editReply({ content: '', ...buildEmployeeLogsPanel(), allowedMentions: { parse: [] } });
+        }
+        if (action === 'logs') {
+            const config = await getEmployeeLogsConfig(interaction.client, interaction.guildId);
+            await interaction.deferUpdate();
+            return interaction.editReply({ content: 'Choose the type of manual Employee Log. Your selection and preview remain private.', ...buildEmployeeLogsActivitiesPanel(config), allowedMentions: { parse: [] } });
+        }
+        if (action === 'find') return interaction.showModal(buildFindModal());
+        if (action === 'report') {
+            await interaction.deferUpdate();
+            return interaction.editReply(await buildReportPayload(interaction.client, interaction.guildId, 30));
+        }
+        if (action === 'settings') {
+            const values = await Promise.all([getEmployeeLogsConfig(interaction.client, interaction.guildId), getEmployeeAutoRoleConfig(interaction.client, interaction.guildId)]);
+            await interaction.deferUpdate();
+            return interaction.editReply(buildSettingsPanel(values[0], values[1]));
+        }
+        if (action === 'roles') {
+            const registry = await getEmployeeRoleRegistry(interaction.client, interaction.guildId);
+            await interaction.deferUpdate();
+            return interaction.editReply(buildRoleRegistryPanelPayload(registry));
+        }
+        if (action === 'reviews') {
+            const reviews = await listEmployeeExitReviews(interaction.client, interaction.guildId, { status: 'pending', limit: 25 });
+            await interaction.deferUpdate();
+            return interaction.editReply(buildExitReviewList(reviews));
+        }
+    }
+
+    if (interaction.isButton?.() && id.startsWith('skaw_el_settings:')) {
+        const action = id.slice('skaw_el_settings:'.length);
+        if (action === 'channels') {
+            await interaction.deferUpdate();
+            return interaction.editReply(buildChannelTypePicker());
+        }
+        if (action === 'banner') {
+            const modal = new ModalBuilder().setCustomId('skaw_el_default_banner_form').setTitle('Set Default Employee Banner');
+            modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('url').setLabel('HTTPS image URL').setPlaceholder('https://...').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(500)));
+            return interaction.showModal(modal);
+        }
+        if (action === 'clear-banner') {
+            await interaction.deferUpdate();
+            await clearEmployeeLogsBanner(interaction.client, interaction.guildId, interaction.user.id);
+            const values = await Promise.all([getEmployeeLogsConfig(interaction.client, interaction.guildId), getEmployeeAutoRoleConfig(interaction.client, interaction.guildId)]);
+            return interaction.editReply({ content: '✅ Default banner cleared. Event-specific banners remain configured.', ...buildSettingsPanel(values[0], values[1]), allowedMentions: { parse: [] } });
+        }
+        if (action === 'event-banner' || action === 'clear-event-banner') {
+            await interaction.deferUpdate();
+            return interaction.editReply(buildEventBannerPicker(action === 'clear-event-banner'));
+        }
+    }
+
+    if (interaction.isButton?.() && id.startsWith('skaw_el_autorole:')) {
+        const action = id.slice('skaw_el_autorole:'.length);
+        if (!['enable', 'disable'].includes(action)) return sendPrivate(interaction, 'Unknown Auto Logs action.');
+        const enabled = action === 'enable';
+        if (enabled) {
+            const config = await getEmployeeLogsConfig(interaction.client, interaction.guildId);
+            const requiredTypes = ['sign_in', 'sign_out', 'promotion', 'demote', 'mutation', 'warning', 'blacklist'];
+            const missing = requiredTypes.filter(type => !config.channels?.[type]).map(type => EMPLOYEE_LOG_TYPES[type].shortLabel);
+            if (missing.length) return sendPrivate(interaction, 'Configure these destination channels before enabling Auto Logs: ' + missing.join(', ') + '.');
+        }
+        await interaction.deferUpdate();
+        await setEmployeeAutoRoleEnabled(interaction.client, interaction.guildId, enabled, interaction.user.id);
+        const values = await Promise.all([getEmployeeLogsConfig(interaction.client, interaction.guildId), getEmployeeAutoRoleConfig(interaction.client, interaction.guildId)]);
+        return interaction.editReply({ content: '✅ Automatic Employee Logs ' + (values[1].enabled ? 'enabled.' : 'disabled.'), ...buildSettingsPanel(values[0], values[1]), allowedMentions: { parse: [] } });
+    }
+
+    if (interaction.isStringSelectMenu?.() && id === 'skaw_el_channel_type') {
+        const type = interaction.values[0];
+        if (!Object.hasOwn(EMPLOYEE_LOG_TYPES, type)) return sendPrivate(interaction, 'Unknown activity channel type.');
+        const menu = new ChannelSelectMenuBuilder().setCustomId('skaw_el_channel_pick:' + type)
+            .setPlaceholder('Choose a text or announcement channel').setMinValues(1).setMaxValues(1)
+            .setChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement);
+        return interaction.update({
+            embeds: [new EmbedBuilder().setColor(0x2563eb).setTitle('SELECT DESTINATION CHANNEL').setDescription('Activity: ' + EMPLOYEE_LOG_TYPES[type].shortLabel)],
+            components: [new ActionRowBuilder().addComponents(menu), new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('skaw_el_dashboard:settings').setLabel('Back to Settings').setStyle(ButtonStyle.Secondary))],
+            allowedMentions: { parse: [] },
+        });
+    }
+
+    if (interaction.isChannelSelectMenu?.() && id.startsWith('skaw_el_channel_pick:')) {
+        const type = id.slice('skaw_el_channel_pick:'.length);
+        if (!Object.hasOwn(EMPLOYEE_LOG_TYPES, type)) return sendPrivate(interaction, 'Unknown activity channel type.');
+        const channelId = interaction.values[0];
+        const channel = await interaction.client.channels.fetch(channelId).catch(() => null);
+        if (!channel || !channel.isTextBased?.() || channel.isDMBased?.() || String(channel.guildId) !== String(interaction.guildId)) return sendPrivate(interaction, 'Choose a text channel from this server.');
+        const botMember = interaction.guild.members.me || await interaction.guild.members.fetchMe().catch(() => null);
+        const permissions = channel.permissionsFor(botMember || interaction.client.user);
+        const required = PermissionFlagsBits.ViewChannel | PermissionFlagsBits.SendMessages | PermissionFlagsBits.EmbedLinks | PermissionFlagsBits.ReadMessageHistory;
+        if (!permissions?.has(required)) return sendPrivate(interaction, 'The bot needs View Channel, Send Messages, Embed Links, and Read Message History in ' + channel + '.');
+        await interaction.deferUpdate();
+        await setEmployeeLogsChannel(interaction.client, interaction.guildId, type, channelId, interaction.user.id);
+        const values = await Promise.all([getEmployeeLogsConfig(interaction.client, interaction.guildId), getEmployeeAutoRoleConfig(interaction.client, interaction.guildId)]);
+        return interaction.editReply({ content: '✅ Channel for ' + EMPLOYEE_LOG_TYPES[type].shortLabel + ' saved to ' + channel + '.', ...buildSettingsPanel(values[0], values[1]), allowedMentions: { parse: [] } });
+    }
+
+    if (interaction.isStringSelectMenu?.() && (id === 'skaw_el_event_banner_pick' || id === 'skaw_el_clear_event_banner_pick')) {
+        const eventKey = interaction.values[0];
+        if (!Object.hasOwn(EMPLOYEE_LOG_BANNER_EVENTS, eventKey)) return sendPrivate(interaction, 'Unknown event banner.');
+        if (id === 'skaw_el_clear_event_banner_pick') {
+            await interaction.deferUpdate();
+            await clearEmployeeLogsEventBanner(interaction.client, interaction.guildId, eventKey, interaction.user.id);
+            const values = await Promise.all([getEmployeeLogsConfig(interaction.client, interaction.guildId), getEmployeeAutoRoleConfig(interaction.client, interaction.guildId)]);
+            return interaction.editReply({ content: '✅ Custom banner cleared for ' + EMPLOYEE_LOG_BANNER_EVENTS[eventKey].label + '.', ...buildSettingsPanel(values[0], values[1]), allowedMentions: { parse: [] } });
+        }
+        const modal = new ModalBuilder().setCustomId('skaw_el_event_banner_form:' + eventKey).setTitle(('Set ' + EMPLOYEE_LOG_BANNER_EVENTS[eventKey].label + ' banner').slice(0, 45));
+        modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('url').setLabel('HTTPS image URL').setPlaceholder('https://...').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(500)));
+        return interaction.showModal(modal);
+    }
+
+    if (interaction.isButton?.() && id.startsWith('skaw_el_registry:')) {
+        const action = id.slice('skaw_el_registry:'.length);
+        const registry = await getEmployeeRoleRegistry(interaction.client, interaction.guildId);
+        if (action === 'add') {
+            await interaction.deferUpdate();
+            const menu = new RoleSelectMenuBuilder().setCustomId('skaw_el_registry_role_pick:add').setPlaceholder('Select a Discord role to register').setMinValues(1).setMaxValues(1);
+            return interaction.editReply({
+                embeds: [new EmbedBuilder().setColor(0x2563eb).setTitle('REGISTER EMPLOYEE ROLE').setDescription('Choose a role from the server. The next step configures its meaning in EmployeeLogs.')],
+                components: [new ActionRowBuilder().addComponents(menu), new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('skaw_el_dashboard:roles').setLabel('Cancel').setStyle(ButtonStyle.Secondary))],
+                allowedMentions: { parse: [] },
+            });
+        }
+        if (action === 'edit' || action === 'disable') {
+            await interaction.deferUpdate();
+            return interaction.editReply(buildRegistryMappingPicker(registry, action));
+        }
+    }
+
+    if (interaction.isRoleSelectMenu?.() && id.startsWith('skaw_el_registry_role_pick:')) {
+        const roleId = interaction.values[0];
+        const role = await interaction.guild.roles.fetch(roleId).catch(() => null);
+        if (!role) return sendPrivate(interaction, 'The selected Discord role could not be found.');
+        if (role.id === BASE_EMPLOYEE_ROLE.id) return sendPrivate(interaction, 'Company Staff | SKAW is the fixed Base Employee Role and cannot be registered again.');
+        if (SKAW_EMPLOYEE_ROLE_CATALOG[role.id]) return sendPrivate(interaction, 'This role already has a built-in mapping and cannot be duplicated in the custom registry.');
+        registrySessions.set(sessionKey(interaction.guildId, interaction.user.id), { roleId: role.id, roleName: role.name, mode: 'add', existing: null, updatedAt: Date.now() });
+        return interaction.update({ content: 'Selected role: <@&' + role.id + '>. Choose how EmployeeLogs should interpret it.', embeds: [], components: [new ActionRowBuilder().addComponents(roleCategoryOptions())], allowedMentions: { parse: [] } });
+    }
+
+    if (interaction.isStringSelectMenu?.() && (id === 'skaw_el_registry_edit_pick' || id === 'skaw_el_registry_disable_pick')) {
+        const roleId = interaction.values[0];
+        const registry = await getEmployeeRoleRegistry(interaction.client, interaction.guildId);
+        const role = registry.roles.find(item => item.id === roleId);
+        if (!role) return sendPrivate(interaction, 'This role mapping was not found.');
+        if (id === 'skaw_el_registry_disable_pick') {
+            await interaction.deferUpdate();
+            await disableEmployeeRole(interaction.client, interaction.guildId, roleId, interaction.user.id);
+            const next = await getEmployeeRoleRegistry(interaction.client, interaction.guildId);
+            return interaction.editReply({ content: '✅ Role mapping deactivated. Existing records remain intact.', ...buildRoleRegistryPanelPayload(next), allowedMentions: { parse: [] } });
+        }
+        const roleObject = await interaction.guild.roles.fetch(roleId).catch(() => null);
+        registrySessions.set(sessionKey(interaction.guildId, interaction.user.id), { roleId, roleName: roleObject?.name || role.name, mode: 'edit', existing: role, updatedAt: Date.now() });
+        return interaction.update({ content: 'Editing mapping for <@&' + roleId + '>. Choose the category and mapping details.', embeds: [], components: [new ActionRowBuilder().addComponents(roleCategoryOptions(role.category))], allowedMentions: { parse: [] } });
+    }
+
+    if (interaction.isStringSelectMenu?.() && id === 'skaw_el_registry_category') {
+        const key = sessionKey(interaction.guildId, interaction.user.id);
+        const session = registrySessions.get(key);
+        if (!session || Date.now() - session.updatedAt > SESSION_TTL_MS) return sendPrivate(interaction, 'Role registration session expired. Start again from Role Registry.');
+        session.category = interaction.values[0];
+        session.updatedAt = Date.now();
+        registrySessions.set(key, session);
+        return interaction.showModal(buildRegistryForm(session.category, session));
+    }
+
+    if (interaction.isModalSubmit?.() && id.startsWith('skaw_el_registry_form:')) {
+        const category = id.slice('skaw_el_registry_form:'.length);
+        const key = sessionKey(interaction.guildId, interaction.user.id);
+        const session = registrySessions.get(key);
+        await interaction.deferUpdate();
+        if (!session || Date.now() - session.updatedAt > SESSION_TTL_MS) return interaction.editReply({ content: '⌛ Role registration session expired. Start again from Role Registry.', embeds: [], components: [], allowedMentions: { parse: [] } });
+        const readField = field => { try { return interaction.fields.getTextInputValue(field).trim(); } catch { return ''; } };
+        const department = readField('department');
+        const levelRaw = readField('level');
+        const warn = readField('warn');
+        const note = readField('note');
+        const roleObject = await interaction.guild.roles.fetch(session.roleId).catch(() => null);
+        await registerEmployeeRole(interaction.client, interaction.guildId, {
+            id: session.roleId,
+            name: roleObject?.name || session.roleName,
+            category,
+            department,
+            level: levelRaw ? Number(levelRaw) : null,
+            warn,
+            note,
+        }, interaction.user.id);
+        registrySessions.delete(key);
+        const next = await getEmployeeRoleRegistry(interaction.client, interaction.guildId);
+        return interaction.editReply({ content: '✅ Role mapping saved. Automatic classification will use it for future role changes.', ...buildRoleRegistryPanelPayload(next), allowedMentions: { parse: [] } });
+    }
+
+    if (interaction.isStringSelectMenu?.() && id === 'skaw_el_exit_review_pick') {
+        const review = await getEmployeeExitReview(interaction.client, interaction.guildId, interaction.values[0]);
+        if (!review || review.status !== 'pending') return sendPrivate(interaction, 'This Exit Review is no longer pending.');
+        return interaction.update({ content: '', ...buildExitReviewDetail(review), allowedMentions: { parse: [] } });
+    }
+
+    if (interaction.isButton?.() && id.startsWith('skaw_el_exit_outcome:')) {
+        const parts = id.split(':');
+        const reviewId = parts[1];
+        const outcome = parts[2];
+        const review = await getEmployeeExitReview(interaction.client, interaction.guildId, reviewId);
+        if (!review || review.status !== 'pending') return sendPrivate(interaction, 'This Exit Review is no longer pending.');
+        if (!['sign_out', 'resignation', 'dismissal'].includes(outcome)) return sendPrivate(interaction, 'Unknown exit classification.');
+        return interaction.showModal(buildExitReasonModal(reviewId, outcome));
+    }
+
+    if (interaction.isModalSubmit?.() && id === 'skaw_el_default_banner_form') {
+        const url = interaction.fields.getTextInputValue('url').trim();
+        await interaction.deferUpdate();
+        await setEmployeeLogsBanner(interaction.client, interaction.guildId, url, interaction.user.id);
+        const values = await Promise.all([getEmployeeLogsConfig(interaction.client, interaction.guildId), getEmployeeAutoRoleConfig(interaction.client, interaction.guildId)]);
+        return interaction.editReply({ content: '✅ Default banner saved.', ...buildSettingsPanel(values[0], values[1]), allowedMentions: { parse: [] } });
+    }
+
+    if (interaction.isModalSubmit?.() && id.startsWith('skaw_el_event_banner_form:')) {
+        const eventKey = id.slice('skaw_el_event_banner_form:'.length);
+        if (!Object.hasOwn(EMPLOYEE_LOG_BANNER_EVENTS, eventKey)) return sendPrivate(interaction, 'Unknown event banner.');
+        const url = interaction.fields.getTextInputValue('url').trim();
+        await interaction.deferUpdate();
+        await setEmployeeLogsEventBanner(interaction.client, interaction.guildId, eventKey, url, interaction.user.id);
+        const values = await Promise.all([getEmployeeLogsConfig(interaction.client, interaction.guildId), getEmployeeAutoRoleConfig(interaction.client, interaction.guildId)]);
+        return interaction.editReply({ content: '✅ Event-specific banner saved for ' + EMPLOYEE_LOG_BANNER_EVENTS[eventKey].label + '.', ...buildSettingsPanel(values[0], values[1]), allowedMentions: { parse: [] } });
+    }
+
+    if (interaction.isModalSubmit?.() && id === 'skaw_el_find_form') {
+        const query = interaction.fields.getTextInputValue('query').trim();
+        await interaction.deferUpdate();
+        const matches = await searchEmployeeDirectory(interaction.client, interaction.guildId, query, { limit: 10 });
+        const cleanQuery = query.replace(/[\\r\\n]/g, ' ').slice(0, 100);
+        const embed = new EmbedBuilder().setColor(0x2563eb).setTitle('EMPLOYEE DIRECTORY SEARCH')
+            .setDescription(matches.length ? 'Results for **' + cleanQuery + '**' : 'No employee records matched **' + cleanQuery + '**.');
+        for (const record of matches.slice(0, 10)) {
+            const position = record.currentPosition?.name || record.lastKnownPosition?.name || 'Not recorded';
+            embed.addFields({
+                name: (record.displayName || 'Unknown member').slice(0, 250),
+                value: [
+                    '<@' + record.userId + '> · ' + (record.status || 'unknown').toUpperCase(),
+                    'Position: ' + position,
+                    'First Sign In: ' + formatDirectoryTimestamp(record.firstSignInAt),
+                    'Last Sign Out: ' + formatDirectoryTimestamp(record.lastSignOutAt),
+                    'History entries: ' + (Array.isArray(record.history) ? record.history.length : 0),
+                ].join('\\n').slice(0, 1000),
+                inline: false,
+            });
+        }
+        return interaction.editReply({ content: '', embeds: [embed], components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('skaw_el_dashboard:home').setLabel('Dashboard').setStyle(ButtonStyle.Secondary))], allowedMentions: { parse: [] } });
+    }
+
+    if (interaction.isModalSubmit?.() && id.startsWith('skaw_el_exit_form:')) {
+        const parts = id.split(':');
+        const reviewId = parts[1];
+        const outcome = parts[2];
+        const reason = interaction.fields.getTextInputValue('reason').trim();
+        await interaction.deferUpdate();
+        let claimed = false;
+        let published = false;
+        try {
+            const review = await claimEmployeeExitReview(interaction.client, interaction.guildId, reviewId, interaction.user.id);
+            claimed = true;
+            const result = await sendEmployeeLog(interaction.client, interaction.guild, outcome, {
+                userId: review.userId,
+                displayName: review.displayName,
+                position: review.formerPositionId || '',
+                reason,
+                notes: '',
+                recordedBy: interaction.user.id,
+                automatic: false,
+            });
+            published = true;
+            await completeEmployeeExitReview(interaction.client, interaction.guildId, reviewId, {
+                outcome,
+                reason,
+                recordId: result.recordId,
+                resolvedBy: interaction.user.id,
+            });
+            return interaction.editReply({
+                content: '✅ Exit Review completed as ' + EMPLOYEE_LOG_TYPES[outcome].shortLabel + '. Log sent to ' + result.channel + '.\\nRecord ID: ' + result.recordId,
+                embeds: [],
+                components: [new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId('skaw_el_dashboard:reviews').setLabel('Back to Exit Reviews').setStyle(ButtonStyle.Secondary),
+                    new ButtonBuilder().setCustomId('skaw_el_dashboard:home').setLabel('Dashboard').setStyle(ButtonStyle.Secondary),
+                )],
+                allowedMentions: { parse: [] },
+            });
+        } catch (error) {
+            if (claimed && !published) await releaseEmployeeExitReview(interaction.client, interaction.guildId, reviewId).catch(() => {});
+            throw error;
+        }
+    }
+    return false;
+}
+
 async function handleInteraction(interaction) {
     if (!interaction.inGuild?.()) return;
-    const isEmployeeLogsComponent = Boolean(interaction.customId?.startsWith('skaw_el_')) && (
+    const id = String(interaction.customId || '');
+    const isEmployeeLogsComponent = id.startsWith('skaw_el_') && (
         interaction.isButton?.() || interaction.isUserSelectMenu?.() || interaction.isRoleSelectMenu?.()
-        || interaction.isStringSelectMenu?.() || interaction.isModalSubmit?.()
+        || interaction.isStringSelectMenu?.() || interaction.isChannelSelectMenu?.() || interaction.isModalSubmit?.()
     );
     if (!isEmployeeLogsComponent) return;
-    if (!hasManageGuild(interaction)) {
-        return sendPrivate(interaction, 'You dont have permission');
-    }
+    if (!hasManageGuild(interaction)) return sendPrivate(interaction, 'You do not have permission to manage Employee Logs.');
+
+    const adminPrefixes = [
+        'skaw_el_dashboard:', 'skaw_el_settings:', 'skaw_el_autorole:', 'skaw_el_registry:',
+        'skaw_el_channel_type', 'skaw_el_channel_pick:', 'skaw_el_event_banner_pick',
+        'skaw_el_clear_event_banner_pick', 'skaw_el_registry_role_pick:', 'skaw_el_registry_edit_pick',
+        'skaw_el_registry_disable_pick', 'skaw_el_registry_category', 'skaw_el_registry_form:',
+        'skaw_el_exit_review_pick', 'skaw_el_exit_outcome:', 'skaw_el_exit_form:',
+        'skaw_el_default_banner_form', 'skaw_el_event_banner_form:', 'skaw_el_find_form',
+    ];
+    if (adminPrefixes.some(prefix => id.startsWith(prefix))) return handleAdminInteraction(interaction);
+
     if (interaction.isButton?.()) {
         if (interaction.customId.startsWith('skaw_el_edit_record:')) return handlePublishedRecordEditButton(interaction);
         if (interaction.customId.startsWith('skaw_el_start:')) return handleStart(interaction);
@@ -641,9 +952,8 @@ async function handleInteraction(interaction) {
     if (interaction.isRoleSelectMenu?.() && interaction.customId.startsWith('skaw_el_role:')) return handleRoleSelect(interaction);
     if (interaction.isModalSubmit?.() && interaction.customId.startsWith('skaw_el_edit_record_modal:')) return handlePublishedRecordEditModal(interaction);
     if (interaction.isModalSubmit?.() && interaction.customId.startsWith('skaw_el_form:')) return handleModal(interaction);
-    return sendPrivate(interaction, 'This Employee Logs action is not recognized or has expired. Reopen `/epl panel` and try again.');
+    return sendPrivate(interaction, 'This Employee Logs action is not recognized or has expired. Reopen the Employee Logs dashboard and try again.');
 }
-
 
 export function buildEmployeeLogsPanel(config = null) {
     const embed = new EmbedBuilder()

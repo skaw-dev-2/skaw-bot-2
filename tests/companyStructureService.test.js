@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildCompanyStructureEmbeds, buildCompanyStructureSnapshot, createCompanyStructureDraft, getCompanyStructureDraft, deleteCompanyStructureDraft, setCompanyStructureDraftRoster, publishCompanyStructureDraft } from '../src/services/companyStructureService.js';
+import { buildCompanyStructureEmbeds, buildCompanyStructureSnapshot, createCompanyStructureDraft, getCompanyStructureDraft, getDraftSnapshotView, deleteCompanyStructureDraft, setCompanyStructureDraftRoster, publishCompanyStructureDraft } from '../src/services/companyStructureService.js';
 
 const ROLE = Object.freeze({
   ceo: '1432365826136080625',
@@ -369,8 +369,55 @@ test('manual display-name edits are stored against the matched Discord user ID',
   const draft = await createCompanyStructureDraft(client, guild, '333333333333333333');
   setCompanyStructureDraftRoster(draft, 'ceo', 'Kevin' + String.fromCharCode(92) + '_CustomName');
   assert.equal(draft.overrides.ceo[0], 'Kevin_CustomName');
-  assert.equal(draft.pendingRosterNamesByUserId['111111111111111111'], 'Kevin_CustomName');
+  assert.equal(draft.pendingRosterNamesByCategory.ceo['111111111111111111'], 'Kevin_CustomName');
+  const draftView = getDraftSnapshotView(draft);
+  const sectionsByKey = Object.fromEntries(draftView.sections.map(section => [section.key, section]));
+  assert.deepEqual(sectionsByKey.ceo.members, ['Kevin_CustomName']);
+  assert.deepEqual(sectionsByKey['mechanic-division'].members, ['Kevin_Monterrey']);
+  assert.deepEqual(sectionsByKey['workshop-1'].members, ['Kevin_Monterrey']);
   deleteCompanyStructureDraft(draft.id);
+});
+
+
+test('the same Discord user can keep different IC names per category across Publish and the next update', async () => {
+  const { guild, config } = makeRuntime();
+  guild.id = config.guildId;
+  let storedConfig = {
+    ...config,
+    updatedAt: new Date().toISOString(),
+    channelId: '555555555555555555',
+    bannerUrl: null,
+  };
+  const publishedMessage = { id: '666666666666666666' };
+  const channel = {
+    isTextBased: () => true,
+    isDMBased: () => false,
+    send: async () => publishedMessage,
+  };
+  const client = {
+    db: {
+      get: async () => storedConfig,
+      set: async (_key, value) => { storedConfig = value; return true; },
+    },
+    guilds: { fetch: async () => guild },
+    channels: { fetch: async () => channel },
+  };
+
+  const firstDraft = await createCompanyStructureDraft(client, guild, '333333333333333333');
+  setCompanyStructureDraftRoster(firstDraft, 'ceo', 'Kevin_Custom_IC');
+  setCompanyStructureDraftRoster(firstDraft, 'mechanic-division', 'Kevin_Mechanic_IC');
+  await publishCompanyStructureDraft(client, firstDraft);
+
+  assert.equal(storedConfig.rosterNamesByCategory.ceo['111111111111111111'], 'Kevin_Custom_IC');
+  assert.equal(storedConfig.rosterNamesByCategory['mechanic-division']['111111111111111111'], 'Kevin_Mechanic_IC');
+
+  const nextDraft = await createCompanyStructureDraft(client, guild, '333333333333333333');
+  const nextByKey = Object.fromEntries(nextDraft.snapshot.sections.map(section => [section.key, section]));
+  assert.deepEqual(nextByKey.ceo.members, ['Kevin_Custom_IC']);
+  assert.deepEqual(nextByKey['mechanic-division'].members, ['Kevin_Mechanic_IC']);
+  assert.deepEqual(nextByKey['workshop-1'].members, ['Kevin_Monterrey']);
+  deleteCompanyStructureDraft(firstDraft.id);
+  deleteCompanyStructureDraft(nextDraft.id);
 });
 
 

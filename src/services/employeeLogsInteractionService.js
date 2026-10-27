@@ -157,11 +157,10 @@ const EXIT_REASON_CATEGORIES = [
     { label: 'Personal Resignation', value: 'personal_resignation', description: 'Employee chose to resign.' },
     { label: 'Blacklist', value: 'blacklist', description: 'Exit associated with a blacklist record.' },
     { label: 'Others', value: 'others', description: 'Another reason not listed above.' },
-    { label: 'Belum ditentukan', value: 'unset', description: 'Clear the category and choose it later.' },
 ];
 
 function buildSignOutEditControls(record) {
-    const current = String(record.data?.reasonCategory || 'unset');
+    const current = String(record.data?.reasonCategory || '');
     const menu = new StringSelectMenuBuilder()
         .setCustomId(`skaw_el_reason_category:${record.recordId}`)
         .setPlaceholder('Pilih kategori Reason')
@@ -199,8 +198,7 @@ async function handlePublishedRecordReasonCategory(interaction) {
     const recordId = interaction.customId.slice('skaw_el_reason_category:'.length);
     const record = await getEmployeeLogRecord(interaction.client, interaction.guildId, recordId);
     if (!record || record.type !== 'sign_out') return sendPrivate(interaction, 'This Sign-Out record is no longer available to edit.');
-    const selected = interaction.values[0];
-    const reasonCategory = selected === 'unset' ? '' : selected;
+    const reasonCategory = interaction.values[0];
     const result = await updateEmployeeLogRecord(interaction.client, interaction.guildId, recordId, { reasonCategory }, interaction.user.id);
     return interaction.update({
         content: '✅ Reason category updated on the original Employee Sign-Out log. You can also edit details or notes below.',

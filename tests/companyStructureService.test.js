@@ -118,3 +118,18 @@ test('empty configured workshops remain visible as N/A', async () => {
   assert.match(description, /<@&1436228415492456448>/);
   assert.match(description, /N\/A/);
 });
+
+test('repeated previews reuse the recently fetched guild member list', async () => {
+  const { guild, config } = makeRuntime();
+  const originalFetch = guild.members.fetch;
+  let fetchCount = 0;
+  guild.members.fetch = async () => {
+    fetchCount += 1;
+    return originalFetch();
+  };
+
+  await buildCompanyStructureSnapshot(guild, config);
+  await buildCompanyStructureSnapshot(guild, config);
+
+  assert.equal(fetchCount, 1);
+});

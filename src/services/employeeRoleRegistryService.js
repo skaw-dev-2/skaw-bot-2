@@ -304,8 +304,8 @@ export async function claimEmployeeExitReview(client, guildId, reviewId, claimed
     const existing = reviews[index];
     const staleProcessing = existing.status === 'processing'
         && Date.now() - new Date(existing.claimedAt || 0).getTime() > 5 * 60_000;
-    if (existing.status === 'resolved') throw new Error('Exit Review ini sudah diselesaikan.');
-    if (existing.status === 'processing' && !staleProcessing) throw new Error('Exit Review ini sedang diproses oleh Management lain.');
+    if (existing.status === 'resolved' || existing.status === 'cancelled') throw new Error('Exit Review sudah dibatalkan atau diselesaikan.');
+    if (existing.status !== 'pending' && !staleProcessing) throw new Error('Exit Review ini sedang diproses oleh Management lain.');
     reviews[index] = {
         ...existing,
         status: 'processing',

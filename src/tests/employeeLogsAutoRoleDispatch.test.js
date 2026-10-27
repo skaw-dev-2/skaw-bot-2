@@ -76,7 +76,7 @@ test('role event is coalesced and publishes one editable automatic Sign-In recor
 
     assert.equal(publishedMessages.length, 1);
     const message = publishedMessages[0];
-    const description = message.payload.embeds[0].description;
+    const description = message.payload.embeds[0]?.data?.description ?? message.payload.embeds[0]?.description;
     assert.match(description, /^## EMPLOYEE SIGN-IN/m);
     assert.match(description, new RegExp(`\\*\\*Employee:\\*\\* Kevin Monterrey \\(\\*\\*<@${MEMBER_ID}>\\*\\*\\)`));
     assert.match(description, /\*\*Position:\*\* <@&1414629137389322244>/);
@@ -118,18 +118,20 @@ test('removing Company Staff queues an exit review instead of publishing a guess
     assert.equal(reviews[0].formerPositionId, '1414629137389322244');
 });
 
-test('restoring Company Staff cancels a pending exit review and records a new Sign-In', async () => {
+const RESTORE_MEMBER_ID = '12345678901234568';
+
+test('restoring Company Staff cancels a pending exit review without fabricating a new Sign-In', async () => {
     const { client, guild, store, publishedMessages } = createRuntime();
     const oldMember = {
-        id: MEMBER_ID,
-        user: { id: MEMBER_ID, bot: false },
+        id: RESTORE_MEMBER_ID,
+        user: { id: RESTORE_MEMBER_ID, bot: false },
         displayName: 'Kevin Monterrey',
         guild,
         roles: { cache: new Set(['1564660065783390371', '1414623229288513586', '1414629137389322244']) },
     };
     const removedMember = {
-        id: MEMBER_ID,
-        user: { id: MEMBER_ID, bot: false },
+        id: RESTORE_MEMBER_ID,
+        user: { id: RESTORE_MEMBER_ID, bot: false },
         displayName: 'Kevin Monterrey',
         guild,
         client,

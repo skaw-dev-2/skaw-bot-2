@@ -508,9 +508,9 @@ export async function handleEmployeeLogsRoleUpdate(oldMember, newMember, explici
     if (!client?.db || !guild || !oldMember || !newMember) return { skipped: 'missing-context' };
     if (newMember.user?.bot || newMember.id !== oldMember.id) return { skipped: 'not-a-human-member' };
 
-    const autoConfig = await getEmployeeAutoRoleConfig(client, guild.id);
-    if (!autoConfig.enabled) return { skipped: 'disabled' };
-
+    // Queue immediately after capturing the old/new snapshots. Checking config
+    // before queueing would allow two overlapping gateway updates to enqueue out
+    // of order when database reads complete at different times.
     const oldRoleIds = normalizeIds(oldMember.roles?.cache);
     const newRoleIds = normalizeIds(newMember.roles?.cache);
     const { added, removed } = diffRoleIds(oldRoleIds, newRoleIds);

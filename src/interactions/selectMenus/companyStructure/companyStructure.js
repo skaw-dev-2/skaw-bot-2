@@ -31,7 +31,7 @@ async function checkAccess(interaction, guildId, ownerId) {
 const editRosterSelect = {
   name: 'cs_edit_select',
   async execute(interaction, client, args) {
-    const [draftId, ownerId] = args;
+    const [draftId, ownerId, pageValue] = args;
     if (ownerId !== interaction.user.id) {
       return interaction.reply({ content: 'Only the person who created this preview can edit it.', flags: MessageFlags.Ephemeral });
     }
@@ -41,8 +41,40 @@ const editRosterSelect = {
       return interaction.reply({ content: 'This preview expired. Run /cs update again.', flags: MessageFlags.Ephemeral });
     }
 
-    const sectionKey = interaction.values?.[0];
-    const section = getDraftSnapshotView(draft).sections.find(item => item.key === sectionKey);
+    const view = getDraftSnapshotView(draft);
+    const available = view.sections.filter(section => section.enabled && section.roleExists);
+    const currentPage = Number.isInteger(Number(pageValue)) ? Math.max(0, Number(pageValue)) : 0;
+    const pageSize = 23;
+    const pageCount = Math.max(1, Math.ceil(available.length / pageSize));
+    const selected = interaction.values?.[0];
+
+    if (selected === '__next' || selected === '__previous') {
+      const nextPage = selected === '__next'
+        ? Math.min(pageCount - 1, currentPage + 1)
+        : Math.max(0, currentPage - 1);
+      const options = available.slice(nextPage * pageSize, (nextPage + 1) * pageSize).map(item => ({
+        label: item.title.slice(0, 100),
+        description: (item.members.length + ' preview entries • role ' + item.roleId).slice(0, 100),
+        value: item.key,
+      }));
+      if (nextPage > 0) {
+        options.push({ label: '← Previous page', description: 'Return to the previous category page', value: '__previous' });
+      }
+      if (nextPage + 1 < pageCount) {
+        options.push({ label: 'Next page →', description: 'More categories to edit', value: '__next' });
+      }
+      const menu = new StringSelectMenuBuilder()
+        .setCustomId('cs_edit_select:' + draftId + ':' + ownerId + ':' + nextPage)
+        .setPlaceholder('Choose a category whose preview roster you want to edit')
+        .addOptions(options);
+      return interaction.update({
+        content: 'Select a category. Page ' + (nextPage + 1) + ' of ' + pageCount + '. Edits affect this preview only.',
+        components: [new ActionRowBuilder().addComponents(menu)],
+      });
+    }
+
+    const sectionKey = selected;
+    const section = view.sections.find(item => item.key === sectionKey && item.enabled && item.roleExists);
     if (!section) {
       return interaction.reply({ content: 'That category is no longer available in this preview.', flags: MessageFlags.Ephemeral });
     }

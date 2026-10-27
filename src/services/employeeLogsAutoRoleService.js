@@ -4,6 +4,12 @@ import {
     getEmployeeAutoRoleConfig,
     sendEmployeeLog,
 } from './employeeLogsService.js';
+import {
+    BASE_EMPLOYEE_ROLE,
+    getEmployeeRoleRegistry,
+    employeeRoleToCatalogEntry,
+    createEmployeeExitReview,
+} from './employeeRoleRegistryService.js';
 
 const DEDUPE_KEY = guildId => `guild:${guildId}:employee_logs:auto_role_dedupe`;
 const DEDUPE_WINDOW_MS = 15_000;
@@ -72,13 +78,13 @@ function normalizeIds(input) {
     return [];
 }
 
-function activeRoleIds(roleIds) {
-    return roleIds.filter(id => SKAW_EMPLOYEE_ROLE_CATALOG[id]?.active === true);
+function activeRoleIds(roleIds, catalog = SKAW_EMPLOYEE_ROLE_CATALOG) {
+    return roleIds.filter(id => catalog[id]?.active === true);
 }
 
-function bestPositionRole(roleIds) {
+function bestPositionRole(roleIds, catalog = SKAW_EMPLOYEE_ROLE_CATALOG) {
     const candidates = roleIds
-        .map(id => ({ id, meta: SKAW_EMPLOYEE_ROLE_CATALOG[id] }))
+        .map(id => ({ id, meta: catalog[id] }))
         .filter(item => item.meta?.active && item.meta.position !== false)
         .sort((a, b) => (b.meta.level ?? 0) - (a.meta.level ?? 0));
     return candidates[0] ? { id: candidates[0].id, ...candidates[0].meta } : null;
@@ -112,7 +118,7 @@ function classifyPositionTransition(previous, next) {
  * Pure classifier used by the GuildMemberUpdate listener and automated tests.
  * A single update may legitimately issue a Warning/Blacklist and a career log.
  */
-export function classifyEmployeeRoleChange(oldRoleIdsInput, newRoleIdsInput, userId = '0') {
+export function classifyEmployeeRoleChange(oldRoleIdsInput, newRoleIdsInput, userId = '0', catalog = SKAW_EMPLOYEE_ROLE_CATALOG) {
     const oldRoleIds = normalizeIds(oldRoleIdsInput);
     const newRoleIds = normalizeIds(newRoleIdsInput);
     const oldSet = new Set(oldRoleIds);
@@ -122,10 +128,10 @@ export function classifyEmployeeRoleChange(oldRoleIdsInput, newRoleIdsInput, use
     if (!addedIds.length && !removedIds.length) return [];
 
     const decisions = [];
-    const addedBlacklist = addedIds.some(id => SKAW_EMPLOYEE_ROLE_CATALOG[id]?.kind === 'blacklist');
+    const addedBlacklist = addedIds.some(id => catalog[id]?.kind === 'blacklist');
     if (addedBlacklist) {
-        const oldPosition = bestPositionRole(oldRoleIds);
-        const newPosition = bestPositionRole(newRoleIds);
+        const oldPosition = bestPositionRole(oldRoleIds, catalog);
+        const newPosition = bestPositionRole(newRoleIds, catalog);
         decisions.push({
             type: 'blacklist',
             data: { userId, position: oldPosition?.id || newPosition?.id || '', reason: '', notes: '' },
@@ -133,43 +139,43 @@ export function classifyEmployeeRoleChange(oldRoleIdsInput, newRoleIdsInput, use
     }
 
     const addedWarnings = addedIds
-        .map(id => ({ id, meta: SKAW_EMPLOYEE_ROLE_CATALOG[id] }))
+        .map(id => ({ id, meta: catalog[id] }))
         .filter(item => item.meta?.kind === 'warning')
         .sort((a, b) => Number(b.meta.warn.split('/')[0]) - Number(a.meta.warn.split('/')[0]));
     if (addedWarnings.length) {
         const warning = addedWarnings[0];
-        const position = bestPositionRole(newRoleIds) || bestPositionRole(oldRoleIds);
+        const position = bestPositionRole(newRoleIds, catalog) || bestPositionRole(oldRoleIds, catalog);
         decisions.push({
             type: 'warning',
             data: { userId, position: position?.id || '', warn: warning.meta.warn, reason: '', notes: '' },
         });
     }
 
-    const oldActive = activeRoleIds(oldRoleIds);
-    const newActive = activeRoleIds(newRoleIds);
+    const oldActive = activeRoleIds(oldRoleIds, catalog);
+    const newActive = activeRoleIds(newRoleIds, catalog);
     if (oldActive.length === 0 && newActive.length > 0) {
-        const position = bestPositionRole(newRoleIds) || bestPositionRole(newActive);
+        const position = bestPositionRole(newRoleIds, catalog) || bestPositionRole(newActive, catalog);
         decisions.push({ type: 'sign_in', data: { userId, position: position?.id || '', reason: '', notes: '' } });
         return decisions;
     }
-    const isExitRoleAdded = addedIds.some(id => ['retired', 'civilian'].includes(SKAW_EMPLOYEE_ROLE_CATALOG[id]?.kind));
-    const activeRoleRemoved = removedIds.some(id => SKAW_EMPLOYEE_ROLE_CATALOG[id]?.active === true);
+    const isExitRoleAdded = addedIds.some(id => ['retired', 'civilian'].includes(catalog[id]?.kind));
+    const activeRoleRemoved = removedIds.some(id => catalog[id]?.active === true);
     if (oldActive.length > 0 && (
         newActive.length === 0 || (isExitRoleAdded && activeRoleRemoved)
     )) {
         // Retired/Civilian is an explicit exit transition per SKAW's workflow.
         // Don't require every stale rank marker to have been removed in the same
         // gateway payload before producing Sign-Out.
-        const position = bestPositionRole(oldRoleIds) || bestPositionRole(oldActive);
+        const position = bestPositionRole(oldRoleIds, catalog) || bestPositionRole(oldActive, catalog);
         decisions.push({ type: 'sign_out', data: { userId, position: position?.id || '', reason: '', notes: '' } });
         return decisions;
     }
 
     if (oldActive.length > 0 && newActive.length > 0) {
-        const oldPosition = bestPositionRole(oldRoleIds);
-        const newPosition = bestPositionRole(newRoleIds);
+        const oldPosition = bestPositionRole(oldRoleIds, catalog);
+        const newPosition = bestPositionRole(newRoleIds, catalog);
         const changedPositionIds = [...addedIds, ...removedIds].filter(id => {
-            const meta = SKAW_EMPLOYEE_ROLE_CATALOG[id];
+            const meta = catalog[id];
             return meta?.active && meta.position !== false;
         });
         const positionChanged = changedPositionIds.length > 0 && oldPosition && newPosition && oldPosition.id !== newPosition.id;
@@ -291,11 +297,68 @@ async function processEmployeeLogsRoleSnapshot(client, guild, memberId, oldRoleI
     const { added, removed } = diffRoleIds(oldRoleIds, newRoleIds);
     if (!added.length && !removed.length) return { skipped: 'no-role-change' };
 
-    const decisions = classifyEmployeeRoleChange(oldRoleIds, newRoleIds, memberId);
-    if (!decisions.length) return { skipped: 'no-mapped-activity' };
-
+    const registry = await getEmployeeRoleRegistry(client, guild.id);
+    const dynamicCatalog = Object.fromEntries(registry.roles
+        .filter(role => role.active)
+        .map(role => [role.id, employeeRoleToCatalogEntry(role)])
+        .filter(([, value]) => value));
+    const catalog = {
+        ...SKAW_EMPLOYEE_ROLE_CATALOG,
+        ...dynamicCatalog,
+        [BASE_EMPLOYEE_ROLE.id]: {
+            name: BASE_EMPLOYEE_ROLE.name,
+            domain: 'company',
+            level: 0,
+            kind: 'membership',
+            active: false,
+            position: false,
+        },
+    };
+    const hadMembership = oldRoleIds.includes(BASE_EMPLOYEE_ROLE.id);
+    const hasMembership = newRoleIds.includes(BASE_EMPLOYEE_ROLE.id);
     const signature = signatureFor(guild.id, memberId, added, removed);
     if (await wasRecentlyProcessed(client, guild.id, signature)) return { skipped: 'duplicate-event' };
+
+    // Company Staff is the source of truth for membership. Its removal creates a
+    // review item; Management decides whether the exit is Sign Out, Resignation,
+    // or Dismissal. Do not publish three competing exit records.
+    if (hadMembership && !hasMembership) {
+        const oldPosition = bestPositionRole(oldRoleIds, catalog);
+        const actorId = await findAuditActor(guild, memberId, added, removed);
+        const review = await createEmployeeExitReview(client, guild.id, {
+            userId: memberId,
+            displayName,
+            formerPositionId: oldPosition?.id || '',
+            formerPositionName: oldPosition?.name || '',
+            detectedBy: actorId || '',
+        });
+        await markProcessed(client, guild.id, signature);
+        return { queuedReview: true, reviewId: review.reviewId, duplicateReview: review.duplicate === true };
+    }
+
+    let decisions = [];
+    if (!hadMembership && hasMembership) {
+        const position = bestPositionRole(newRoleIds, catalog);
+        decisions = [{
+            type: 'sign_in',
+            data: { userId: memberId, position: position?.id || '', reason: '', notes: '' },
+        }];
+    } else if (hadMembership && hasMembership) {
+        decisions = classifyEmployeeRoleChange(oldRoleIds, newRoleIds, memberId, catalog)
+            .filter(decision => decision.type !== 'sign_in' && decision.type !== 'sign_out');
+    } else {
+        // Backward-compatible mode for role changes while the base membership
+        // role is not yet assigned to a legacy employee.
+        decisions = classifyEmployeeRoleChange(oldRoleIds, newRoleIds, memberId, catalog)
+            .filter(decision => decision.type !== 'sign_in' && decision.type !== 'sign_out');
+    }
+
+    if (!decisions.length) {
+        // Keep the role event recorded as processed to avoid repeated gateway work.
+        await markProcessed(client, guild.id, signature);
+        return { skipped: 'no-mapped-activity' };
+    }
+
     const actorId = await findAuditActor(guild, memberId, added, removed);
     const results = [];
     for (const decision of decisions) {
@@ -315,11 +378,10 @@ async function processEmployeeLogsRoleSnapshot(client, guild, memberId, oldRoleI
             console.error(`[Employee Auto Logs] Failed to publish ${decision.type} for ${memberId}:`, error?.message || error);
         }
     }
-    if (results.length) await markProcessed(client, guild.id, signature);
+    if (results.length || !decisions.length) await markProcessed(client, guild.id, signature);
     else recentInProcess.delete(signature);
     return { processed: results.length > 0, results };
 }
-
 /**
  * Collects quick role updates for one member into a single transition.
  * Discord emits guildMemberUpdate for every role mutation; a short coalescing

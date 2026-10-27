@@ -180,10 +180,11 @@ test('empty Notes are omitted and non-empty Notes render a notes section', () =>
 });
 
 test('published record button label and pencil icon are correct', () => {
-    const row = buildEmployeeLogEditRow('SKAW-EL-TEST');
-    const component = row.toJSON?.().components?.[0] || row.components?.[0]?.data || row.components?.[0];
-    assert.equal(component.label, 'Edit');
-    assert.equal(component.emoji?.name || component.emoji, '✏️');
-    assert.equal(row.components[1].label, 'Audit Trail');
-    assert.equal(row.components[1].custom_id, 'skaw_el_audit_record:SKAW-EL-TEST');
+    const row = buildEmployeeLogEditRow('SKAW-EL-TEST').toJSON();
+    const editButton = row.components[0];
+    const auditButton = row.components[1];
+    assert.equal(editButton.label, 'Edit');
+    assert.equal(editButton.emoji?.name || editButton.emoji, '✏️');
+    assert.equal(auditButton.label, 'Audit Trail');
+    assert.equal(auditButton.custom_id, 'skaw_el_audit_record:SKAW-EL-TEST');
 });

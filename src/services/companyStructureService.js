@@ -504,14 +504,27 @@ export function deleteCompanyStructureDraft(draftId) {
 }
 
 export function getDraftSnapshotView(draft) {
+  const pendingNames = draft.pendingRosterNamesByUserId || {};
   return {
     ...draft.snapshot,
-    sections: draft.snapshot.sections.map(section => ({
-      ...section,
-      members: Object.hasOwn(draft.overrides, section.key)
+    rosterNamesByUserId: {
+      ...(draft.snapshot.rosterNamesByUserId || {}),
+      ...pendingNames,
+    },
+    sections: draft.snapshot.sections.map(section => {
+      const memberEntries = Array.isArray(section.memberEntries)
+        ? section.memberEntries.map(entry => ({
+            ...entry,
+            displayName: pendingNames[String(entry.userId)] || entry.displayName,
+          }))
+        : [];
+      const members = Object.hasOwn(draft.overrides, section.key)
         ? [...draft.overrides[section.key]]
-        : [...section.members],
-    })),
+        : (memberEntries.length > 0
+          ? memberEntries.map(entry => entry.displayName)
+          : [...section.members]);
+      return { ...section, memberEntries, members };
+    }),
   };
 }
 
@@ -590,16 +603,13 @@ export async function publishCompanyStructureDraft(client, draft) {
   // Publish the reviewed preview snapshot instead of issuing a second opcode-8
   // guild-member request. The config timestamp check above ensures its category
   // configuration still matches the draft; roster edits are applied below.
-  const snapshot = structuredClone(draft.snapshot);
-  if (snapshot.missingRoles.length > 0) {
+  if (draft.snapshot.missingRoles.length > 0) {
     throw new Error('Publishing is blocked because one or more configured Discord roles were missing in the preview. Run /cs update again before publishing.');
   }
 
-  for (const [sectionKey, names] of Object.entries(draft.overrides)) {
-    const section = snapshot.sections.find(item => item.key === sectionKey);
-    if (section) section.members = [...names];
-  }
-
+  // Use the preview's roster edits and apply a renamed member consistently to
+  // every category where the same Discord user ID appears.
+  const snapshot = getDraftSnapshotView(draft);
   const embeds = buildCompanyStructureEmbeds(snapshot, currentConfig, { preview: false });
   const channel = await client.channels.fetch(currentConfig.channelId).catch(() => null);
   if (!channel || !channel.isTextBased() || channel.isDMBased() || typeof channel.send !== 'function') {

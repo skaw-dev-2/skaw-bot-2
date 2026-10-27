@@ -182,7 +182,7 @@ test('Retired/Civilian plus position removal publishes Sign-Out once even if Com
     await handleEmployeeLogsRoleUpdate(activeStaff, explicitlyRetired, client);
     assert.equal(publishedMessages.length, 1);
     assert.match(description(publishedMessages[0]), /^## EMPLOYEE SIGN-OUT/m);
-    assert.match(description(publishedMessages[0]), new RegExp(`\\\\*\\\\*Position:\\\\*\\\\* <@&${ROLE.senior}>`));
+    assert.ok(description(publishedMessages[0]).includes(`**Position:** <@&${ROLE.senior}>`));
 
     await handleEmployeeLogsRoleUpdate(explicitlyRetired, baseRemoved, client);
     assert.equal(publishedMessages.length, 1, 'removing Company Staff after an explicit exit must not duplicate Sign-Out');

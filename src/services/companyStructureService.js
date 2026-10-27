@@ -71,8 +71,8 @@ async function fetchGuildMembers(guild) {
         return members;
       } catch (error) {
         const message = String(error?.message || error);
-        const retryMatch = message.match(/retry after\\s+([\\d.]+)\\s+seconds?/i);
-        const isOpcodeRateLimit = /opcode\\s+8.*rate.?limit/i.test(message);
+        const retryMatch = message.match(/retry after\s+([\d.]+)\s+seconds?/i);
+        const isOpcodeRateLimit = /opcode\s+8.*rate.?limit/i.test(message);
         if (attempt >= MAX_MEMBER_FETCH_ATTEMPTS || (!retryMatch && !isOpcodeRateLimit)) {
           throw error;
         }

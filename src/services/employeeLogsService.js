@@ -205,6 +205,11 @@ export function buildEmployeeLogEditRow(recordId) {
             .setLabel('Edit')
             .setEmoji('✏️')
             .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+            .setCustomId(`skaw_el_audit_record:${recordId}`)
+            .setLabel('Audit Trail')
+            .setEmoji('🧾')
+            .setStyle(ButtonStyle.Secondary),
     );
 }
 

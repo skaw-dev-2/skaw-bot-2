@@ -184,4 +184,6 @@ test('published record button label and pencil icon are correct', () => {
     const component = row.toJSON?.().components?.[0] || row.components?.[0]?.data || row.components?.[0];
     assert.equal(component.label, 'Edit');
     assert.equal(component.emoji?.name || component.emoji, '✏️');
+    assert.equal(row.components[1].label, 'Audit Trail');
+    assert.equal(row.components[1].custom_id, 'skaw_el_audit_record:SKAW-EL-TEST');
 });

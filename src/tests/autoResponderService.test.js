@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { handleAutoResponderInteraction, handleAutoResponderMessage, openAutoResponderPanel } from '../services/autoResponderPanelService.js';
 import {
     buildAutoResponderPayload,
     deleteAutoResponderTemplate,
@@ -239,4 +240,10 @@ test('dispatch does not reply in DMs or to bot messages', async () => {
     const dm = makeMessage('partnership');
     dm.guild = null;
     assert.equal(await dispatchAutoResponderMessage(dm, client), false);
+});
+
+test('interactive panel entrypoints load and are exported', () => {
+    assert.equal(typeof handleAutoResponderMessage, 'function');
+    assert.equal(typeof handleAutoResponderInteraction, 'function');
+    assert.equal(typeof openAutoResponderPanel, 'function');
 });

@@ -115,6 +115,7 @@ function defaultConfig(guildId) {
     messageChannelId: null,
     lastUpdatedAt: null,
     rosterNamesByUserId: {},
+    rosterNamesByCategory: {},
     updatedAt: new Date().toISOString(),
     sections: DEFAULT_SECTIONS.map(section => ({ ...section })),
   };
@@ -143,6 +144,14 @@ function normalizeConfig(raw, guildId) {
           .filter(([userId, name]) => /^\d{17,20}$/.test(userId) && typeof name === 'string')
           .map(([userId, name]) => [userId, normalizeRosterName(name)]))
       : {},
+    rosterNamesByCategory: raw.rosterNamesByCategory && typeof raw.rosterNamesByCategory === 'object'
+      ? Object.fromEntries(Object.entries(raw.rosterNamesByCategory)
+          .filter(([sectionKey, names]) => typeof sectionKey === 'string' && sectionKey.length > 0
+            && names && typeof names === 'object' && !Array.isArray(names))
+          .map(([sectionKey, names]) => [sectionKey, Object.fromEntries(Object.entries(names)
+            .filter(([userId, name]) => /^\d{17,20}$/.test(userId) && typeof name === 'string')
+            .map(([userId, name]) => [userId, normalizeRosterName(name)]))]))
+      : {},
     sections: Array.isArray(raw.sections)
       ? raw.sections.map(section => ({
           ...section,
@@ -159,6 +168,21 @@ function normalizeConfig(raw, guildId) {
       : defaults.sections,
     updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : defaults.updatedAt,
   };
+}
+
+function mergeRosterNamesByCategory(...sources) {
+  const merged = {};
+  for (const source of sources) {
+    if (!source || typeof source !== 'object' || Array.isArray(source)) continue;
+    for (const [sectionKey, names] of Object.entries(source)) {
+      if (!sectionKey || !names || typeof names !== 'object' || Array.isArray(names)) continue;
+      const validNames = Object.fromEntries(Object.entries(names)
+        .filter(([userId, name]) => /^\d{17,20}$/.test(userId) && typeof name === 'string')
+        .map(([userId, name]) => [userId, normalizeRosterName(name)]));
+      merged[sectionKey] = { ...(merged[sectionKey] || {}), ...validNames };
+    }
+  }
+  return merged;
 }
 
 export async function getCompanyStructureConfig(client, guildId) {
@@ -239,6 +263,10 @@ export async function buildCompanyStructureSnapshot(guild, config) {
   const members = await fetchGuildMembers(guild);
   const sectionOrder = [...config.sections].sort((a, b) => a.order - b.order);
   const rosterNamesByUserId = { ...(config.rosterNamesByUserId || {}) };
+  const rosterNamesByCategory = mergeRosterNamesByCategory(config.rosterNamesByCategory);
+  // Older configs only stored one name per Discord account. Use that as a
+  // one-time migration fallback until per-category names have been published.
+  const hasCategorySpecificNames = Object.keys(rosterNamesByCategory).length > 0;
   const missingRoles = sectionOrder
     .filter(section => section.enabled && !guild.roles.cache.has(section.roleId))
     .map(section => ({ key: section.key, title: section.title, roleId: section.roleId }));
@@ -288,8 +316,9 @@ export async function buildCompanyStructureSnapshot(guild, config) {
     const uniqueEntries = new Map();
     for (const member of holders) {
       const userId = String(member.id);
-      const savedName = config.rosterNamesByUserId?.[userId];
-      const displayName = normalizeRosterName(savedName || member.displayName || member.user?.username);
+      const categorySavedName = rosterNamesByCategory[section.key]?.[userId];
+      const legacySavedName = hasCategorySpecificNames ? null : config.rosterNamesByUserId?.[userId];
+      const displayName = normalizeRosterName(categorySavedName || legacySavedName || member.displayName || member.user?.username);
       uniqueEntries.set(userId, { userId, displayName });
     }
 
@@ -298,7 +327,11 @@ export async function buildCompanyStructureSnapshot(guild, config) {
       || a.userId.localeCompare(b.userId),
     );
     for (const entry of memberEntries) {
-      rosterNamesByUserId[entry.userId] = entry.displayName;
+      rosterNamesByCategory[section.key] ??= {};
+      rosterNamesByCategory[section.key][entry.userId] = entry.displayName;
+      // Keep the old flat map as a migration source only. Once category names
+      // exist, changing one role must never rewrite a user's other IC names.
+      if (!hasCategorySpecificNames) rosterNamesByUserId[entry.userId] = entry.displayName;
     }
 
     return {
@@ -319,6 +352,7 @@ export async function buildCompanyStructureSnapshot(guild, config) {
     missingRoles,
     workshopConflicts,
     rosterNamesByUserId,
+    rosterNamesByCategory,
     generatedAt: new Date().toISOString(),
   };
 }
@@ -561,7 +595,7 @@ export async function createCompanyStructureDraft(client, guild, ownerId) {
     config: structuredClone(config),
     snapshot,
     overrides: {},
-    pendingRosterNamesByUserId: {},
+    pendingRosterNamesByCategory: {},
   };
   draftStore.set(draft.id, draft);
   while (draftStore.size > 100) draftStore.delete(draftStore.keys().next().value);
@@ -580,14 +614,17 @@ export function deleteCompanyStructureDraft(draftId) {
 }
 
 export function getDraftSnapshotView(draft) {
-  const pendingNames = draft.pendingRosterNamesByUserId || {};
+  const pendingNamesByCategory = draft.pendingRosterNamesByCategory || {};
   return {
     ...draft.snapshot,
-    rosterNamesByUserId: {
-      ...(draft.snapshot.rosterNamesByUserId || {}),
-      ...pendingNames,
-    },
+    // Pending edits are scoped to one category, so the same Discord user may
+    // legitimately display different IC character names in other categories.
+    rosterNamesByCategory: mergeRosterNamesByCategory(
+      draft.snapshot.rosterNamesByCategory,
+      pendingNamesByCategory,
+    ),
     sections: draft.snapshot.sections.map(section => {
+      const pendingNames = pendingNamesByCategory[section.key] || {};
       const memberEntries = Array.isArray(section.memberEntries)
         ? section.memberEntries.map(entry => ({
             ...entry,
@@ -646,11 +683,12 @@ export function setCompanyStructureDraftRoster(draft, sectionKey, rawText) {
     });
   }
 
-  draft.pendingRosterNamesByUserId ??= {};
+  draft.pendingRosterNamesByCategory ??= {};
+  draft.pendingRosterNamesByCategory[sectionKey] ??= {};
   for (let index = 0; index < matchForInput.length; index += 1) {
     const entry = matchForInput[index];
     if (entry?.userId) {
-      draft.pendingRosterNamesByUserId[String(entry.userId)] = names[index];
+      draft.pendingRosterNamesByCategory[sectionKey][String(entry.userId)] = names[index];
     }
   }
 
@@ -683,8 +721,8 @@ export async function publishCompanyStructureDraft(client, draft) {
     throw new Error('Publishing is blocked because one or more configured Discord roles were missing in the preview. Run /cs update again before publishing.');
   }
 
-  // Use the preview's roster edits and apply a renamed member consistently to
-  // every category where the same Discord user ID appears.
+  // Publish exactly the reviewed preview. Category-specific names are scoped
+  // to one section so different IC characters on the same Discord account stay independent.
   const snapshot = getDraftSnapshotView(draft);
   const publicationTimestamp = new Date().toISOString();
   const publicationConfig = { ...currentConfig, lastUpdatedAt: publicationTimestamp };
@@ -723,9 +761,17 @@ export async function publishCompanyStructureDraft(client, draft) {
     ...currentConfig,
     rosterNamesByUserId: {
       ...(currentConfig.rosterNamesByUserId || {}),
-      ...(draft.snapshot.rosterNamesByUserId || {}),
-      ...(draft.pendingRosterNamesByUserId || {}),
+      // Preserve legacy names on the first migration publish only. Subsequent
+      // edits are stored exclusively in rosterNamesByCategory.
+      ...(Object.keys(currentConfig.rosterNamesByCategory || {}).length === 0
+        ? (draft.snapshot.rosterNamesByUserId || {})
+        : {}),
     },
+    rosterNamesByCategory: mergeRosterNamesByCategory(
+      currentConfig.rosterNamesByCategory,
+      snapshot.rosterNamesByCategory,
+      draft.pendingRosterNamesByCategory,
+    ),
     messageId: message.id,
     messageChannelId: currentConfig.channelId,
     lastUpdatedAt: publicationTimestamp,

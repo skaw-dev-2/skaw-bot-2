@@ -182,7 +182,6 @@ test('Company Structure compacts only management, preserves spacing in non-manag
   assert.ok(otherBlock);
   assert.ok(!managementBlock.includes('\n\n> **'));
   assert.ok(description.includes('• Maya\\_Florenzia\n\n-------------------------------------------------\n\n> **<@&1414623346452336823>**'));
-  assert.ok(description.includes('> **<@&1414623229288513586>**\n• Kevin\\_Monterrey'));
   assert.ok(description.includes('> **<@&1414623229288513586>**\n• Kevin\\_Monterrey (<@&1436228415492456448>)'));
   assert.ok(description.includes('• Maya\\_Florenzia\n\n> **<@&1414623229288513586>**'));
   assert.ok(!description.includes('> **<@&1436228415492456448>**'));

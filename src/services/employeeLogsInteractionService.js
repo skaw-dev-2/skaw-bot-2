@@ -740,7 +740,7 @@ async function handleAdminInteraction(interaction) {
                 'Records unavailable: ' + result.missingRecords,
                 'Messages unavailable: ' + result.missingMessages,
                 'Failed updates: ' + result.failed,
-            ].join('\\n');
+            ].join('\n');
             return interaction.editReply({
                 content: summary,
                 ...buildSettingsPanel(values[0], values[1]),

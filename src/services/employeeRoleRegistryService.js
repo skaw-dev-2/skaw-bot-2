@@ -41,6 +41,7 @@ function normalizeRole(role) {
         department: department || null,
         level: category === 'rank' ? level : (category === 'division' ? 0 : null),
         warn: category === 'warning' ? warn : null,
+        note: cleanText(role?.note, 300),
         active: role?.active !== false,
         createdAt: role?.createdAt || new Date().toISOString(),
         createdBy: SNOWFLAKE_RE.test(String(role?.createdBy || '')) ? String(role.createdBy) : null,
@@ -189,7 +190,7 @@ export function employeeRoleToCatalogEntry(role) {
 function normalizeReview(input) {
     if (!input || !/^[A-Z0-9_-]{8,40}$/.test(String(input.reviewId || ''))) return null;
     if (!SNOWFLAKE_RE.test(String(input.userId || ''))) return null;
-    const allowedStatuses = new Set(['pending', 'processing', 'resolved']);
+    const allowedStatuses = new Set(['pending', 'processing', 'resolved', 'cancelled']);
     const status = allowedStatuses.has(input.status) ? input.status : 'pending';
     return {
         reviewId: String(input.reviewId),
@@ -219,9 +220,9 @@ async function readReviews(client, guildId) {
 async function writeReviews(client, guildId, reviews) {
     await requireDatabase(client);
     // Keep all unresolved reviews and the latest 500 resolved items for auditability.
-    const unresolved = reviews.filter(item => item.status !== 'resolved');
-    const resolved = reviews.filter(item => item.status === 'resolved').slice(-500);
-    await client.db.set(EXIT_REVIEW_KEY(guildId), [...unresolved, ...resolved]);
+    const unresolved = reviews.filter(item => item.status !== 'resolved' && item.status !== 'cancelled');
+    const terminal = reviews.filter(item => item.status === 'resolved' || item.status === 'cancelled').slice(-500);
+    await client.db.set(EXIT_REVIEW_KEY(guildId), [...unresolved, ...terminal]);
 }
 
 function makeReviewId() {
@@ -267,6 +268,23 @@ export async function listEmployeeExitReviews(client, guildId, { status = 'pendi
 export async function getEmployeeExitReview(client, guildId, reviewId) {
     const reviews = await readReviews(client, guildId);
     return reviews.find(item => item.reviewId === String(reviewId)) || null;
+}
+
+export async function cancelPendingEmployeeExitReviews(client, guildId, userId) {
+    await requireDatabase(client);
+    const id = String(userId || '');
+    if (!SNOWFLAKE_RE.test(id)) return [];
+    const reviews = await readReviews(client, guildId);
+    const now = new Date().toISOString();
+    const cancelled = [];
+    const next = reviews.map(review => {
+        if (review.userId !== id || !['pending', 'processing'].includes(review.status)) return review;
+        const value = { ...review, status: 'cancelled', resolvedAt: now, resolvedBy: null, reason: 'Membership role was restored before Management finalized the exit review.', claimedAt: null, claimedBy: null };
+        cancelled.push(value);
+        return value;
+    });
+    if (cancelled.length) await writeReviews(client, guildId, next);
+    return cancelled;
 }
 
 export async function claimEmployeeExitReview(client, guildId, reviewId, claimedBy) {

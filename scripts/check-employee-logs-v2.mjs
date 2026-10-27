@@ -49,8 +49,10 @@ async function main() {
     check('Central management dashboard and manual logs picker exist', interaction.includes('buildEmployeeLogsPanel') && interaction.includes('buildEmployeeLogsActivitiesPanel'));
     check('Role Registry UI is connected to persistent role mappings', interaction.includes('registerEmployeeRole') && interaction.includes('getEmployeeRoleRegistry'));
     check('Company Staff base role ID is fixed', registry.includes("id: '1564660065783390371'"));
-    check('Base-role removal creates a pending Exit Review', autoRole.includes('createEmployeeExitReview') && autoRole.includes('hadMembership && !hasMembership'));
-    check('Restoring membership cancels pending Exit Reviews', autoRole.includes('cancelPendingEmployeeExitReviews'));
+    check('Base-role removal publishes Sign-Out immediately', autoRole.includes('hadMembership && !hasMembership') && autoRole.includes("type: 'sign_out'") && !autoRole.includes('createEmployeeExitReview'));
+    check('Exit Review workflow is removed from the dashboard', !interaction.includes('skaw_el_dashboard:reviews') && !autoRole.includes('createEmployeeExitReview'));
+    check('Automatic Sign-In can be enriched with Division and Position', autoRole.includes('syncInitialSignInContext') && autoRole.includes('bestDivisionRole'));
+    check('Sign-Out reason categories are editable', (source['src/services/employeeLogsService.js'] || '').includes('EXIT_REASON_CATEGORY_LABELS') && interaction.includes('skaw_el_reason_category:'));
     check('Initial directory sync creates no Sign-In logs', directory.includes('syncEmployeeDirectoryMembership') && directory.includes('signInLogsCreated: 0'));
     check('Channel-select menu is routed to Employee Logs', router.includes('isChannelSelectMenu?.()'));
 

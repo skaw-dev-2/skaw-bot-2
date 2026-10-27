@@ -24,6 +24,7 @@ function buildManagePanel(config) {
       '',
       '**Channel:** ' + (config.channelId ? '<#' + config.channelId + '>' : 'Not configured'),
       '**Banner:** ' + (config.bannerUrl ? 'Configured' : 'Not configured'),
+      '**Footer image:** ' + (config.footerImageUrl ? 'Configured' : 'Not configured'),
       '**Categories:** ' + config.sections.length + ' (' + config.sections.filter(section => section.enabled).length + ' enabled)',
       '**Managed message:** ' + (config.messageId ? 'Stored' : 'Not published yet'),
       '',
@@ -33,7 +34,7 @@ function buildManagePanel(config) {
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId('cs_manage_settings:' + config.guildId + ':panel')
-      .setLabel('Set Channel & Banner')
+      .setLabel('Set Channel, Banner & Footer')
       .setStyle(ButtonStyle.Primary),
     new ButtonBuilder()
       .setCustomId('cs_manage_categories:' + config.guildId + ':panel')

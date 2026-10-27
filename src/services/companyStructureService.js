@@ -109,6 +109,7 @@ function defaultConfig(guildId) {
     channelId: COMPANY_STRUCTURE_CHANNEL_ID,
     bannerUrl: 'https://cdn.discordapp.com/attachments/1563718579742842930/1564497289349697609/CS-BANNER.png?ex=6ae17b24&is=6ae029a4&hm=01936041ed60ce3fdf866e65f11aeba90f32695fb1c64f1cdfd23931bb4736ca',
     bannerConfigured: true,
+    footerImageUrl: null,
     messageId: null,
     messageChannelId: null,
     lastUpdatedAt: null,
@@ -130,6 +131,9 @@ function normalizeConfig(raw, guildId) {
       ? raw.bannerUrl.trim()
       : (raw.bannerConfigured === true ? null : defaults.bannerUrl),
     bannerConfigured: raw.bannerConfigured === true || Boolean(raw.bannerUrl),
+    footerImageUrl: typeof raw.footerImageUrl === 'string' && raw.footerImageUrl.trim()
+      ? raw.footerImageUrl.trim()
+      : null,
     messageId: raw.messageId ? String(raw.messageId) : null,
     messageChannelId: raw.messageChannelId ? String(raw.messageChannelId) : null,
     sections: Array.isArray(raw.sections)
@@ -397,6 +401,8 @@ export function buildCompanyStructureEmbeds(snapshot, config, options = {}) {
     }
 
     if (index === chunks.length - 1) {
+      // Keep the footer image inside the final structure embed, below its roster text.
+      if (config.footerImageUrl) embed.setImage(config.footerImageUrl);
       embed.setFooter({ text: footerText });
     }
 

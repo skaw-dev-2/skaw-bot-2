@@ -119,6 +119,27 @@ test('empty configured workshops remain visible as N/A', async () => {
   assert.match(description, /N\/A/);
 });
 
+test('footer image is attached to the final structure embed below roster text, independently of banner', async () => {
+  const { guild, config } = makeRuntime();
+  const snapshot = await buildCompanyStructureSnapshot(guild, config);
+  const bannerUrl = 'https://example.com/company-banner.png';
+  const footerImageUrl = 'https://example.com/company-footer.png';
+
+  const embeds = buildCompanyStructureEmbeds(snapshot, {
+    ...config,
+    bannerUrl,
+    footerImageUrl,
+    lastUpdatedAt: null,
+  });
+  const json = embeds.map(embed => embed.toJSON());
+  const structureEmbed = json.at(-1);
+
+  assert.equal(json[0].image.url, bannerUrl);
+  assert.ok(structureEmbed.description.includes('Kevin Monterrey'));
+  assert.equal(structureEmbed.image.url, footerImageUrl);
+  assert.ok(structureEmbed.footer.text.includes('Preview only'));
+});
+
 test('repeated previews reuse the recently fetched guild member list', async () => {
   const { guild, config } = makeRuntime();
   const originalFetch = guild.members.fetch;

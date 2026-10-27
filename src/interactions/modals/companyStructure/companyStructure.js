@@ -56,6 +56,7 @@ const settingsModal = {
     try {
       const channelId = interaction.fields.getTextInputValue('channel_id').trim();
       const bannerInput = interaction.fields.getTextInputValue('banner_url').trim();
+      const footerImageInput = interaction.fields.getTextInputValue('footer_image_url').trim();
       if (!/^\d{17,20}$/.test(channelId)) {
         throw new Error('Please enter a valid Discord text channel ID.');
       }
@@ -74,31 +75,34 @@ const settingsModal = {
         throw new Error('The bot needs View Channel, Send Messages, and Embed Links permissions in the selected channel.');
       }
 
-      let bannerUrl = null;
-      if (bannerInput && !['none', 'off', 'clear'].includes(bannerInput.toLowerCase())) {
+      const parseOptionalImageUrl = (value, label) => {
+        if (!value || ['none', 'off', 'clear'].includes(value.toLowerCase())) return null;
         let parsed;
         try {
-          parsed = new URL(bannerInput);
+          parsed = new URL(value);
         } catch {
-          throw new Error('Banner must be a public image URL starting with https:// or http://. Use "none" to disable it.');
+          throw new Error(label + ' must be a public image URL starting with https:// or http://. Leave blank or use "none" to disable it.');
         }
         if (!['http:', 'https:'].includes(parsed.protocol)) {
-          throw new Error('Banner must use http:// or https://.');
+          throw new Error(label + ' must use http:// or https://.');
         }
-        bannerUrl = parsed.toString();
-      }
+        return parsed.toString();
+      };
+      const bannerUrl = parseOptionalImageUrl(bannerInput, 'Banner');
+      const footerImageUrl = parseOptionalImageUrl(footerImageInput, 'Footer image');
 
       const config = await getCompanyStructureConfig(client, guildId);
       config.channelId = channelId;
       config.bannerUrl = bannerUrl;
       config.bannerConfigured = true;
+      config.footerImageUrl = footerImageUrl;
       await saveCompanyStructureConfig(client, guildId, config);
 
       return interaction.reply({
         embeds: [new EmbedBuilder()
           .setColor(0x2ECC71)
           .setTitle('Company Structure settings saved')
-          .setDescription('Target channel: <#' + channelId + '>\nBanner: ' + (bannerUrl ? 'Configured' : 'Disabled') + '\n\nRun /cs update to preview the next publication.')],
+          .setDescription('Target channel: <#' + channelId + '>\nBanner: ' + (bannerUrl ? 'Configured' : 'Disabled') + '\nFooter image: ' + (footerImageUrl ? 'Configured' : 'Disabled') + '\n\nFooter image appears below the structure text in its final embed. Run /cs update to preview the next publication.')],
         flags: MessageFlags.Ephemeral,
         allowedMentions: { parse: [] },
       });

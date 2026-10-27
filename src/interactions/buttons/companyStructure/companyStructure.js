@@ -217,11 +217,21 @@ const manageSettingsButton = {
       .setMaxLength(500)
       .setPlaceholder('https://...');
 
+    const footerImage = new TextInputBuilder()
+      .setCustomId('footer_image_url')
+      .setLabel('Footer image URL (blank disables it)')
+      .setStyle(TextInputStyle.Short)
+      .setRequired(false)
+      .setMaxLength(500)
+      .setPlaceholder('https://...');
+
     if (config.bannerUrl) banner.setValue(config.bannerUrl);
+    if (config.footerImageUrl) footerImage.setValue(config.footerImageUrl);
 
     modal.addComponents(
       new ActionRowBuilder().addComponents(channel),
       new ActionRowBuilder().addComponents(banner),
+      new ActionRowBuilder().addComponents(footerImage),
     );
     return interaction.showModal(modal);
   },

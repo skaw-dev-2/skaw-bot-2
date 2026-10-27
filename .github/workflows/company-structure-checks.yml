@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - feature/company-structure-manager
+      - main
     paths:
       - 'src/commands/Utility/cs.js'
       - 'src/services/companyStructureService.js'

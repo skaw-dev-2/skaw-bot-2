@@ -122,10 +122,11 @@ test('restoring membership cancels pending exit reviews and allows a later new e
         displayName: 'Kevin Monterrey',
         formerPositionId: POSITION_ID,
     });
-    const cancelled = await cancelPendingEmployeeExitReviews(client, GUILD_ID, USER_ID);
-    assert.equal(cancelled.length, 1);
-    assert.equal(cancelled[0].reviewId, first.reviewId);
-    assert.equal(cancelled[0].status, 'cancelled');
+    const cancellation = await cancelPendingEmployeeExitReviews(client, GUILD_ID, USER_ID);
+    assert.equal(cancellation.cancelled.length, 1);
+    assert.equal(cancellation.cancelled[0].reviewId, first.reviewId);
+    assert.equal(cancellation.cancelled[0].status, 'cancelled');
+    assert.equal(cancellation.processing, false);
 
     const second = await createEmployeeExitReview(client, GUILD_ID, {
         userId: USER_ID,

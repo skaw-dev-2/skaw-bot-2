@@ -50,7 +50,8 @@ function defaultConfig(guildId) {
     version: 1,
     guildId,
     channelId: COMPANY_STRUCTURE_CHANNEL_ID,
-    bannerUrl: null,
+    bannerUrl: 'https://cdn.discordapp.com/attachments/1563718579742842930/1564497289349697609/CS-BANNER.png?ex=6ae17b24&is=6ae029a4&hm=01936041ed60ce3fdf866e65f11aeba90f32695fb1c64f1cdfd23931bb4736ca',
+    bannerConfigured: true,
     messageId: null,
     messageChannelId: null,
     lastUpdatedAt: null,
@@ -68,7 +69,10 @@ function normalizeConfig(raw, guildId) {
     ...raw,
     guildId,
     channelId: String(raw.channelId || defaults.channelId),
-    bannerUrl: typeof raw.bannerUrl === 'string' && raw.bannerUrl.trim() ? raw.bannerUrl.trim() : null,
+    bannerUrl: typeof raw.bannerUrl === 'string' && raw.bannerUrl.trim()
+      ? raw.bannerUrl.trim()
+      : (raw.bannerConfigured === true ? null : defaults.bannerUrl),
+    bannerConfigured: raw.bannerConfigured === true || Boolean(raw.bannerUrl),
     messageId: raw.messageId ? String(raw.messageId) : null,
     messageChannelId: raw.messageChannelId ? String(raw.messageChannelId) : null,
     sections: Array.isArray(raw.sections)

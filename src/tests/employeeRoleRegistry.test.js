@@ -127,6 +127,10 @@ test('restoring membership cancels pending exit reviews and allows a later new e
     assert.equal(cancellation.cancelled[0].reviewId, first.reviewId);
     assert.equal(cancellation.cancelled[0].status, 'cancelled');
     assert.equal(cancellation.processing, false);
+    await assert.rejects(
+        claimEmployeeExitReview(client, GUILD_ID, first.reviewId, RECORDER_ID),
+        /dibatalkan atau diselesaikan/i,
+    );
 
     const second = await createEmployeeExitReview(client, GUILD_ID, {
         userId: USER_ID,

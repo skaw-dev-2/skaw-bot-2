@@ -127,6 +127,7 @@ test('unassigned mechanics stay in Mechanic Division while empty workshop sectio
 
 test('Mechanic Division shows every assigned Workshop role inline without separate workshop lists', async () => {
   const { guild, config, sourceMembers } = makeRuntime();
+  config.sections = config.sections.map(section => ({ ...section }));
   const workshop2Id = '1436228814949715998';
   guild.roles.cache.set(workshop2Id, { id: workshop2Id, name: 'Workshop 2' });
   config.sections.push({
@@ -182,9 +183,9 @@ test('Company Structure compacts only management, preserves spacing in non-manag
   assert.ok(!managementBlock.includes('\n\n> **'));
   assert.ok(description.includes('• Maya\\_Florenzia\n\n-------------------------------------------------\n\n> **<@&1414623346452336823>**'));
   assert.ok(description.includes('> **<@&1414623229288513586>**\n• Kevin\\_Monterrey'));
-  assert.ok(description.includes('> **<@&1436228415492456448>**\n• Kevin\\_Monterrey'));
+  assert.ok(description.includes('> **<@&1414623229288513586>**\n• Kevin\\_Monterrey (<@&1436228415492456448>)'));
   assert.ok(description.includes('• Maya\\_Florenzia\n\n> **<@&1414623229288513586>**'));
-  assert.ok(description.includes('• Kevin\\_Monterrey\n\n> **<@&1436228415492456448>**'));
+  assert.ok(!description.includes('> **<@&1436228415492456448>**'));
 });
 
 

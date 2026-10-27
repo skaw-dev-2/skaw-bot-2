@@ -94,9 +94,10 @@ const publishButton = {
       const message = result.action === 'edited'
         ? 'The existing Company Structure message was updated.'
         : 'The Company Structure message was published.';
-      if (draft.previewMessage?.editable) {
-        await draft.previewMessage.edit({
+      if (draft.previewInteraction?.token && typeof draft.previewInteraction.editReply === 'function') {
+        await draft.previewInteraction.editReply({
           content: '✅ ' + message + ' Destination: <#' + result.channelId + '>',
+          embeds: [],
           components: [],
           allowedMentions: { parse: [] },
         }).catch(() => {});

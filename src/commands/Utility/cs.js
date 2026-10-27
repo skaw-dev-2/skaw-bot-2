@@ -116,7 +116,11 @@ export default {
         // Keep the actual ephemeral preview message in this in-memory draft so
         // modal edits can refresh the preview the user is reviewing, rather than
         // editing the separate ephemeral category-picker message.
-        draft.previewMessage = await interaction.editReply({
+        // Keep the original interaction so its webhook can edit the ephemeral
+        // original response. Message.edit() uses a channel-message route and can
+        // fail with "Unknown Message" for an ephemeral response.
+        draft.previewInteraction = interaction;
+        await interaction.editReply({
           embeds,
           components: [new ActionRowBuilder().addComponents(editButton, publishButton, cancelButton)],
           allowedMentions: { parse: [] },

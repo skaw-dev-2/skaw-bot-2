@@ -181,17 +181,17 @@ const rosterModal = {
 
       const components = [buildPreviewControls(draft, snapshot)];
       const updatePayload = { embeds, components, allowedMentions: { parse: [] } };
-      // Refresh the original preview saved by /cs update. The modal's own
-      // interaction.message may refer to the separate category-picker message.
-      if (draft.previewMessage?.editable) {
-        await draft.previewMessage.edit(updatePayload);
+      // Use the original /cs update interaction webhook to edit its ephemeral
+      // response. Do not call Message.edit() on an ephemeral preview message.
+      if (draft.previewInteraction?.token && typeof draft.previewInteraction.editReply === 'function') {
+        await draft.previewInteraction.editReply(updatePayload);
         return interaction.reply({
           content: 'Preview roster saved and the original preview has been refreshed. These edits apply only to this draft; the next /cs update reads Discord roles again.',
           flags: MessageFlags.Ephemeral,
         });
       }
       return interaction.reply({
-        content: 'Preview roster saved, but the original preview message is no longer editable. Run /cs update to create a new preview.',
+        content: 'Preview roster saved, but the original preview session is no longer available (for example, after a bot restart). Run /cs update to create a new preview.',
         flags: MessageFlags.Ephemeral,
         allowedMentions: { parse: [] },
       });

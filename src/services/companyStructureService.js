@@ -371,7 +371,8 @@ function renderStructureText(snapshot) {
   };
 
   const managementText = managementSections.map(renderSection).join('\n');
-  const otherText = otherSections.map(renderSection).join('\n');
+  // Keep the non-management sections spaced for readability; only management is compact.
+  const otherText = otherSections.map(renderSection).join('\n\n');
   const separator = '-------------------------------------------------';
 
   if (managementText && otherText) {

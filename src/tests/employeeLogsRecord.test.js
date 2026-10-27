@@ -58,9 +58,9 @@ test('publishing saves a durable record and attaches the Edit button', async () 
         recordedBy: '12345678901234567',
     });
     assert.equal(result.editButtonAttached, true);
-    assert.match(message.payload.embeds[0].description, /\*\*Employee:\*\* Kevin Monterrey \(\*\*<@12345678901234567>\*\*\)/);
-    assert.equal(message.payload.components[0].components[0].label, 'Edit');
-    assert.equal(message.payload.components[0].components[0].emoji, '✏️');
+    assert.match((message.payload.embeds[0]?.data?.description ?? message.payload.embeds[0]?.description), /\*\*Employee:\*\* Kevin Monterrey \(\*\*<@12345678901234567>\*\*\)/);
+    assert.equal((message.payload.components[0].components[0]?.data?.label ?? message.payload.components[0].components[0]?.label), 'Edit');
+    assert.equal((message.payload.components[0].components[0]?.data?.emoji?.name ?? message.payload.components[0].components[0]?.data?.emoji ?? message.payload.components[0].components[0]?.emoji?.name ?? message.payload.components[0].components[0]?.emoji), '✏️');
     const record = await getEmployeeLogRecord(client, guild.id, result.recordId);
     assert.equal(record.messageId, message.id);
     assert.equal(record.channelId, channel.id);
@@ -74,7 +74,7 @@ test('publishing resolves the server display name rather than the Discord userna
         position: '1414629137389322244',
         recordedBy: '12345678901234567',
     });
-    const description = message.payload.embeds[0].description;
+    const description = (message.payload.embeds[0]?.data?.description ?? message.payload.embeds[0]?.description);
     assert.match(description, /\*\*Employee:\*\* Kevin Monterrey \(\*\*<@12345678901234567>\*\*\)/);
     assert.doesNotMatch(description, /Kevin_Monterrey/);
 });
@@ -91,13 +91,17 @@ test('editing Reason and Additional Notes updates the same message and keeps Rec
         reason: 'New employee assignment.',
         notes: 'Documents verified.',
     }, '12345678901234567');
-    const description = message.payload.embeds[0].description;
+    const description = (message.payload.embeds[0]?.data?.description ?? message.payload.embeds[0]?.description);
     assert.match(description, /\*\*Reason:\*\* New employee assignment\./);
     assert.match(description, /\*\*ADDITIONAL NOTES\*\*/);
     assert.match(description, /Documents verified\./);
     assert.match(description, new RegExp(`Record ID: ${result.recordId}`));
-    assert.equal(message.payload.components[0].components[0].label, 'Edit');
+    assert.equal(message.payload.components[0].components[0]?.data?.label ?? message.payload.components[0].components[0]?.label, 'Edit');
     const saved = await getEmployeeLogRecord(client, guild.id, result.recordId);
     assert.equal(saved.data.reason, 'New employee assignment.');
     assert.equal(saved.data.notes, 'Documents verified.');
+    assert.equal(saved.editHistory.length, 1);
+    assert.equal(saved.editHistory[0].editedBy, '12345678901234567');
+    assert.deepEqual(saved.editHistory[0].changes.reason, { before: '', after: 'New employee assignment.' });
+    assert.deepEqual(saved.editHistory[0].changes.notes, { before: '', after: 'Documents verified.' });
 });

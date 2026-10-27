@@ -6,6 +6,7 @@ import {
     parseDiscordUserId,
     searchEmployeeDirectory,
     upsertEmployeeDirectoryFromLog,
+    syncEmployeeDirectoryMembership,
 } from '../services/employeeDirectoryService.js';
 
 const GUILD_ID = '77777777777777777';
@@ -119,4 +120,33 @@ test('backfilling an older exit after a newer re-sign-in does not revert current
     assert.equal(entry.lastSignOutAt, '2026-10-20T10:30:00.000Z');
     assert.equal(entry.lastSignOutReason, 'Older exit');
     assert.equal(entry.firstSignInAt, '2026-10-25T07:00:00.000Z');
+});
+
+
+test('initial Company Staff sync initializes existing employees without fabricating Sign-In history', async () => {
+    const { client, guild } = runtime();
+    const member = {
+        id: USER_ID,
+        user: { id: USER_ID, bot: false },
+        displayName: 'Kevin Monterrey',
+        roles: { cache: { has: roleId => String(roleId) === '1564660065783390371' } },
+    };
+    guild.members.cache.set(USER_ID, member);
+
+    const first = await syncEmployeeDirectoryMembership(client, guild);
+    assert.equal(first.scanned, 1);
+    assert.equal(first.matched, 1);
+    assert.equal(first.created, 1);
+    assert.equal(first.signInLogsCreated, 0);
+
+    const profile = await getEmployeeDirectoryRecord(client, GUILD_ID, USER_ID);
+    assert.equal(profile.status, 'active');
+    assert.equal(profile.displayName, 'Kevin Monterrey');
+    assert.equal(profile.firstSignInAt, null);
+    assert.equal(profile.history.length, 0);
+
+    const second = await syncEmployeeDirectoryMembership(client, guild);
+    assert.equal(second.created, 0);
+    assert.equal(second.unchanged, 1);
+    assert.equal(second.signInLogsCreated, 0);
 });

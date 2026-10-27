@@ -66,7 +66,7 @@ test('role event is coalesced and publishes one editable automatic Sign-In recor
         displayName: 'Kevin Monterrey',
         guild,
         client,
-        roles: { cache: new Set(['1414623229288513586', '1414629137389322244']) },
+        roles: { cache: new Set(['1564660065783390371', '1414623229288513586', '1414629137389322244']) },
     };
 
     const queued = await handleEmployeeLogsRoleUpdate(oldMember, newMember, client);
@@ -76,13 +76,82 @@ test('role event is coalesced and publishes one editable automatic Sign-In recor
 
     assert.equal(publishedMessages.length, 1);
     const message = publishedMessages[0];
-    const description = message.payload.embeds[0].description;
+    const description = message.payload.embeds[0]?.data?.description ?? message.payload.embeds[0]?.description;
     assert.match(description, /^## EMPLOYEE SIGN-IN/m);
     assert.match(description, new RegExp(`\\*\\*Employee:\\*\\* Kevin Monterrey \\(\\*\\*<@${MEMBER_ID}>\\*\\*\\)`));
     assert.match(description, /\*\*Position:\*\* <@&1414629137389322244>/);
     assert.match(description, /Recorded by SKAW Bot/);
-    assert.equal(message.payload.components[0].components[0].label, 'Edit');
+    assert.equal((message.payload.components[0].components[0]?.data?.label ?? message.payload.components[0].components[0]?.label), 'Edit');
     const records = [...store.entries()].filter(([key]) => key.startsWith(`guild:${GUILD_ID}:employee_logs:record:`));
     assert.equal(records.length, 1);
     assert.equal(records[0][1].automatic, true);
+});
+
+
+test('removing Company Staff queues an exit review instead of publishing a guessed exit log', async () => {
+    const { client, guild, store, publishedMessages } = createRuntime();
+    const oldMember = {
+        id: MEMBER_ID,
+        user: { id: MEMBER_ID, bot: false },
+        displayName: 'Kevin Monterrey',
+        guild,
+        roles: { cache: new Set(['1564660065783390371', '1414623229288513586', '1414629137389322244']) },
+    };
+    const newMember = {
+        id: MEMBER_ID,
+        user: { id: MEMBER_ID, bot: false },
+        displayName: 'Kevin Monterrey',
+        guild,
+        client,
+        roles: { cache: new Set(['1414623229288513586', '1414629137389322244']) },
+    };
+
+    const queued = await handleEmployeeLogsRoleUpdate(oldMember, newMember, client);
+    assert.equal(queued.queued, true);
+    await new Promise(resolve => setTimeout(resolve, queued.coalesceMs + 250));
+
+    assert.equal(publishedMessages.length, 0, 'the bot should not guess Sign Out, Resignation or Dismissal');
+    const reviews = store.get(`guild:${GUILD_ID}:employee_logs:exit_reviews`);
+    assert.equal(reviews.length, 1);
+    assert.equal(reviews[0].status, 'pending');
+    assert.equal(reviews[0].userId, MEMBER_ID);
+    assert.equal(reviews[0].formerPositionId, '1414629137389322244');
+});
+
+const RESTORE_MEMBER_ID = '12345678901234568';
+
+test('restoring Company Staff cancels a pending exit review without fabricating a new Sign-In', async () => {
+    const { client, guild, store, publishedMessages } = createRuntime();
+    const oldMember = {
+        id: RESTORE_MEMBER_ID,
+        user: { id: RESTORE_MEMBER_ID, bot: false },
+        displayName: 'Kevin Monterrey',
+        guild,
+        roles: { cache: new Set(['1564660065783390371', '1414623229288513586', '1414629137389322244']) },
+    };
+    const removedMember = {
+        id: RESTORE_MEMBER_ID,
+        user: { id: RESTORE_MEMBER_ID, bot: false },
+        displayName: 'Kevin Monterrey',
+        guild,
+        client,
+        roles: { cache: new Set(['1414623229288513586', '1414629137389322244']) },
+    };
+
+    const exitQueued = await handleEmployeeLogsRoleUpdate(oldMember, removedMember, client);
+    await new Promise(resolve => setTimeout(resolve, exitQueued.coalesceMs + 250));
+    const beforeRestore = store.get(`guild:${GUILD_ID}:employee_logs:exit_reviews`);
+    assert.equal(beforeRestore[0].status, 'pending');
+
+    const restoredMember = {
+        ...removedMember,
+        roles: { cache: new Set(['1564660065783390371', '1414623229288513586', '1414629137389322244']) },
+    };
+    const rejoinQueued = await handleEmployeeLogsRoleUpdate(removedMember, restoredMember, client);
+    await new Promise(resolve => setTimeout(resolve, rejoinQueued.coalesceMs + 250));
+
+    const reviews = store.get(`guild:${GUILD_ID}:employee_logs:exit_reviews`);
+    assert.equal(reviews[0].status, 'cancelled');
+    assert.equal(publishedMessages.length, 0, 'restoring membership before exit review resolution should not fabricate a Sign-In');
+
 });

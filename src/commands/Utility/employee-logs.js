@@ -1,286 +1,186 @@
+import { EmbedBuilder, MessageFlags, PermissionFlagsBits, SlashCommandBuilder, escapeMarkdown } from 'discord.js';
+import { buildEmployeeLogsPanel, buildEmployeeLogsActivitiesPanel } from '../../services/employeeLogsInteractionService.js';
+import { getEmployeeLogsConfig, getEmployeeLogAudit, ensureEmployeeDirectoryBackfilled } from '../../services/employeeLogsService.js';
 import {
-    ChannelType,
-    EmbedBuilder,
-    MessageFlags,
-    PermissionFlagsBits,
-    PermissionsBitField,
-    SlashCommandBuilder,
-} from 'discord.js';
-import {
-    EMPLOYEE_LOG_TYPES,
-    EMPLOYEE_LOG_BANNER_EVENTS,
-    clearEmployeeLogsBanner,
-    clearEmployeeLogsEventBanner,
-    clearEmployeeLogsChannel,
-    getEmployeeLogsConfig,
-    setEmployeeLogsBanner,
-    setEmployeeLogsEventBanner,
-    setEmployeeLogsChannel,
-    getEmployeeAutoRoleConfig,
-    setEmployeeAutoRoleEnabled,
-} from '../../services/employeeLogsService.js';
-import { buildEmployeeLogsPanel } from '../../services/employeeLogsInteractionService.js';
+    formatDirectoryTimestamp,
+    getEmployeeDirectoryIndex,
+    parseDiscordUserId,
+    searchEmployeeDirectory,
+} from '../../services/employeeDirectoryService.js';
 
-const TYPE_CHOICES = Object.entries(EMPLOYEE_LOG_TYPES).map(([value, entry]) => ({
-    name: `${entry.emoji} ${entry.shortLabel}`,
-    value,
-}));
-
-const BANNER_EVENT_CHOICES = Object.entries(EMPLOYEE_LOG_BANNER_EVENTS).map(([value, entry]) => ({
-    name: entry.label,
-    value,
-}));
+const BASE_EMPLOYEE_ROLE_ID = '1564660065783390371';
+const BRAND_BLUE = 0x2563eb;
 
 function requireManageGuild(interaction) {
     if (!interaction.inGuild()) throw new Error('Command ini hanya dapat digunakan di server.');
     if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
-        throw new Error('Kamu membutuhkan permission **Manage Server** untuk mengelola Employee Logs.');
+        throw new Error('Kamu membutuhkan permission Manage Server untuk mengelola Employee Logs.');
     }
 }
 
-async function assertCanSend(channel, guild) {
-    if (!channel || !channel.isTextBased() || channel.isDMBased() || channel.guildId !== guild.id) {
-        throw new Error('Pilih channel teks dari server yang sama.');
-    }
-    const me = guild.members.me || await guild.members.fetchMe().catch(() => null);
-    const permissions = channel.permissionsFor(me || guild.client.user);
-    const required = PermissionsBitField.Flags.ViewChannel
-        | PermissionsBitField.Flags.SendMessages
-        | PermissionsBitField.Flags.EmbedLinks
-        | PermissionsBitField.Flags.ReadMessageHistory;
-    if (!permissions?.has(required)) throw new Error(`Bot membutuhkan izin View Channel, Send Messages, Embed Links, dan Read Message History di ${channel}.`);
+function safeText(value, max = 180) {
+    return escapeMarkdown(String(value ?? '').replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max)) || 'Not recorded';
 }
 
-function configEmbed(guild, config) {
-    const fields = Object.entries(EMPLOYEE_LOG_TYPES).map(([type, entry]) => ({
-        name: `${entry.emoji} ${entry.shortLabel}`,
-        value: config.channels[type] ? `<#${config.channels[type]}>` : '⚪ Not configured — use `/epl set-channel`',
-        inline: true,
-    }));
+function employeeFindEmbed(query, records) {
+    const embed = new EmbedBuilder().setColor(BRAND_BLUE).setTitle('EMPLOYEE DIRECTORY')
+        .setDescription(records.length
+            ? 'Search results for **' + safeText(query, 100) + '**'
+            : 'No employee profile or Employee Log matched **' + safeText(query, 100) + '**.');
+    for (const record of records.slice(0, 10)) {
+        const position = record.currentPosition?.name || record.lastKnownPosition?.name || 'Not recorded';
+        const history = Array.isArray(record.history) ? record.history.slice(-3).reverse() : [];
+        const historyLines = history.length
+            ? history.map(item => '• ' + safeText(item.type, 30) + ' — ' + formatDirectoryTimestamp(item.publishedAt)).join('\n')
+            : 'No activity history recorded yet.';
+        embed.addFields({
+            name: safeText(record.displayName, 100),
+            value: [
+                '<@' + record.userId + '> · **' + String(record.status || 'unknown').toUpperCase() + '**',
+                'Position: ' + safeText(position, 100),
+                'First Sign In: ' + formatDirectoryTimestamp(record.firstSignInAt),
+                'Last Sign Out: ' + formatDirectoryTimestamp(record.lastSignOutAt),
+                'Last Blacklist: ' + formatDirectoryTimestamp(record.lastBlacklistAt),
+                'Recent history:',
+                historyLines,
+            ].join('\n').slice(0, 1000),
+            inline: false,
+        });
+    }
+    return embed;
+}
+
+function buildReportEmbed(index, audit, days) {
+    const since = Date.now() - days * 86_400_000;
+    const recent = audit.filter(item => new Date(item.publishedAt || 0).getTime() >= since);
+    const counts = {};
+    for (const item of recent) counts[item.type] = (counts[item.type] || 0) + 1;
     return new EmbedBuilder()
-        .setColor(0x2563eb)
-        .setAuthor({ name: '🏢 SKAW GROUP • PEOPLE OPERATIONS' })
-        .setTitle('⚙️  EMPLOYEE RECORDS CONFIGURATION')
-        .setDescription(`**SERVER:** ${guild.name}\nManage personnel log routing and event-specific banners from this panel.`)
-        .addFields(fields)
-        .addFields({
-            name: '🖼️ Default Banner',
-            value: config.bannerUrl ? '✅ Configured — used when no event-specific banner is set.' : '⚪ Not configured — event-specific banners can still be used.',
-            inline: false,
-        }, {
-            name: '🎨 Event-specific Banners',
-            value: Object.entries(EMPLOYEE_LOG_BANNER_EVENTS).map(([key, entry]) => `${config.banners?.[key] ? '🟢' : '⚪'} **${entry.label}:** ${config.banners?.[key] ? 'Configured' : 'Default/fallback'}`).join('\n'),
-            inline: false,
-        })
-        .setFooter({ text: 'SKAW GROUP • PEOPLE OPERATIONS' })
+        .setColor(BRAND_BLUE)
+        .setTitle('EMPLOYEE LOGS · MANAGEMENT REPORT')
+        .setDescription('Activity summary for the last ' + days + ' days.')
+        .addFields(
+            { name: 'Active Employees', value: String(index.filter(item => item.status === 'active').length), inline: true },
+            { name: 'Former Employees', value: String(index.filter(item => item.status === 'former').length), inline: true },
+            { name: 'Directory Profiles', value: String(index.length), inline: true },
+            { name: 'Records in Period', value: String(recent.length), inline: true },
+            { name: 'Sign In', value: String(counts.sign_in || 0), inline: true },
+            { name: 'Sign Out', value: String(counts.sign_out || 0), inline: true },
+            { name: 'Promotions', value: String(counts.promotion || 0), inline: true },
+            { name: 'Demotions', value: String(counts.demote || 0), inline: true },
+            { name: 'Mutations', value: String(counts.mutation || 0), inline: true },
+            { name: 'Resignations', value: String(counts.resignation || 0), inline: true },
+            { name: 'Dismissals', value: String(counts.dismissal || 0), inline: true },
+            { name: 'Warnings', value: String(counts.warning || 0), inline: true },
+            { name: 'Blacklists', value: String(counts.blacklist || 0), inline: true },
+            { name: 'Others', value: String(counts.others || 0), inline: true },
+        )
+        .setFooter({ text: 'Directory totals come from indexed profiles; activity totals come from durable Employee Logs audit entries.' })
         .setTimestamp(new Date());
 }
 
 export default {
     data: new SlashCommandBuilder()
         .setName('epl')
-        .setDescription('Buat panel dan atur channel surat/log karyawan SKAW.')
+        .setDescription('Employee Logs and employee management for SKAW Group.')
         .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
         .addSubcommand(subcommand => subcommand
             .setName('panel')
-            .setDescription('Buka panel Employee Logs privat untuk membuat catatan.'))
+            .setDescription('Open the central Employee Logs management dashboard.'))
         .addSubcommand(subcommand => subcommand
-            .setName('set-channel')
-            .setDescription('Atur channel tujuan untuk salah satu jenis log.')
+            .setName('logs')
+            .setDescription('Create and publish an Employee Log manually.'))
+        .addSubcommand(subcommand => subcommand
+            .setName('find')
+            .setDescription('Find an employee profile and activity history.')
             .addStringOption(option => option
-                .setName('type')
-                .setDescription('Jenis log yang channel-nya ingin diatur.')
+                .setName('query')
+                .setDescription('Employee name, mention, or Discord ID.')
                 .setRequired(true)
-                .addChoices(...TYPE_CHOICES))
-            .addChannelOption(option => option
-                .setName('channel')
-                .setDescription('Channel teks tujuan pengiriman log.')
-                .addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)
-                .setRequired(true)))
+                .setMaxLength(100)))
         .addSubcommand(subcommand => subcommand
-            .setName('clear-channel')
-            .setDescription('Hapus konfigurasi channel dari salah satu jenis log.')
-            .addStringOption(option => option
-                .setName('type')
-                .setDescription('Jenis log yang channel-nya akan dilepas.')
-                .setRequired(true)
-                .addChoices(...TYPE_CHOICES)))
-        .addSubcommand(subcommand => subcommand
-            .setName('set-banner')
-            .setDescription('Atur gambar banner default jika event tidak punya banner khusus.')
-            .addStringOption(option => option
-                .setName('url')
-                .setDescription('URL gambar HTTPS langsung (misalnya gambar dari Discord CDN).')
-                .setRequired(true)
-                .setMaxLength(500)))
-        .addSubcommand(subcommand => subcommand
-            .setName('set-event-banner')
-            .setDescription('Atur banner berbeda untuk satu event log tertentu.')
-            .addStringOption(option => option
-                .setName('event')
-                .setDescription('Event atau jenis log yang menggunakan banner ini.')
-                .setRequired(true)
-                .addChoices(...BANNER_EVENT_CHOICES))
-            .addStringOption(option => option
-                .setName('url')
-                .setDescription('URL gambar HTTPS langsung.')
-                .setRequired(true)
-                .setMaxLength(500)))
-        .addSubcommand(subcommand => subcommand
-            .setName('clear-event-banner')
-            .setDescription('Hapus banner khusus event dan kembali ke banner default.')
-            .addStringOption(option => option
-                .setName('event')
-                .setDescription('Event yang banner khususnya ingin dihapus.')
-                .setRequired(true)
-                .addChoices(...BANNER_EVENT_CHOICES)))
-        .addSubcommand(subcommand => subcommand
-            .setName('clear-banner')
-            .setDescription('Hapus banner default/fallback; banner khusus event tetap berlaku.'))
-        .addSubcommandGroup(group => group
-            .setName('auto-role')
-            .setDescription('Mengatur Automatic Employee Logs berdasarkan perubahan role.')
-            .addSubcommand(subcommand => subcommand
-                .setName('enable')
-                .setDescription('Aktifkan Employee Logs otomatis berdasarkan role.'))
-            .addSubcommand(subcommand => subcommand
-                .setName('disable')
-                .setDescription('Nonaktifkan Employee Logs otomatis; panel manual tetap aktif.'))
-            .addSubcommand(subcommand => subcommand
-                .setName('status')
-                .setDescription('Lihat status Automatic Employee Logs.')))
-        .addSubcommand(subcommand => subcommand
-            .setName('status')
-            .setDescription('Lihat seluruh channel tujuan Employee Logs dan status banner.')),
+            .setName('report')
+            .setDescription('View employee activity and membership statistics.')
+            .addIntegerOption(option => option
+                .setName('days')
+                .setDescription('Activity period in days.')
+                .setRequired(false)
+                .addChoices(
+                    { name: 'Last 7 days', value: 7 },
+                    { name: 'Last 30 days', value: 30 },
+                    { name: 'Last 90 days', value: 90 },
+                ))),
 
     async execute(interaction) {
         try {
             requireManageGuild(interaction);
             const subcommand = interaction.options.getSubcommand();
-            const guildId = interaction.guildId;
-
-            const subcommandGroup = interaction.options.getSubcommandGroup(false);
-            if (subcommandGroup === 'auto-role') {
-                if (subcommand === 'enable' || subcommand === 'disable') {
-                    const enabled = subcommand === 'enable';
-                    if (enabled) {
-                        const logConfig = await getEmployeeLogsConfig(interaction.client, guildId);
-                        const autoTypes = ['sign_in', 'sign_out', 'promotion', 'demote', 'mutation', 'warning', 'blacklist'];
-                        const missing = autoTypes.filter(type => !logConfig.channels?.[type])
-                            .map(type => EMPLOYEE_LOG_TYPES[type].shortLabel);
-                        if (missing.length) {
-                            throw new Error(`Set destination channels before enabling automatic logs: ${missing.join(', ')}. Use /epl set-channel for each activity.`);
-                        }
-                    }
-                    const config = await setEmployeeAutoRoleEnabled(interaction.client, guildId, enabled, interaction.user.id);
-                    const state = config.enabled ? 'ON' : 'OFF';
-                    return interaction.reply({
-                        content: `Automatic Employee Logs is now **${state}**.\nManual logs through \`/epl panel\` remain available.`,
-                        flags: MessageFlags.Ephemeral,
-                        allowedMentions: { parse: [] },
-                    });
-                }
-                if (subcommand === 'status') {
-                    const config = await getEmployeeAutoRoleConfig(interaction.client, guildId);
-                    const logConfig = await getEmployeeLogsConfig(interaction.client, guildId);
-                    const autoTypes = ['sign_in', 'sign_out', 'promotion', 'demote', 'mutation', 'warning', 'blacklist'];
-                    const missing = autoTypes.filter(type => !logConfig.channels?.[type])
-                        .map(type => EMPLOYEE_LOG_TYPES[type].shortLabel);
-                    const channelStatus = missing.length
-                        ? `\nMissing destination channels: ${missing.join(', ')}. Use /epl set-channel before enabling.`
-                        : '\nAll automatic activity channels are configured.';
-                    return interaction.reply({
-                        content: `Automatic Employee Logs: **${config.enabled ? 'ON' : 'OFF'}**${channelStatus}\nManual logs through \`/epl panel\` remain available.\nAutomatic role mappings include Sign-In, Sign-Out, Promotion, Demotion, Mutation, Warning, and Blacklist. Dismissal, Resignation, and Others remain manual because their intent cannot be determined reliably from role changes alone.`,
-                        flags: MessageFlags.Ephemeral,
-                        allowedMentions: { parse: [] },
-                    });
-                }
-            }
 
             if (subcommand === 'panel') {
-                // Entire workflow is private to the operator; only final records are posted to log channels.
                 return interaction.reply({
                     ...buildEmployeeLogsPanel(),
                     flags: MessageFlags.Ephemeral,
+                    allowedMentions: { parse: [] },
                 });
             }
 
-            if (subcommand === 'set-channel') {
+            if (subcommand === 'logs') {
+                const config = await getEmployeeLogsConfig(interaction.client, interaction.guildId);
+                return interaction.reply({
+                    content: 'Choose the type of Employee Log to create. This manual workflow and preview are private.',
+                    ...buildEmployeeLogsActivitiesPanel(config),
+                    flags: MessageFlags.Ephemeral,
+                    allowedMentions: { parse: [] },
+                });
+            }
+
+            if (subcommand === 'find') {
                 await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-                const type = interaction.options.getString('type', true);
-                const channel = interaction.options.getChannel('channel', true);
-                await assertCanSend(channel, interaction.guild);
-                await setEmployeeLogsChannel(interaction.client, guildId, type, channel.id, interaction.user.id);
-                const typeLabel = EMPLOYEE_LOG_TYPES[type]?.shortLabel || type;
+                const query = interaction.options.getString('query', true).trim();
+                await ensureEmployeeDirectoryBackfilled(interaction.client, interaction.guild);
+                let records = await searchEmployeeDirectory(interaction.client, interaction.guildId, query, { limit: 10 });
+                if (!records.length) {
+                    const userId = parseDiscordUserId(query);
+                    if (userId) {
+                        const member = await interaction.guild.members.fetch(userId).catch(() => null);
+                        if (member && member.roles.cache.has(BASE_EMPLOYEE_ROLE_ID)) {
+                            records = [{
+                                userId: member.id,
+                                displayName: member.displayName,
+                                status: 'active',
+                                currentPosition: null,
+                                lastKnownPosition: null,
+                                firstSignInAt: null,
+                                lastSignOutAt: null,
+                                lastBlacklistAt: null,
+                                history: [],
+                            }];
+                        }
+                    }
+                }
                 return interaction.editReply({
-                    content: `✅ Channel **${typeLabel}** diatur ke ${channel}.`,
+                    embeds: [employeeFindEmbed(query, records)],
                     allowedMentions: { parse: [] },
                 });
             }
 
-            if (subcommand === 'clear-channel') {
-                const type = interaction.options.getString('type', true);
-                await clearEmployeeLogsChannel(interaction.client, guildId, type, interaction.user.id);
-                return interaction.reply({
-                    content: `✅ Konfigurasi channel **${EMPLOYEE_LOG_TYPES[type].shortLabel}** dihapus.`,
-                    flags: MessageFlags.Ephemeral,
-                    allowedMentions: { parse: [] },
-                });
-            }
-
-            if (subcommand === 'set-banner') {
+            if (subcommand === 'report') {
                 await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-                const url = interaction.options.getString('url', true);
-                await setEmployeeLogsBanner(interaction.client, guildId, url, interaction.user.id);
+                const days = interaction.options.getInteger('days') || 30;
+                const [index, audit] = await Promise.all([
+                    getEmployeeDirectoryIndex(interaction.client, interaction.guildId),
+                    getEmployeeLogAudit(interaction.client, interaction.guildId, { limit: 1000 }),
+                ]);
                 return interaction.editReply({
-                    content: '✅ Banner default berhasil disimpan. Banner khusus per event akan tetap mengutamakan konfigurasi masing-masing.',
+                    embeds: [buildReportEmbed(index, audit, days)],
                     allowedMentions: { parse: [] },
                 });
             }
 
-            if (subcommand === 'set-event-banner') {
-                await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-                const eventKey = interaction.options.getString('event', true);
-                const url = interaction.options.getString('url', true);
-                await setEmployeeLogsEventBanner(interaction.client, guildId, eventKey, url, interaction.user.id);
-                return interaction.editReply({
-                    content: `✅ Banner khusus **${EMPLOYEE_LOG_BANNER_EVENTS[eventKey].label}** berhasil disimpan. Banner ini akan dipakai hanya untuk event tersebut.`,
-                    allowedMentions: { parse: [] },
-                });
-            }
-
-            if (subcommand === 'clear-event-banner') {
-                const eventKey = interaction.options.getString('event', true);
-                await clearEmployeeLogsEventBanner(interaction.client, guildId, eventKey, interaction.user.id);
-                return interaction.reply({
-                    content: `✅ Banner khusus **${EMPLOYEE_LOG_BANNER_EVENTS[eventKey].label}** dihapus. Event tersebut akan memakai banner default jika tersedia.`,
-                    flags: MessageFlags.Ephemeral,
-                    allowedMentions: { parse: [] },
-                });
-            }
-
-            if (subcommand === 'clear-banner') {
-                await clearEmployeeLogsBanner(interaction.client, guildId, interaction.user.id);
-                return interaction.reply({
-                    content: '✅ Banner default/fallback dihapus. Banner khusus per event tetap berlaku.',
-                    flags: MessageFlags.Ephemeral,
-                    allowedMentions: { parse: [] },
-                });
-            }
-
-            if (subcommand === 'status') {
-                const config = await getEmployeeLogsConfig(interaction.client, guildId);
-                return interaction.reply({
-                    embeds: [configEmbed(interaction.guild, config)],
-                    flags: MessageFlags.Ephemeral,
-                    allowedMentions: { parse: [] },
-                });
-            }
-
-            throw new Error(`Subcommand tidak dikenal: ${subcommand}`);
+            throw new Error('Subcommand Employee Logs tidak dikenal.');
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
-            const payload = { content: `❌ Employee Logs: ${message}`, flags: MessageFlags.Ephemeral, allowedMentions: { parse: [] } };
+            const payload = { content: '❌ Employee Logs: ' + message, flags: MessageFlags.Ephemeral, allowedMentions: { parse: [] } };
             if (interaction.deferred || interaction.replied) return interaction.followUp(payload).catch(() => null);
             return interaction.reply(payload).catch(() => null);
         }

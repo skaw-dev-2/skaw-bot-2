@@ -334,3 +334,102 @@ export function formatDirectoryTimestamp(value) {
 export function getEmployeeDirectoryKeysForTests(guildId, userId) {
     return { index: INDEX_KEY(guildId), entry: ENTRY_KEY(guildId, userId) };
 }
+
+
+/**
+ * Initialize the directory from members currently holding the Company's base
+ * employee role. This deliberately creates no Sign-In records: existing staff
+ * should be synced during rollout without a mass notification or false history.
+ */
+export async function syncEmployeeDirectoryMembership(client, guild, {
+    baseEmployeeRoleId = '1564660065783390371',
+} = {}) {
+    if (!client?.db) throw new Error('Employee directory database is not ready.');
+    if (!guild?.id || !guild?.members) throw new Error('Guild member data is not available.');
+    const roleId = cleanId(baseEmployeeRoleId);
+    if (!roleId) throw new Error('Base Employee Role ID is invalid.');
+
+    let fetchedMembers = null;
+    if (typeof guild.members.fetch === 'function') {
+        try {
+            fetchedMembers = await guild.members.fetch();
+        } catch (error) {
+            if (!guild.members.cache?.size) {
+                throw new Error('Could not load server members for the initial Employee Directory sync.');
+            }
+        }
+    }
+    const source = fetchedMembers?.values
+        ? [...fetchedMembers.values()]
+        : [...(guild.members.cache?.values?.() || [])];
+    const matched = source.filter(member => !member.user?.bot && member.roles?.cache?.has?.(roleId));
+
+    let created = 0;
+    let activated = 0;
+    let unchanged = 0;
+    const at = new Date().toISOString();
+    const summaries = [];
+
+    for (const member of matched) {
+        const userId = cleanId(member.id);
+        if (!userId) continue;
+        const summary = await queueWrite(`${guild.id}:${userId}`, async () => {
+            const existing = await getEmployeeDirectoryRecord(client, guild.id, userId);
+            const entry = existing || emptyEntry(guild.id, userId, member.displayName, at);
+            const wasActive = entry.status === 'active';
+            const name = clean(member.displayName || entry.displayName, 100) || 'Unknown member';
+            const changed = !existing || !wasActive || entry.displayName !== name;
+            entry.displayName = name;
+            entry.status = 'active';
+            entry.updatedAt = at;
+            // This is a snapshot initialization, not a fabricated log event.
+            // It prevents old backfilled records from reverting current membership.
+            if (!entry.latestStateEventAt || !wasActive) entry.latestStateEventAt = at;
+            if (!entry.currentPosition && entry.lastKnownPosition && wasActive) {
+                entry.currentPosition = entry.lastKnownPosition;
+            }
+            entry.lastKnownPosition = entry.currentPosition || entry.lastKnownPosition || null;
+            if (!Array.isArray(entry.history)) entry.history = [];
+            await client.db.set(ENTRY_KEY(guild.id, userId), entry);
+            return {
+                userId,
+                displayName: entry.displayName,
+                status: entry.status,
+                updatedAt: entry.updatedAt,
+                created: !existing,
+                activated: Boolean(existing && !wasActive),
+                changed,
+            };
+        });
+        if (summary.created) created += 1;
+        else if (summary.activated) activated += 1;
+        else if (!summary.changed) unchanged += 1;
+        summaries.push(summary);
+    }
+
+    await queueWrite(`${guild.id}:directory-index`, async () => {
+        const index = await getEmployeeDirectoryIndex(client, guild.id);
+        const byId = new Map(index.map(item => [String(item.userId), item]));
+        for (const summary of summaries) {
+            byId.set(summary.userId, {
+                userId: summary.userId,
+                displayName: summary.displayName,
+                status: 'active',
+                updatedAt: summary.updatedAt,
+            });
+        }
+        const nextIndex = [...byId.values()].sort((a, b) =>
+            String(a.displayName).localeCompare(String(b.displayName), 'en', { sensitivity: 'base' }),
+        );
+        await client.db.set(INDEX_KEY(guild.id), nextIndex);
+    });
+
+    return {
+        scanned: source.length,
+        matched: matched.length,
+        created,
+        activated,
+        unchanged,
+        signInLogsCreated: 0,
+    };
+}

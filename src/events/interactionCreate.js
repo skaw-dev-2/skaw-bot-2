@@ -63,7 +63,7 @@ export default {
         // generic interaction handlers so public Edit buttons remain functional.
         if (interaction.customId?.startsWith('skaw_el_') && (
           interaction.isButton?.() || interaction.isUserSelectMenu?.() || interaction.isRoleSelectMenu?.()
-          || interaction.isStringSelectMenu?.() || interaction.isModalSubmit?.()
+          || interaction.isStringSelectMenu?.() || interaction.isChannelSelectMenu?.() || interaction.isModalSubmit?.()
         )) {
           await handleEmployeeLogsComponent(interaction);
           return;

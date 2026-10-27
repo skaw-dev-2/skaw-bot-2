@@ -165,6 +165,25 @@ export async function buildCompanyStructureSnapshot(guild, config) {
   const fallbackSection = sectionOrder.find(section => section.kind === 'managementFallback');
   const fallbackRoleId = fallbackSection?.roleId || MANAGEMENT_COMPANY_ROLE_ID;
 
+  // Management positions use the configured section order as their priority.
+  // A person with multiple configured management-position roles is shown in
+  // only the first enabled role category that matches. Division and workshop
+  // membership are processed separately below and may still list that person.
+  const orderedManagementPositions = sectionOrder.filter(section =>
+    section.kind === 'management'
+      && section.enabled
+      && guild.roles.cache.has(section.roleId),
+  );
+  const primaryManagementRoleByMember = new Map();
+  for (const member of members.values()) {
+    const primarySection = orderedManagementPositions.find(section =>
+      member.roles.cache.has(section.roleId),
+    );
+    if (primarySection) {
+      primaryManagementRoleByMember.set(member.id, primarySection.roleId);
+    }
+  }
+
   const sections = sectionOrder.map(section => {
     const roleExists = guild.roles.cache.has(section.roleId);
     let holders = [];
@@ -174,6 +193,9 @@ export async function buildCompanyStructureSnapshot(guild, config) {
         if (section.kind === 'managementFallback') {
           return member.roles.cache.has(fallbackRoleId)
             && ![...managementPositionRoleIds].some(roleId => member.roles.cache.has(roleId));
+        }
+        if (section.kind === 'management') {
+          return primaryManagementRoleByMember.get(member.id) === section.roleId;
         }
         return member.roles.cache.has(section.roleId);
       });

@@ -113,7 +113,10 @@ export default {
           .setLabel('Cancel')
           .setStyle(ButtonStyle.Danger);
 
-        await interaction.editReply({
+        // Keep the actual ephemeral preview message in this in-memory draft so
+        // modal edits can refresh the preview the user is reviewing, rather than
+        // editing the separate ephemeral category-picker message.
+        draft.previewMessage = await interaction.editReply({
           embeds,
           components: [new ActionRowBuilder().addComponents(editButton, publishButton, cancelButton)],
           allowedMentions: { parse: [] },

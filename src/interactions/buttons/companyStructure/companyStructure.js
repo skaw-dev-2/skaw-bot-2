@@ -148,9 +148,7 @@ const editMembersButton = {
     }
 
     const view = getDraftSnapshotView(draft);
-    const available = view.sections.filter(section =>
-      section.enabled && section.roleExists && (section.members.length > 0 || Object.hasOwn(draft.overrides, section.key))
-    ).slice(0, 25);
+    const available = view.sections.filter(section => section.enabled && section.roleExists).slice(0, 25);
 
     if (available.length === 0) {
       return interaction.reply({

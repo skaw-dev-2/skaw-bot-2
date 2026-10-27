@@ -239,19 +239,23 @@ export function buildEmployeeLogBody(type, data = {}) {
         const mention = optionalRoleMention(id);
         if (mention) lines.push(`**${label}:** ${mention}`);
     };
+    const addPositionOrUnset = (label, id) => {
+        const mention = optionalRoleMention(id);
+        lines.push(`**${label}:** ${mention || 'Belum ditetapkan'}`);
+    };
     const addReason = (label = getReasonLabel(type)) => {
         if (reason) lines.push(`**${label}:** ${reason}`);
     };
 
     if (type === 'sign_in') {
         lines.push(`**Employee:** ${employee}`);
-        addPosition('Division', data.division);
-        addPosition('Position', data.position);
+        addPositionOrUnset('Division', data.division);
+        addPositionOrUnset('Position', data.position);
         addReason();
     } else if (type === 'sign_out') {
         lines.push(`**Employee:** ${employee}`);
-        addPosition('Division', data.division);
-        addPosition('Position', data.position);
+        addPositionOrUnset('Division', data.division);
+        addPositionOrUnset('Position', data.position);
         const category = EXIT_REASON_CATEGORY_LABELS[data.reasonCategory] || '';
         if (category) lines.push(`**Reason:** ${category}`);
         else if (reason) addReason();

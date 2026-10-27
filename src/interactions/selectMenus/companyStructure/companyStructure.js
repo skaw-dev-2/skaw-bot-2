@@ -38,7 +38,7 @@ const editRosterSelect = {
 
     const draft = getCompanyStructureDraft(draftId);
     if (!draft || draft.guildId !== interaction.guildId) {
-      return interaction.reply({ content: 'This preview expired. Run /cs update again.', flags: MessageFlags.Ephemeral });
+      return interaction.reply({ content: 'This preview session is no longer available. It may have been cleared by a bot restart or canceled; run /cs update again.', flags: MessageFlags.Ephemeral });
     }
 
     const view = getDraftSnapshotView(draft);

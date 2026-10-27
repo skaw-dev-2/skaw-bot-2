@@ -9,6 +9,7 @@ import {
     getEmployeeRoleRegistry,
     employeeRoleToCatalogEntry,
     createEmployeeExitReview,
+    cancelPendingEmployeeExitReviews,
 } from './employeeRoleRegistryService.js';
 
 const DEDUPE_KEY = guildId => `guild:${guildId}:employee_logs:auto_role_dedupe`;
@@ -338,6 +339,7 @@ async function processEmployeeLogsRoleSnapshot(client, guild, memberId, oldRoleI
 
     let decisions = [];
     if (!hadMembership && hasMembership) {
+        await cancelPendingEmployeeExitReviews(client, guild.id, memberId);
         const position = bestPositionRole(newRoleIds, catalog);
         decisions = [{
             type: 'sign_in',

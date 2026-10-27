@@ -148,26 +148,34 @@ const editMembersButton = {
     }
 
     const view = getDraftSnapshotView(draft);
-    const available = view.sections.filter(section => section.enabled && section.roleExists).slice(0, 25);
+    const available = view.sections.filter(section => section.enabled && section.roleExists);
 
     if (available.length === 0) {
       return interaction.reply({
-        content: 'There are no populated categories to edit in this preview. Update Discord role assignments first, or add/configure a category using /cs manage.',
+        content: 'There are no configured categories to edit in this preview. Add/configure a category using /cs manage.',
         flags: MessageFlags.Ephemeral,
       });
     }
 
+    const pageSize = 23;
+    const pageCount = Math.max(1, Math.ceil(available.length / pageSize));
+    const page = 0;
+    const options = available.slice(page * pageSize, (page + 1) * pageSize).map(section => ({
+      label: section.title.slice(0, 100),
+      description: (section.members.length + ' preview entries • role ' + section.roleId).slice(0, 100),
+      value: section.key,
+    }));
+    if (page + 1 < pageCount) {
+      options.push({ label: 'Next page →', description: 'More categories to edit', value: '__next' });
+    }
+
     const menu = new StringSelectMenuBuilder()
-      .setCustomId('cs_edit_select:' + draftId + ':' + ownerId)
+      .setCustomId('cs_edit_select:' + draftId + ':' + ownerId + ':' + page)
       .setPlaceholder('Choose a category whose preview roster you want to edit')
-      .addOptions(available.map(section => ({
-        label: section.title.slice(0, 100),
-        description: (section.members.length + ' preview entries • role ' + section.roleId).slice(0, 100),
-        value: section.key,
-      })));
+      .addOptions(options);
 
     return interaction.reply({
-      content: 'Select a category. These edits affect this preview only and will be replaced by Discord role data on the next /cs update.',
+      content: 'Select a category. Page ' + (page + 1) + ' of ' + pageCount + '. Edits affect this preview only and are replaced by Discord role data on the next /cs update.',
       components: [new ActionRowBuilder().addComponents(menu)],
       flags: MessageFlags.Ephemeral,
     });

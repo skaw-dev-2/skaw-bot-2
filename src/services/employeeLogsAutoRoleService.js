@@ -347,13 +347,16 @@ async function processEmployeeLogsRoleSnapshot(client, guild, memberId, oldRoleI
 
     let decisions = [];
     if (!hadMembership && hasMembership) {
-        const cancelledReviews = await cancelPendingEmployeeExitReviews(client, guild.id, memberId);
-        if (cancelledReviews.length) {
-            // The member returned before Management finalized the exit. This was
-            // not a completed departure, so cancel the pending review without
-            // publishing a fake Sign-In/Sign-Out pair.
+        const reviewState = await cancelPendingEmployeeExitReviews(client, guild.id, memberId);
+        if (reviewState.cancelled.length || reviewState.processing) {
+            // The member returned before Management finalized the exit, or a
+            // review is already being resolved. Do not produce a speculative
+            // Sign-In alongside an unresolved exit decision.
             await markProcessed(client, guild.id, signature);
-            return { skipped: 'exit-review-cancelled', cancelledReview: true };
+            return {
+                skipped: reviewState.processing ? 'exit-review-processing' : 'exit-review-cancelled',
+                cancelledReview: reviewState.cancelled.length > 0,
+            };
         }
         const position = bestPositionRole(newRoleIds, catalog);
         decisions = [{

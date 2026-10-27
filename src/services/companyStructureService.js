@@ -350,9 +350,10 @@ function renderStructureText(snapshot) {
   }
 
   return visibleSections.map(section => {
-    const heading = section.customTitle
-      ? '**' + escapeMarkdownText(section.title) + '**'
-      : '**<@&' + section.roleId + '>**';
+    // Always render the configured Discord role as a real role mention.
+    // Category titles are management metadata; using them here would show
+    // plain text instead of the role tag.
+    const heading = '**<@&' + section.roleId + '>**';
     const memberLines = section.members.length > 0
       ? section.members.map(name => '• ' + escapeMarkdownText(name)).join('\n')
       : 'N/A';

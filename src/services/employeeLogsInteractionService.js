@@ -333,6 +333,292 @@ async function handleCancel(interaction) {
     return interaction.editReply({ content: '🗑️ Record cancelled. Nothing was published.', embeds: [], components: [], allowedMentions: { parse: [] } });
 }
 
+
+const registrySessions = new Map();
+
+function buildSettingsPanel(config, autoConfig) {
+    const configuredCount = Object.keys(EMPLOYEE_LOG_TYPES).filter(type => config.channels?.[type]).length;
+    const autoTypes = ['sign_in', 'sign_out', 'promotion', 'demote', 'mutation', 'warning', 'blacklist'];
+    const missing = autoTypes.filter(type => !config.channels?.[type]).map(type => EMPLOYEE_LOG_TYPES[type].shortLabel);
+    const embed = new EmbedBuilder()
+        .setColor(0x2563eb)
+        .setTitle('EMPLOYEE LOGS · SYSTEM SETTINGS')
+        .setDescription([
+            'Channel routing: ' + configuredCount + '/' + Object.keys(EMPLOYEE_LOG_TYPES).length + ' activity channels configured.',
+            'Automatic Employee Logs: ' + (autoConfig.enabled ? 'Enabled' : 'Disabled'),
+            'Default banner: ' + (config.bannerUrl ? 'Configured' : 'Not configured'),
+            '',
+            missing.length ? 'Auto Logs still needs channels: ' + missing.join(', ') : 'Auto Logs channels: Ready',
+            '',
+            'Use the controls below to update routing, banners, and automation. Changes are saved per server.',
+        ].join('\\n'))
+        .setFooter({ text: 'Settings changes are saved immediately' });
+    const autoButton = new ButtonBuilder()
+        .setCustomId('skaw_el_autorole:' + (autoConfig.enabled ? 'disable' : 'enable'))
+        .setLabel(autoConfig.enabled ? 'Disable Auto Logs' : 'Enable Auto Logs')
+        .setEmoji(autoConfig.enabled ? '⏸️' : '▶️')
+        .setStyle(autoConfig.enabled ? ButtonStyle.Danger : ButtonStyle.Success);
+    return {
+        embeds: [embed],
+        components: [
+            new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('skaw_el_settings:channels').setLabel('Channel Routing').setEmoji('📣').setStyle(ButtonStyle.Primary),
+                autoButton,
+                new ButtonBuilder().setCustomId('skaw_el_settings:banner').setLabel('Set Default Banner').setEmoji('🖼️').setStyle(ButtonStyle.Secondary),
+                new ButtonBuilder().setCustomId('skaw_el_settings:clear-banner').setLabel('Clear Banner').setStyle(ButtonStyle.Secondary),
+            ),
+            new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('skaw_el_settings:event-banner').setLabel('Set Event Banner').setEmoji('🎨').setStyle(ButtonStyle.Secondary),
+                new ButtonBuilder().setCustomId('skaw_el_settings:clear-event-banner').setLabel('Clear Event Banner').setStyle(ButtonStyle.Secondary),
+                new ButtonBuilder().setCustomId('skaw_el_dashboard:home').setLabel('Dashboard').setEmoji('↩️').setStyle(ButtonStyle.Secondary),
+            ),
+        ],
+        allowedMentions: { parse: [] },
+    };
+}
+
+function buildChannelTypePicker() {
+    const menu = new StringSelectMenuBuilder()
+        .setCustomId('skaw_el_channel_type')
+        .setPlaceholder('Choose which activity channel to configure')
+        .setMinValues(1).setMaxValues(1)
+        .addOptions(Object.entries(EMPLOYEE_LOG_TYPES).map(([type, entry]) => ({
+            label: entry.shortLabel,
+            description: 'Destination for ' + entry.label,
+            value: type,
+            emoji: entry.emoji,
+        })));
+    return {
+        embeds: [new EmbedBuilder().setColor(0x2563eb).setTitle('CHANNEL ROUTING').setDescription('Choose an activity type, then select a text or announcement channel.')],
+        components: [
+            new ActionRowBuilder().addComponents(menu),
+            new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('skaw_el_dashboard:settings').setLabel('Back to Settings').setStyle(ButtonStyle.Secondary)),
+        ],
+        allowedMentions: { parse: [] },
+    };
+}
+
+function buildEventBannerPicker(clear = false) {
+    const menu = new StringSelectMenuBuilder()
+        .setCustomId(clear ? 'skaw_el_clear_event_banner_pick' : 'skaw_el_event_banner_pick')
+        .setPlaceholder(clear ? 'Choose which event banner to clear' : 'Choose which event banner to set')
+        .setMinValues(1).setMaxValues(1)
+        .addOptions(Object.entries(EMPLOYEE_LOG_BANNER_EVENTS).map(([key, entry]) => ({
+            label: entry.label.slice(0, 100),
+            description: clear ? 'Remove this custom event banner' : 'Set a custom banner for this event',
+            value: key,
+        })));
+    return {
+        embeds: [new EmbedBuilder().setColor(0x2563eb).setTitle(clear ? 'CLEAR EVENT BANNER' : 'CONFIGURE EVENT BANNER').setDescription('Select the employee activity or event.')],
+        components: [
+            new ActionRowBuilder().addComponents(menu),
+            new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('skaw_el_dashboard:settings').setLabel('Back to Settings').setStyle(ButtonStyle.Secondary)),
+        ],
+        allowedMentions: { parse: [] },
+    };
+}
+
+function buildRoleRegistryPanelPayload(registry) {
+    const active = registry.roles.filter(role => role.active);
+    const inactive = registry.roles.filter(role => !role.active);
+    const lines = [
+        '**Base Employee Role:** <@&' + BASE_EMPLOYEE_ROLE.id + '> (' + BASE_EMPLOYEE_ROLE.id + ')',
+        '**Built-in mappings:** ' + Object.keys(SKAW_EMPLOYEE_ROLE_CATALOG).length,
+        '**Custom mappings:** ' + active.length + ' active · ' + inactive.length + ' inactive',
+        '',
+    ];
+    const shown = registry.roles.slice(0, 16);
+    if (shown.length) {
+        for (const role of shown) {
+            let details = role.category.charAt(0).toUpperCase() + role.category.slice(1);
+            if (role.department) details += ' · ' + role.department;
+            if (role.level != null) details += ' · Level ' + role.level;
+            if (role.warn) details += ' · ' + role.warn;
+            lines.push((role.active ? '🟢' : '⚪') + ' <@&' + role.id + '> — ' + details + (role.active ? '' : ' (inactive)'));
+        }
+        if (registry.roles.length > shown.length) lines.push('…and ' + (registry.roles.length - shown.length) + ' more.');
+    } else {
+        lines.push('No custom role mappings registered yet. Built-in mappings remain available.');
+    }
+    return {
+        embeds: [new EmbedBuilder().setColor(0x2563eb).setTitle('EMPLOYEE ROLE REGISTRY').setDescription(lines.join('\\n').slice(0, 3900))
+            .setFooter({ text: 'Deactivate mappings instead of deleting them so existing records remain intact.' })],
+        components: [
+            new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('skaw_el_registry:add').setLabel('Register Role').setEmoji('➕').setStyle(ButtonStyle.Success),
+                new ButtonBuilder().setCustomId('skaw_el_registry:edit').setLabel('Edit Mapping').setEmoji('✏️').setStyle(ButtonStyle.Primary),
+                new ButtonBuilder().setCustomId('skaw_el_registry:disable').setLabel('Deactivate Role').setEmoji('⏸️').setStyle(ButtonStyle.Danger),
+                new ButtonBuilder().setCustomId('skaw_el_dashboard:home').setLabel('Dashboard').setStyle(ButtonStyle.Secondary),
+            ),
+        ],
+        allowedMentions: { parse: [] },
+    };
+}
+
+function buildRegistryMappingPicker(registry, mode) {
+    const options = registry.roles
+        .filter(role => mode !== 'disable' || role.active)
+        .slice(0, 25)
+        .map(role => ({
+            label: role.name.slice(0, 100),
+            description: (role.active ? 'Active' : 'Inactive') + ' · ' + role.category + (role.department ? ' · ' + role.department : ''),
+            value: role.id,
+        }));
+    if (!options.length) {
+        return {
+            content: mode === 'disable' ? 'There are no active custom role mappings to deactivate.' : 'Register a custom role first.',
+            embeds: [],
+            components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('skaw_el_dashboard:roles').setLabel('Back to Role Registry').setStyle(ButtonStyle.Secondary))],
+            allowedMentions: { parse: [] },
+        };
+    }
+    const menu = new StringSelectMenuBuilder()
+        .setCustomId(mode === 'disable' ? 'skaw_el_registry_disable_pick' : 'skaw_el_registry_edit_pick')
+        .setPlaceholder(mode === 'disable' ? 'Choose a role to deactivate' : 'Choose a role mapping to edit')
+        .setMinValues(1).setMaxValues(1).addOptions(options);
+    return {
+        embeds: [new EmbedBuilder().setColor(0x2563eb).setTitle(mode === 'disable' ? 'DEACTIVATE ROLE MAPPING' : 'EDIT ROLE MAPPING').setDescription('Select a custom role mapping.')],
+        components: [
+            new ActionRowBuilder().addComponents(menu),
+            new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('skaw_el_dashboard:roles').setLabel('Back to Registry').setStyle(ButtonStyle.Secondary)),
+        ],
+        allowedMentions: { parse: [] },
+    };
+}
+
+function roleCategoryOptions(currentCategory = null) {
+    const categories = [
+        { label: 'Jabatan / Rank', value: 'rank', description: 'Rank in a division; level drives promotion/demotion.' },
+        { label: 'Divisi', value: 'division', description: 'Division marker, not a rank by itself.' },
+        { label: 'Warning', value: 'warning', description: 'Adds a warning log when assigned.' },
+        { label: 'Blacklist', value: 'blacklist', description: 'Adds a blacklist log when assigned.' },
+        { label: 'Retired / Former', value: 'retired', description: 'Non-active former employee marker.' },
+        { label: 'Civilian / Non-employee', value: 'civilian', description: 'Non-active employee marker.' },
+        { label: 'Other / Ignored', value: 'other', description: 'Registered for reference, no automatic classification.' },
+    ];
+    return new StringSelectMenuBuilder()
+        .setCustomId('skaw_el_registry_category')
+        .setPlaceholder('Choose the role category')
+        .setMinValues(1).setMaxValues(1)
+        .addOptions(categories.map(item => ({ ...item, default: item.value === currentCategory })));
+}
+
+function buildRegistryForm(category, session) {
+    const modal = new ModalBuilder()
+        .setCustomId('skaw_el_registry_form:' + category)
+        .setTitle(('Register ' + category + ' mapping').slice(0, 45));
+    const addInput = (id, label, placeholder, required, maxLength, value = '') => {
+        const input = new TextInputBuilder().setCustomId(id).setLabel(label).setPlaceholder(placeholder)
+            .setStyle(TextInputStyle.Short).setRequired(required).setMaxLength(maxLength);
+        if (String(value || '').length) input.setValue(String(value).slice(0, maxLength));
+        modal.addComponents(new ActionRowBuilder().addComponents(input));
+    };
+    if (category === 'rank' || category === 'division') {
+        addInput('department', 'Department key', 'e.g. mechanic, modshop, builder', true, 50, session.existing?.department || '');
+    }
+    if (category === 'rank') {
+        addInput('level', 'Rank level (1–100)', 'Use higher numbers for higher ranks', true, 3, session.existing?.level == null ? '' : String(session.existing.level));
+    }
+    if (category === 'warning') {
+        addInput('warn', 'Warning level (e.g. 1/2)', '1/2', true, 10, session.existing?.warn || '');
+    }
+    addInput('note', 'Internal note (optional)', 'Optional admin reference; not shown in public logs', false, 100, session.existing?.note || '');
+    return modal;
+}
+
+function buildExitReviewList(reviews) {
+    const embed = new EmbedBuilder()
+        .setColor(0xd97706)
+        .setTitle('PENDING EMPLOYEE EXIT REVIEWS')
+        .setDescription(reviews.length
+            ? 'These members lost the Company Staff role. Management must classify the exit before a final employee log is published.'
+            : 'No pending employee exits need review.')
+        .setFooter({ text: 'One membership exit produces one final classification.' });
+    const components = [];
+    if (reviews.length) {
+        const menu = new StringSelectMenuBuilder()
+            .setCustomId('skaw_el_exit_review_pick')
+            .setPlaceholder('Choose an employee exit to review')
+            .setMinValues(1).setMaxValues(1)
+            .addOptions(reviews.slice(0, 25).map(review => ({
+                label: (review.displayName || 'Unknown member').slice(0, 100),
+                description: review.reviewId + ' · ' + formatDirectoryTimestamp(review.detectedAt),
+                value: review.reviewId,
+            })));
+        components.push(new ActionRowBuilder().addComponents(menu));
+    }
+    components.push(new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('skaw_el_dashboard:home').setLabel('Dashboard').setStyle(ButtonStyle.Secondary)));
+    return { embeds: [embed], components, allowedMentions: { parse: [] } };
+}
+
+function buildExitReviewDetail(review) {
+    const text = [
+        '**Employee:** ' + (review.displayName || 'Unknown member') + ' (<@' + review.userId + '>)',
+        '**Review ID:** ' + review.reviewId,
+        '**Role removed:** <@&' + BASE_EMPLOYEE_ROLE.id + '>',
+        '**Detected:** ' + formatDirectoryTimestamp(review.detectedAt),
+        '**Former position:** ' + (review.formerPositionId ? '<@&' + review.formerPositionId + '>' : 'Not recorded'),
+        '',
+        'Choose one final classification. The log is only published after Management confirms the outcome.',
+    ].join('\\n');
+    return {
+        embeds: [new EmbedBuilder().setColor(0xd97706).setTitle('EMPLOYEE EXIT REVIEW').setDescription(text)
+            .setFooter({ text: 'Sign Out is universal; Resignation and Dismissal explain the exit.' })],
+        components: [
+            new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('skaw_el_exit_outcome:' + review.reviewId + ':sign_out').setLabel('Sign Out').setEmoji('🔵').setStyle(ButtonStyle.Primary),
+                new ButtonBuilder().setCustomId('skaw_el_exit_outcome:' + review.reviewId + ':resignation').setLabel('Resignation').setEmoji('📄').setStyle(ButtonStyle.Secondary),
+                new ButtonBuilder().setCustomId('skaw_el_exit_outcome:' + review.reviewId + ':dismissal').setLabel('Dismissal').setEmoji('⛔').setStyle(ButtonStyle.Danger),
+            ),
+            new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('skaw_el_dashboard:reviews').setLabel('Back to Exit Reviews').setStyle(ButtonStyle.Secondary)),
+        ],
+        allowedMentions: { parse: [] },
+    };
+}
+
+function buildExitReasonModal(reviewId, outcome) {
+    const label = outcome === 'resignation' ? 'Resignation Reason' : outcome === 'dismissal' ? 'Dismissal Reason' : 'Exit Reason (optional)';
+    const modal = new ModalBuilder()
+        .setCustomId('skaw_el_exit_form:' + reviewId + ':' + outcome)
+        .setTitle((outcome === 'sign_out' ? 'Confirm Sign Out' : outcome === 'resignation' ? 'Confirm Resignation' : 'Confirm Dismissal').slice(0, 45));
+    modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder()
+        .setCustomId('reason').setLabel(label).setPlaceholder('Enter the approved reason, if applicable.')
+        .setStyle(TextInputStyle.Paragraph).setRequired(outcome !== 'sign_out').setMaxLength(900)));
+    return modal;
+}
+
+function buildFindModal() {
+    return new ModalBuilder().setCustomId('skaw_el_find_form').setTitle('Find Employee')
+        .addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder()
+            .setCustomId('query').setLabel('Name, mention, or Discord ID')
+            .setPlaceholder('Search employee directory').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(100)));
+}
+
+async function buildReportPayload(client, guildId, days = 30) {
+    const index = await getEmployeeDirectoryIndex(client, guildId);
+    const audit = await getEmployeeLogAudit(client, guildId, { limit: 1000 });
+    const since = Date.now() - Math.max(1, Number(days) || 30) * 86_400_000;
+    const recent = audit.filter(item => new Date(item.publishedAt || 0).getTime() >= since);
+    const counts = {};
+    for (const item of recent) counts[item.type] = (counts[item.type] || 0) + 1;
+    const embed = new EmbedBuilder().setColor(0x2563eb).setTitle('EMPLOYEE LOGS · MANAGEMENT REPORT')
+        .setDescription('Activity summary for the last ' + days + ' days.')
+        .addFields(
+            { name: 'Active Employees', value: String(index.filter(item => item.status === 'active').length), inline: true },
+            { name: 'Former Employees', value: String(index.filter(item => item.status === 'former').length), inline: true },
+            { name: 'Directory Profiles', value: String(index.length), inline: true },
+            { name: 'Records in Period', value: String(recent.length), inline: true },
+            { name: 'Promotions', value: String(counts.promotion || 0), inline: true },
+            { name: 'Mutations', value: String(counts.mutation || 0), inline: true },
+            { name: 'Warnings', value: String(counts.warning || 0), inline: true },
+            { name: 'Blacklists', value: String(counts.blacklist || 0), inline: true },
+            { name: 'Sign In / Sign Out', value: String((counts.sign_in || 0) + (counts.sign_out || 0)), inline: true },
+        )
+        .setFooter({ text: 'Employee directory totals are indexed profiles; activity counts use durable log audit entries.' })
+        .setTimestamp(new Date());
+    return { embeds: [embed], components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('skaw_el_dashboard:home').setLabel('Dashboard').setStyle(ButtonStyle.Secondary))], allowedMentions: { parse: [] } };
+}
+
 async function handleInteraction(interaction) {
     if (!interaction.inGuild?.()) return;
     const isEmployeeLogsComponent = Boolean(interaction.customId?.startsWith('skaw_el_')) && (

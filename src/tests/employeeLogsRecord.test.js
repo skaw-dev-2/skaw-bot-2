@@ -41,7 +41,7 @@ function createMockRuntime() {
         },
     };
     store.set('guild:77777777777777777:employee_logs', {
-        channels: { sign_in: channel.id },
+        channels: { sign_in: channel.id, sign_out: channel.id },
         bannerUrl: null,
         banners: {},
         stickers: {},
@@ -104,4 +104,46 @@ test('editing Reason and Additional Notes updates the same message and keeps Rec
     assert.equal(saved.editHistory[0].editedBy, '12345678901234567');
     assert.deepEqual(saved.editHistory[0].changes.reason, { before: '', after: 'New employee assignment.' });
     assert.deepEqual(saved.editHistory[0].changes.notes, { before: '', after: 'Documents verified.' });
+});
+
+
+test('editing Sign-Out category and details preserves the original Record ID and audits changes', async () => {
+    const { client, message, guild } = createMockRuntime();
+    const result = await sendEmployeeLog(client, guild, 'sign_out', {
+        userId: '12345678901234567',
+        displayName: 'Kevin Monterrey',
+        division: '1414623229288513586',
+        position: '1414629137389322244',
+        reasonCategory: 'blacklist',
+        reason: 'Repeated serious policy violations.',
+        notes: 'Supporting documents archived.',
+        recordedBy: '12345678901234567',
+    });
+
+    let description = message.payload.embeds[0]?.data?.description ?? message.payload.embeds[0]?.description;
+    assert.ok(description.includes('**Division:** <@&1414623229288513586>'));
+    assert.ok(description.includes('**Position:** <@&1414629137389322244>'));
+    assert.ok(description.includes('**Reason:** Blacklist'));
+    assert.ok(description.includes('**Reason Details:** Repeated serious policy violations.'));
+
+    await updateEmployeeLogRecord(client, guild.id, result.recordId, {
+        reasonCategory: 'personal_resignation',
+        reason: 'Accepted an opportunity outside the company.',
+        notes: 'Exit conversation completed.',
+    }, '12345678901234567');
+
+    description = message.payload.embeds[0]?.data?.description ?? message.payload.embeds[0]?.description;
+    assert.ok(description.includes('**Reason:** Personal Resignation'));
+    assert.ok(description.includes('**Reason Details:** Accepted an opportunity outside the company.'));
+    assert.ok(description.includes('Exit conversation completed.'));
+    assert.ok(description.includes(`Record ID: ${result.recordId}`));
+
+    const saved = await getEmployeeLogRecord(client, guild.id, result.recordId);
+    assert.equal(saved.recordId, result.recordId);
+    assert.equal(saved.data.reasonCategory, 'personal_resignation');
+    assert.equal(saved.data.reason, 'Accepted an opportunity outside the company.');
+    assert.equal(saved.data.notes, 'Exit conversation completed.');
+    assert.equal(saved.editHistory.length, 1);
+    assert.deepEqual(saved.editHistory[0].changes.reasonCategory, { before: 'blacklist', after: 'personal_resignation' });
+    assert.deepEqual(saved.editHistory[0].changes.notes, { before: 'Supporting documents archived.', after: 'Exit conversation completed.' });
 });

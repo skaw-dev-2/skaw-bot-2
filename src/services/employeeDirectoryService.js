@@ -31,6 +31,8 @@ function emptyEntry(guildId, userId, displayName, at) {
         status: 'unknown',
         currentPosition: null,
         lastKnownPosition: null,
+        currentDivision: null,
+        lastKnownDivision: null,
         firstSignInAt: null,
         firstSignInRecordId: null,
         lastSignInAt: null,
@@ -79,7 +81,19 @@ function eventPositions(record, guild, previousEntry) {
     const before = snapshotRole(guild, beforeId, beforeId && current?.id === String(beforeId) ? current.name : '');
     const after = snapshotRole(guild, afterId,
         afterId && current?.id === String(afterId) ? current.name : '');
-    return { before: before || (beforeId ? current : null), after };
+    const currentDivision = previousEntry?.currentDivision || null;
+    const beforeDivisionId = record.type === 'sign_out' ? (currentDivision?.id || data.division || '') : '';
+    const afterDivisionId = record.type === 'sign_in' ? (data.division || '') : '';
+    const divisionBefore = snapshotRole(guild, beforeDivisionId,
+        beforeDivisionId && currentDivision?.id === String(beforeDivisionId) ? currentDivision.name : '');
+    const divisionAfter = snapshotRole(guild, afterDivisionId,
+        afterDivisionId && currentDivision?.id === String(afterDivisionId) ? currentDivision.name : '');
+    return {
+        before: before || (beforeId ? current : null),
+        after,
+        divisionBefore: divisionBefore || (beforeDivisionId ? currentDivision : null),
+        divisionAfter,
+    };
 }
 
 function buildHistoryEvent(record, positions, previousEvent = null) {
@@ -91,7 +105,11 @@ function buildHistoryEvent(record, positions, previousEvent = null) {
         displayName: clean(data.displayName, 100),
         positionBefore: positions.before || previousEvent?.positionBefore || null,
         positionAfter: positions.after || previousEvent?.positionAfter || null,
-        reason: clean(data.reason, 900),
+        divisionBefore: positions.divisionBefore || previousEvent?.divisionBefore || null,
+        divisionAfter: positions.divisionAfter || previousEvent?.divisionAfter || null,
+        reason: clean(data.reasonCategory
+            ? ({ dismissal: 'Dismissal', personal_resignation: 'Personal Resignation', blacklist: 'Blacklist', others: 'Others' }[data.reasonCategory] || data.reasonCategory) + (data.reason ? ': ' + data.reason : '')
+            : data.reason, 900),
         warningLevel: clean(data.warn, 10),
         automatic: record.automatic === true,
     };
@@ -110,6 +128,19 @@ function updateSummaryFromEvent(entry, event, isNewEvent) {
         // when this exact record is still the source of the displayed summary.
         if (entry.lastSignOutRecordId === event.recordId) entry.lastSignOutReason = event.reason;
         if (entry.lastBlacklistRecordId === event.recordId) entry.lastBlacklistReason = event.reason;
+        // A later role assignment can enrich the original automatic Sign-In.
+        // Refresh its directory position in place instead of treating it as a new event.
+        if (event.type === 'sign_in' && entry.lastSignInRecordId === event.recordId) {
+            if (event.positionAfter) {
+                entry.currentPosition = event.positionAfter;
+                entry.lastKnownPosition = event.positionAfter;
+                entry.lastPositionRecordId = event.recordId;
+            }
+            if (event.divisionAfter) {
+                entry.currentDivision = event.divisionAfter;
+                entry.lastKnownDivision = event.divisionAfter;
+            }
+        }
         return;
     }
 
@@ -149,6 +180,8 @@ function updateSummaryFromEvent(entry, event, isNewEvent) {
                 entry.status = 'active';
                 entry.currentPosition = after || entry.currentPosition || null;
                 entry.lastKnownPosition = entry.currentPosition || entry.lastKnownPosition || null;
+                entry.currentDivision = event.divisionAfter || entry.currentDivision || null;
+                entry.lastKnownDivision = entry.currentDivision || entry.lastKnownDivision || null;
                 entry.lastPositionRecordId = event.recordId;
             }
             break;
@@ -158,7 +191,9 @@ function updateSummaryFromEvent(entry, event, isNewEvent) {
             if (isLatestState) {
                 entry.status = 'former';
                 entry.lastKnownPosition = before || after || entry.currentPosition || entry.lastKnownPosition || null;
+                entry.lastKnownDivision = event.divisionBefore || event.divisionAfter || entry.currentDivision || entry.lastKnownDivision || null;
                 entry.currentPosition = null;
+                entry.currentDivision = null;
                 entry.lastPositionRecordId = event.recordId;
             }
             break;

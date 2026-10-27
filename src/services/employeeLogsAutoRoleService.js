@@ -2,21 +2,16 @@ import { AuditLogEvent, PermissionFlagsBits } from 'discord.js';
 import {
     EMPLOYEE_LOG_TYPES,
     getEmployeeAutoRoleConfig,
+    getEmployeeLogRecord,
+    updateEmployeeLogRecord,
     sendEmployeeLog,
 } from './employeeLogsService.js';
 import {
     BASE_EMPLOYEE_ROLE,
     getEmployeeRoleRegistry,
     employeeRoleToCatalogEntry,
-    createEmployeeExitReview,
-    cancelPendingEmployeeExitReviews,
 } from './employeeRoleRegistryService.js';
 import { getEmployeeDirectoryRecord } from './employeeDirectoryService.js';
-
-const DEDUPE_KEY = guildId => `guild:${guildId}:employee_logs:auto_role_dedupe`;
-const DEDUPE_WINDOW_MS = 15_000;
-const DEDUPE_STORE_WINDOW_MS = 10 * 60_000;
-const recentInProcess = new Map();
 
 /**
  * SKAW role catalogue. IDs are the values supplied by Management.
@@ -87,7 +82,15 @@ function activeRoleIds(roleIds, catalog = SKAW_EMPLOYEE_ROLE_CATALOG) {
 function bestPositionRole(roleIds, catalog = SKAW_EMPLOYEE_ROLE_CATALOG) {
     const candidates = roleIds
         .map(id => ({ id, meta: catalog[id] }))
-        .filter(item => item.meta?.active && item.meta.position !== false)
+        .filter(item => item.meta?.active && item.meta.position !== false && item.meta.kind !== 'division')
+        .sort((a, b) => (b.meta.level ?? 0) - (a.meta.level ?? 0));
+    return candidates[0] ? { id: candidates[0].id, ...candidates[0].meta } : null;
+}
+
+function bestDivisionRole(roleIds, catalog = SKAW_EMPLOYEE_ROLE_CATALOG) {
+    const candidates = roleIds
+        .map(id => ({ id, meta: catalog[id] }))
+        .filter(item => item.meta?.active && item.meta.kind === 'division')
         .sort((a, b) => (b.meta.level ?? 0) - (a.meta.level ?? 0));
     return candidates[0] ? { id: candidates[0].id, ...candidates[0].meta } : null;
 }
@@ -95,9 +98,9 @@ function bestPositionRole(roleIds, catalog = SKAW_EMPLOYEE_ROLE_CATALOG) {
 function classifyPositionTransition(previous, next) {
     if (!previous || !next || previous.id === next.id) return null;
     // A division marker is a department membership role, not a rank itself.
-    // Division <-> first rank changes can happen in separate Discord updates;
-    // don't mislabel either direction as Promotion/Demotion. The coalescer below
-    // handles quick multi-role assignments as one transition where possible.
+    // Division <-> first rank changes are not Promotion/Demotion events.
+    // The persisted directory position detects the eventual rank transition when
+    // the new rank is assigned in a separate Discord event.
     if (previous.domain === next.domain
         && (previous.kind === 'division' || next.kind === 'division')) return null;
     if (previous.domain === next.domain) {
@@ -209,47 +212,6 @@ function diffRoleIds(oldRoleIds, newRoleIds) {
     };
 }
 
-function signatureFor(guildId, memberId, added, removed) {
-    return `${guildId}:${memberId}:A[${added.join(',')}]:R[${removed.join(',')}]`;
-}
-
-async function wasRecentlyProcessed(client, guildId, signature) {
-    const now = Date.now();
-    const localTime = recentInProcess.get(signature);
-    if (localTime && now - localTime < DEDUPE_WINDOW_MS) return true;
-    recentInProcess.set(signature, now);
-    if (recentInProcess.size > 1000) {
-        for (const [key, timestamp] of recentInProcess) {
-            if (now - timestamp > DEDUPE_STORE_WINDOW_MS) recentInProcess.delete(key);
-        }
-    }
-
-    try {
-        const raw = await client.db.get(DEDUPE_KEY(guildId), {});
-        const map = raw && typeof raw === 'object' ? raw : {};
-        if (map[signature] && now - Number(map[signature]) < DEDUPE_WINDOW_MS) return true;
-    } catch (error) {
-        console.warn('[Employee Auto Logs] Could not read duplicate-event state:', error?.message || error);
-    }
-    return false;
-}
-
-async function markProcessed(client, guildId, signature) {
-    try {
-        const now = Date.now();
-        const raw = await client.db.get(DEDUPE_KEY(guildId), {});
-        const map = raw && typeof raw === 'object' ? raw : {};
-        for (const [key, timestamp] of Object.entries(map)) {
-            if (now - Number(timestamp) > DEDUPE_STORE_WINDOW_MS) delete map[key];
-        }
-        map[signature] = now;
-        const entries = Object.entries(map).sort((a, b) => Number(a[1]) - Number(b[1]));
-        await client.db.set(DEDUPE_KEY(guildId), Object.fromEntries(entries.slice(-300)));
-    } catch (error) {
-        console.warn('[Employee Auto Logs] Could not persist duplicate-event state:', error?.message || error);
-    }
-}
-
 async function findAuditActor(guild, memberId, addedIds, removedIds) {
     try {
         const me = guild.members.me || await guild.members.fetchMe().catch(() => null);
@@ -287,13 +249,88 @@ async function findAuditActor(guild, memberId, addedIds, removedIds) {
     return null;
 }
 
-const pendingRoleChanges = new Map();
-const ROLE_CHANGE_COALESCE_MS = 1_200;
+function directoryPositionRole(profile, catalog) {
+    const position = profile?.currentPosition;
+    const id = String(position?.id || '');
+    if (!/^\d{17,20}$/.test(id)) return null;
+    const metadata = catalog[id] || {
+        name: position?.name || 'Previous Position',
+        domain: 'unknown',
+        level: 0,
+        kind: 'position',
+        active: true,
+        position: true,
+    };
+    if (metadata.kind === 'division' || metadata.position === false) return null;
+    return { id, ...metadata };
+}
+
+async function readSignInContext(client, guildId, profile) {
+    const recordId = String(profile?.lastSignInRecordId || '');
+    if (!recordId) return null;
+    const record = await getEmployeeLogRecord(client, guildId, recordId).catch(() => null);
+    return record?.type === 'sign_in' ? record : null;
+}
+
+/**
+ * When Company Staff is assigned before Division/Position, enrich the same
+ * automatic Sign-In record once the roles arrive. Never turn the initial
+ * placement into a second Sign-In or a false Promotion.
+ */
+async function syncInitialSignInContext(client, guild, memberId, roleIds, catalog, profile) {
+    if (!profile || profile.status !== 'active' || !profile.lastSignInRecordId) return false;
+    if (profile.lastPositionRecordId && profile.lastPositionRecordId !== profile.lastSignInRecordId) return false;
+
+    const record = await readSignInContext(client, guild.id, profile);
+    if (!record || record.automatic !== true) return false;
+
+    const division = bestDivisionRole(roleIds, catalog);
+    const position = bestPositionRole(roleIds, catalog);
+    const savedDivision = String(record.data?.division || '');
+    const savedPosition = String(record.data?.position || '');
+    const nextDivision = savedDivision || division?.id || '';
+    let nextPosition = savedPosition;
+    if (!savedPosition && !profile.currentPosition) nextPosition = position?.id || '';
+
+    if (nextDivision === savedDivision && nextPosition === savedPosition) return false;
+    await updateEmployeeLogRecord(client, guild.id, record.recordId, {
+        reason: record.data?.reason || '',
+        notes: record.data?.notes || '',
+        reasonCategory: record.data?.reasonCategory || '',
+        division: nextDivision,
+        position: nextPosition,
+    }, null);
+    return true;
+}
+
+async function getExitContext(client, guild, profile, oldRoleIds, catalog) {
+    let division = bestDivisionRole(oldRoleIds, catalog)?.id || '';
+    let position = bestPositionRole(oldRoleIds, catalog)?.id || String(profile?.currentPosition?.id || '');
+    const signInRecord = await readSignInContext(client, guild.id, profile);
+    if (!division) division = String(signInRecord?.data?.division || '');
+    if (!position) position = String(signInRecord?.data?.position || '');
+    return { division, position };
+}
+
+function makeCareerDecision(previous, next, memberId) {
+    if (!previous || !next || previous.id === next.id) return null;
+    const type = classifyPositionTransition(previous, next);
+    if (!type) return null;
+    const data = { userId: memberId, reason: '', notes: '' };
+    if (type === 'promotion' || type === 'demote') {
+        data.previousRank = previous.id;
+        data.newRank = next.id;
+    } else if (type === 'mutation') {
+        data.fromRole = previous.id;
+        data.toRole = next.id;
+        data.position = next.id;
+    }
+    return EMPLOYEE_LOG_TYPES[type] ? { type, data } : null;
+}
 
 async function processEmployeeLogsRoleSnapshot(client, guild, memberId, oldRoleIds, newRoleIds, displayName = '') {
     if (!client?.db || !guild || !memberId) return { skipped: 'missing-context' };
     const autoConfig = await getEmployeeAutoRoleConfig(client, guild.id);
-    // Re-check at flush time so disabling Auto Role cancels pending publications.
     if (!autoConfig.enabled) return { skipped: 'disabled' };
 
     const { added, removed } = diffRoleIds(oldRoleIds, newRoleIds);
@@ -318,69 +355,103 @@ async function processEmployeeLogsRoleSnapshot(client, guild, memberId, oldRoleI
     };
     const hadMembership = oldRoleIds.includes(BASE_EMPLOYEE_ROLE.id);
     const hasMembership = newRoleIds.includes(BASE_EMPLOYEE_ROLE.id);
-    const signature = signatureFor(guild.id, memberId, added, removed);
-    if (await wasRecentlyProcessed(client, guild.id, signature)) return { skipped: 'duplicate-event' };
-
-    // Company Staff is the source of truth for membership. Its removal creates a
-    // review item; Management decides whether the exit is Sign Out, Resignation,
-    // or Dismissal. Do not publish three competing exit records.
-    if (hadMembership && !hasMembership) {
-        const existingProfile = await getEmployeeDirectoryRecord(client, guild.id, memberId).catch(() => null);
-        const hasRecentExitRecord = existingProfile?.status === 'former'
-            && ['sign_out', 'resignation', 'dismissal'].includes(existingProfile.lastExitType);
-        if (hasRecentExitRecord) {
-            await markProcessed(client, guild.id, signature);
-            return { skipped: 'exit-already-recorded' };
-        }
-        const oldPosition = bestPositionRole(oldRoleIds, catalog);
-        const actorId = await findAuditActor(guild, memberId, added, removed);
-        const review = await createEmployeeExitReview(client, guild.id, {
-            userId: memberId,
-            displayName,
-            formerPositionId: oldPosition?.id || '',
-            formerPositionName: oldPosition?.name || '',
-            detectedBy: actorId || '',
-        });
-        await markProcessed(client, guild.id, signature);
-        return { queuedReview: true, reviewId: review.reviewId, duplicateReview: review.duplicate === true };
-    }
+    const profile = await getEmployeeDirectoryRecord(client, guild.id, memberId).catch(() => null);
+    const isBlacklisted = [...oldRoleIds, ...newRoleIds].some(id => catalog[id]?.kind === 'blacklist');
 
     let decisions = [];
-    if (!hadMembership && hasMembership) {
-        const reviewState = await cancelPendingEmployeeExitReviews(client, guild.id, memberId);
-        if (reviewState.cancelled.length || reviewState.processing) {
-            // The member returned before Management finalized the exit, or a
-            // review is already being resolved. Do not produce a speculative
-            // Sign-In alongside an unresolved exit decision.
-            await markProcessed(client, guild.id, signature);
-            return {
-                skipped: reviewState.processing ? 'exit-review-processing' : 'exit-review-cancelled',
-                cancelledReview: reviewState.cancelled.length > 0,
-            };
+    let updatedSignInContext = false;
+
+    // Company Staff is the membership switch. Removing it publishes Sign-Out
+    // immediately; Management can edit its category later without a review queue.
+    if (hadMembership && !hasMembership) {
+        // A preceding explicit Retired/Civilian transition may already have
+        // closed this employee. Do not publish a second Sign-Out for the same exit.
+        if (profile?.status !== 'former') {
+            const context = await getExitContext(client, guild, profile, oldRoleIds, catalog);
+            decisions.push({
+                type: 'sign_out',
+                data: {
+                    userId: memberId,
+                    division: context.division,
+                    position: context.position,
+                    reasonCategory: isBlacklisted ? 'blacklist' : '',
+                    reason: '',
+                    notes: '',
+                },
+            });
         }
+        // Blacklist/Warning remain independent logs, even when Sign-Out happens
+        // in the same role update. This deliberately allows two messages.
+        decisions.push(...classifyEmployeeRoleChange(oldRoleIds, newRoleIds, memberId, catalog)
+            .filter(decision => ['blacklist', 'warning'].includes(decision.type)));
+    } else if (!hadMembership && hasMembership) {
         const position = bestPositionRole(newRoleIds, catalog);
-        decisions = [{
+        const division = bestDivisionRole(newRoleIds, catalog);
+        decisions.push({
             type: 'sign_in',
-            data: { userId: memberId, position: position?.id || '', reason: '', notes: '' },
-        }];
+            data: { userId: memberId, division: division?.id || '', position: position?.id || '', reason: '', notes: '' },
+        });
+        // If a warning/blacklist role was added in this same update, keep its
+        // own log alongside Sign-In.
+        decisions.push(...classifyEmployeeRoleChange(oldRoleIds, newRoleIds, memberId, catalog)
+            .filter(decision => ['blacklist', 'warning'].includes(decision.type)));
     } else if (hadMembership && hasMembership) {
-        decisions = classifyEmployeeRoleChange(oldRoleIds, newRoleIds, memberId, catalog)
-            .filter(decision => decision.type !== 'sign_in' && decision.type !== 'sign_out');
+        const roleDecisions = classifyEmployeeRoleChange(oldRoleIds, newRoleIds, memberId, catalog);
+        const explicitExit = roleDecisions.some(decision => decision.type === 'sign_out');
+        if (explicitExit) {
+            // Retired/Civilian plus removal of an active position is an explicit
+            // exit transition in SKAW's role workflow, even if Company Staff is
+            // still present during the same gateway event.
+            if (profile?.status !== 'former') {
+                const context = await getExitContext(client, guild, profile, oldRoleIds, catalog);
+                decisions.push({
+                    type: 'sign_out',
+                    data: {
+                        userId: memberId,
+                        division: context.division,
+                        position: context.position,
+                        reasonCategory: isBlacklisted ? 'blacklist' : '',
+                        reason: '',
+                        notes: '',
+                    },
+                });
+            }
+        }
+        decisions.push(...roleDecisions.filter(decision => ['blacklist', 'warning'].includes(decision.type)));
+
+        if (!explicitExit) {
+            const previousPosition = directoryPositionRole(profile, catalog);
+            const newPosition = bestPositionRole(newRoleIds, catalog);
+            const changedPositionRole = [...added, ...removed].some(id =>
+                catalog[id]?.active && catalog[id]?.position !== false && catalog[id]?.kind !== 'division');
+            if (changedPositionRole && profile?.status === 'active' && previousPosition && newPosition) {
+                const career = makeCareerDecision(previousPosition, newPosition, memberId);
+                if (career) decisions.push(career);
+            }
+            if (!decisions.some(decision => ['promotion', 'demote', 'mutation'].includes(decision.type))) {
+                updatedSignInContext = await syncInitialSignInContext(client, guild, memberId, newRoleIds, catalog, profile)
+                    .catch(error => {
+                        console.warn('[Employee Auto Logs] Could not update initial Sign-In context:', error?.message || error);
+                        return false;
+                    });
+            }
+        }
     } else {
-        // Backward-compatible mode for role changes while the base membership
-        // role is not yet assigned to a legacy employee.
-        decisions = classifyEmployeeRoleChange(oldRoleIds, newRoleIds, memberId, catalog)
-            .filter(decision => decision.type !== 'sign_in' && decision.type !== 'sign_out');
+        // Division and Position roles assigned before Company Staff are context
+        // only. They are included in Sign-In when the membership role is added.
+        // Warning and Blacklist still log independently when assigned.
+        decisions.push(...classifyEmployeeRoleChange(oldRoleIds, newRoleIds, memberId, catalog)
+            .filter(decision => ['blacklist', 'warning'].includes(decision.type)));
     }
 
     if (!decisions.length) {
-        // Keep the role event recorded as processed to avoid repeated gateway work.
-        await markProcessed(client, guild.id, signature);
-        return { skipped: 'no-mapped-activity' };
+        return { skipped: updatedSignInContext ? 'sign-in-context-updated' : 'no-mapped-activity', updatedSignInContext };
     }
 
     const actorId = await findAuditActor(guild, memberId, added, removed);
     const results = [];
+    // Publish sequentially so a Sign-Out and its independent Blacklist record
+    // both appear in the correct configured channels.
     for (const decision of decisions) {
         try {
             const payload = {
@@ -398,15 +469,15 @@ async function processEmployeeLogsRoleSnapshot(client, guild, memberId, oldRoleI
             console.error(`[Employee Auto Logs] Failed to publish ${decision.type} for ${memberId}:`, error?.message || error);
         }
     }
-    if (results.length || !decisions.length) await markProcessed(client, guild.id, signature);
-    else recentInProcess.delete(signature);
-    return { processed: results.length > 0, results };
+    return { processed: results.length > 0, updatedSignInContext, results };
 }
+
+const memberProcessingQueue = new Map();
+
 /**
- * Collects quick role updates for one member into a single transition.
- * Discord emits guildMemberUpdate for every role mutation; a short coalescing
- * window avoids false intermediate demotions/promotions when a bot assigns the
- * department role and rank in separate API calls.
+ * Process every real GuildMemberUpdate immediately, serializing updates per
+ * employee. The old 1.2s debounce and 15s persisted dedupe dropped valid repeated
+ * role changes and hid logs during rapid testing.
  */
 export async function handleEmployeeLogsRoleUpdate(oldMember, newMember, explicitClient = null) {
     const client = explicitClient || newMember?.client;
@@ -414,43 +485,28 @@ export async function handleEmployeeLogsRoleUpdate(oldMember, newMember, explici
     if (!client?.db || !guild || !oldMember || !newMember) return { skipped: 'missing-context' };
     if (newMember.user?.bot || newMember.id !== oldMember.id) return { skipped: 'not-a-human-member' };
 
-    const autoConfig = await getEmployeeAutoRoleConfig(client, guild.id);
-    if (!autoConfig.enabled) return { skipped: 'disabled' };
-
+    // Queue immediately after capturing the old/new snapshots. Checking config
+    // before queueing would allow two overlapping gateway updates to enqueue out
+    // of order when database reads complete at different times.
     const oldRoleIds = normalizeIds(oldMember.roles?.cache);
     const newRoleIds = normalizeIds(newMember.roles?.cache);
-    if (!diffRoleIds(oldRoleIds, newRoleIds).added.length && !diffRoleIds(oldRoleIds, newRoleIds).removed.length) {
-        return { skipped: 'no-role-change' };
-    }
+    const { added, removed } = diffRoleIds(oldRoleIds, newRoleIds);
+    if (!added.length && !removed.length) return { skipped: 'no-role-change' };
 
     const key = `${guild.id}:${newMember.id}`;
-    const previous = pendingRoleChanges.get(key);
-    if (previous?.timer) clearTimeout(previous.timer);
-
-    const pending = {
+    const previous = memberProcessingQueue.get(key) || Promise.resolve();
+    const operation = previous.catch(() => {}).then(() => processEmployeeLogsRoleSnapshot(
         client,
         guild,
-        memberId: String(newMember.id),
-        displayName: String(newMember.displayName || '').replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 100),
-        // Preserve the state before the first quick change and the latest state after it.
-        oldRoleIds: previous?.oldRoleIds || oldRoleIds,
+        String(newMember.id),
+        oldRoleIds,
         newRoleIds,
-        timer: null,
-    };
-    pending.timer = setTimeout(() => {
-        pendingRoleChanges.delete(key);
-        processEmployeeLogsRoleSnapshot(
-            pending.client,
-            pending.guild,
-            pending.memberId,
-            pending.oldRoleIds,
-            pending.newRoleIds,
-            pending.displayName,
-        ).catch(error => {
-            console.error('[Employee Auto Logs] Failed to process coalesced role update:', error?.stack || error);
-        });
-    }, ROLE_CHANGE_COALESCE_MS);
-    pending.timer.unref?.();
-    pendingRoleChanges.set(key, pending);
-    return { queued: true, coalesceMs: ROLE_CHANGE_COALESCE_MS };
+        String(newMember.displayName || '').replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 100),
+    ));
+    memberProcessingQueue.set(key, operation);
+    try {
+        return await operation;
+    } finally {
+        if (memberProcessingQueue.get(key) === operation) memberProcessingQueue.delete(key);
+    }
 }

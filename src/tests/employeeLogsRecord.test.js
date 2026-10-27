@@ -121,10 +121,10 @@ test('editing Sign-Out category and details preserves the original Record ID and
     });
 
     let description = message.payload.embeds[0]?.data?.description ?? message.payload.embeds[0]?.description;
-    assert.match(description, /\\*\\*Division:\\*\\* <@&1414623229288513586>/);
-    assert.match(description, /\\*\\*Position:\\*\\* <@&1414629137389322244>/);
-    assert.match(description, /\\*\\*Reason:\\*\\* Blacklist/);
-    assert.match(description, /\\*\\*Reason Details:\\*\\* Repeated serious policy violations\\./);
+    assert.ok(description.includes('**Division:** <@&1414623229288513586>'));
+    assert.ok(description.includes('**Position:** <@&1414629137389322244>'));
+    assert.ok(description.includes('**Reason:** Blacklist'));
+    assert.ok(description.includes('**Reason Details:** Repeated serious policy violations.'));
 
     await updateEmployeeLogRecord(client, guild.id, result.recordId, {
         reasonCategory: 'personal_resignation',
@@ -133,10 +133,10 @@ test('editing Sign-Out category and details preserves the original Record ID and
     }, '12345678901234567');
 
     description = message.payload.embeds[0]?.data?.description ?? message.payload.embeds[0]?.description;
-    assert.match(description, /\\*\\*Reason:\\*\\* Personal Resignation/);
-    assert.match(description, /\\*\\*Reason Details:\\*\\* Accepted an opportunity outside the company\\./);
-    assert.match(description, /Exit conversation completed\\./);
-    assert.match(description, new RegExp(`Record ID: ${result.recordId}`));
+    assert.ok(description.includes('**Reason:** Personal Resignation'));
+    assert.ok(description.includes('**Reason Details:** Accepted an opportunity outside the company.'));
+    assert.ok(description.includes('Exit conversation completed.'));
+    assert.ok(description.includes(`Record ID: ${result.recordId}`));
 
     const saved = await getEmployeeLogRecord(client, guild.id, result.recordId);
     assert.equal(saved.recordId, result.recordId);

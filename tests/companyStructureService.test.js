@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildCompanyStructureEmbeds, buildCompanyStructureSnapshot, createCompanyStructureDraft, getCompanyStructureDraft, deleteCompanyStructureDraft } from '../src/services/companyStructureService.js';
+import { buildCompanyStructureEmbeds, buildCompanyStructureSnapshot, createCompanyStructureDraft, getCompanyStructureDraft, deleteCompanyStructureDraft, setCompanyStructureDraftRoster, publishCompanyStructureDraft } from '../src/services/companyStructureService.js';
 
 const ROLE = Object.freeze({
   ceo: '1432365826136080625',
@@ -29,20 +29,21 @@ function makeRuntime() {
   const roleIdsNeeded = [...roleIds, ROLE.mechanicSenior, ROLE.civilian];
   const roleCache = new Map(roleIdsNeeded.map(id => [id, { id, name: sections.find(section => section.roleId === id)?.title || id }]));
 
-  const members = [
+  const sourceMembers = [
     {
       id: '111111111111111111',
-      displayName: 'Kevin Monterrey',
+      displayName: 'Kevin_Monterrey',
       user: { username: 'kevin' },
       roles: [ROLE.ceo, ROLE.deputy, ROLE.executive, ROLE.managementCompany, ROLE.mechanicDivision, ROLE.workshop1, ROLE.mechanicSenior, ROLE.civilian],
     },
     {
       id: '222222222222222222',
-      displayName: 'Maya Florenzia',
+      displayName: 'Maya_Florenzia',
       user: { username: 'maya' },
       roles: [ROLE.managementCompany, ROLE.partnership, ROLE.civilian],
     },
-  ].map(member => ({
+  ];
+  const members = sourceMembers.map(member => ({
     ...member,
     roles: { cache: { has: id => member.roles.includes(id) } },
   }));
@@ -53,6 +54,8 @@ function makeRuntime() {
       members: { fetch: async () => new Map(members.map(member => [member.id, member])) },
     },
     config: { guildId: '1414500416724406315', sections },
+    members,
+    sourceMembers,
   };
 }
 
@@ -61,10 +64,10 @@ test('multiple management roles produce only one primary role by configured prio
   const snapshot = await buildCompanyStructureSnapshot(guild, config);
   const membersByKey = Object.fromEntries(snapshot.sections.map(section => [section.key, section.members]));
 
-  assert.deepEqual(membersByKey.ceo, ['Kevin Monterrey']);
+  assert.deepEqual(membersByKey.ceo, ['Kevin_Monterrey']);
   assert.deepEqual(membersByKey.deputy, []);
   assert.deepEqual(membersByKey.executive, []);
-  assert.deepEqual(membersByKey['management-company'], ['Maya Florenzia']);
+  assert.deepEqual(membersByKey['management-company'], ['Maya_Florenzia']);
 });
 
 test('division and workshop membership remain visible separately; rank and civilian markers are not sections', async () => {
@@ -72,8 +75,8 @@ test('division and workshop membership remain visible separately; rank and civil
   const snapshot = await buildCompanyStructureSnapshot(guild, config);
   const membersByKey = Object.fromEntries(snapshot.sections.map(section => [section.key, section.members]));
 
-  assert.deepEqual(membersByKey['mechanic-division'], ['Kevin Monterrey']);
-  assert.deepEqual(membersByKey['workshop-1'], ['Kevin Monterrey']);
+  assert.deepEqual(membersByKey['mechanic-division'], ['Kevin_Monterrey']);
+  assert.deepEqual(membersByKey['workshop-1'], ['Kevin_Monterrey']);
   assert.equal(snapshot.sections.some(section => section.roleId === ROLE.mechanicSenior), false);
   assert.equal(snapshot.sections.some(section => section.roleId === ROLE.civilian), false);
 });
@@ -83,8 +86,8 @@ test('management-company fallback only lists members without any configured mana
   const snapshot = await buildCompanyStructureSnapshot(guild, config);
   const fallback = snapshot.sections.find(section => section.key === 'management-company');
 
-  assert.deepEqual(fallback.members, ['Maya Florenzia']);
-  assert.equal(fallback.members.includes('Kevin Monterrey'), false);
+  assert.deepEqual(fallback.members, ['Maya_Florenzia']);
+  assert.equal(fallback.members.includes('Kevin_Monterrey'), false);
 });
 
 test('primary management role follows the configured section order, not role position order', async () => {
@@ -96,7 +99,7 @@ test('primary management role follows the configured section order, not role pos
   const snapshot = await buildCompanyStructureSnapshot(guild, config);
   const membersByKey = Object.fromEntries(snapshot.sections.map(section => [section.key, section.members]));
 
-  assert.deepEqual(membersByKey.deputy, ['Kevin Monterrey']);
+  assert.deepEqual(membersByKey.deputy, ['Kevin_Monterrey']);
   assert.deepEqual(membersByKey.ceo, []);
 });
 
@@ -135,7 +138,7 @@ test('footer image is attached to the final structure embed below roster text, i
   const structureEmbed = json.at(-1);
 
   assert.equal(json[0].image.url, bannerUrl);
-  assert.ok(structureEmbed.description.includes('Kevin Monterrey'));
+  assert.ok(structureEmbed.description.includes('Kevin' + String.fromCharCode(92) + '_Monterrey'));
   assert.equal(structureEmbed.image.url, footerImageUrl);
   assert.ok(structureEmbed.footer.text.includes('Preview only'));
 });
@@ -179,5 +182,123 @@ test('Company Structure draft stays available after the former 12-minute timeout
   draft.createdAt = Date.now() - (24 * 60 * 60 * 1000);
 
   assert.equal(getCompanyStructureDraft(draft.id), draft);
+  deleteCompanyStructureDraft(draft.id);
+});
+
+
+test('saved roster names are stable by Discord user ID while role membership remains dynamic', async () => {
+  const { guild, config, members } = makeRuntime();
+  const kevinId = '111111111111111111';
+  const mayaId = '222222222222222222';
+  config.rosterNamesByUserId = {
+    [kevinId]: 'Kevin_Previous_Name',
+    [mayaId]: 'Maya_Previous_Name',
+  };
+  members[0].displayName = 'Kevin_New_Discord_Display';
+  members[1].displayName = 'Maya_New_Discord_Display';
+  guild.id = config.guildId;
+
+  let storedConfig = { ...config, updatedAt: new Date().toISOString() };
+  const client = {
+    db: {
+      get: async () => storedConfig,
+      set: async (_key, value) => { storedConfig = value; return true; },
+    },
+  };
+  const draft = await createCompanyStructureDraft(client, guild, '333333333333333333');
+  const snapshot = draft.snapshot;
+  const byKey = Object.fromEntries(snapshot.sections.map(section => [section.key, section]));
+
+  assert.deepEqual(byKey.ceo.members, ['Kevin_Previous_Name']);
+  assert.deepEqual(byKey['management-company'].members, ['Maya_Previous_Name']);
+  assert.deepEqual(byKey['workshop-1'].members, ['Kevin_Previous_Name']);
+  assert.equal(byKey.ceo.memberEntries[0].userId, kevinId);
+  assert.equal(snapshot.rosterNamesByUserId[kevinId], 'Kevin_Previous_Name');
+  deleteCompanyStructureDraft(draft.id);
+});
+
+test('roster names replace spaces with one underscore and accept old Markdown-escaped names', async () => {
+  const { guild, config, members } = makeRuntime();
+  members[0].displayName = 'Leonardo Maximilano';
+  members[1].displayName = 'Eugene' + String.fromCharCode(92).repeat(3) + '_Maleek';
+
+  const snapshot = await buildCompanyStructureSnapshot(guild, config);
+  const byKey = Object.fromEntries(snapshot.sections.map(section => [section.key, section]));
+
+  assert.deepEqual(byKey.ceo.members, ['Leonardo_Maximilano']);
+  assert.deepEqual(byKey['management-company'].members, ['Eugene_Maleek']);
+  assert.equal(snapshot.rosterNamesByUserId['111111111111111111'], 'Leonardo_Maximilano');
+  assert.equal(snapshot.rosterNamesByUserId['222222222222222222'], 'Eugene_Maleek');
+
+  const embeds = buildCompanyStructureEmbeds(snapshot, { ...config, bannerUrl: null, lastUpdatedAt: null });
+  const renderedDescription = embeds.map(embed => embed.toJSON().description || '').join('\n');
+  const slash = String.fromCharCode(92);
+  assert.ok(renderedDescription.includes('Leonardo' + slash + '_Maximilano'));
+  assert.equal(renderedDescription.includes('Leonardo' + slash + slash + '_Maximilano'), false);
+});
+
+test('manual display-name edits are stored against the matched Discord user ID', async () => {
+  const { guild, config } = makeRuntime();
+  guild.id = config.guildId;
+  let storedConfig = { ...config, updatedAt: new Date().toISOString() };
+  const client = {
+    db: {
+      get: async () => storedConfig,
+      set: async (_key, value) => {
+        storedConfig = value;
+        return true;
+      },
+    },
+  };
+
+  const draft = await createCompanyStructureDraft(client, guild, '333333333333333333');
+  setCompanyStructureDraftRoster(draft, 'ceo', 'Kevin' + String.fromCharCode(92) + '_CustomName');
+  assert.equal(draft.overrides.ceo[0], 'Kevin_CustomName');
+  assert.equal(draft.pendingRosterNamesByUserId['111111111111111111'], 'Kevin_CustomName');
+  deleteCompanyStructureDraft(draft.id);
+});
+
+
+test('a member who loses a workshop role is removed from that workshop while the saved name remains available', async () => {
+  const { guild, config, sourceMembers } = makeRuntime();
+  const kevinId = '111111111111111111';
+  config.rosterNamesByUserId = { [kevinId]: 'Kevin_Saved_Name' };
+  sourceMembers[0].roles = sourceMembers[0].roles.filter(roleId => roleId !== ROLE.workshop1);
+
+  const snapshot = await buildCompanyStructureSnapshot(guild, config);
+  const byKey = Object.fromEntries(snapshot.sections.map(section => [section.key, section]));
+
+  assert.deepEqual(byKey['workshop-1'].members, []);
+  assert.deepEqual(byKey.ceo.members, ['Kevin_Saved_Name']);
+  assert.equal(snapshot.rosterNamesByUserId[kevinId], 'Kevin_Saved_Name');
+});
+
+
+test('publishing persists newly discovered canonical names by Discord user ID', async () => {
+  const { guild, config } = makeRuntime();
+  guild.id = config.guildId;
+  let storedConfig = { ...config, updatedAt: new Date().toISOString(), channelId: '555555555555555555', bannerUrl: null };
+  const publishedMessage = { id: '666666666666666666' };
+  const channel = {
+    isTextBased: () => true,
+    isDMBased: () => false,
+    send: async () => publishedMessage,
+  };
+  const client = {
+    db: {
+      get: async () => storedConfig,
+      set: async (_key, value) => { storedConfig = value; return true; },
+    },
+    guilds: { fetch: async () => guild },
+    channels: { fetch: async () => channel },
+  };
+
+  const draft = await createCompanyStructureDraft(client, guild, '333333333333333333');
+  const result = await publishCompanyStructureDraft(client, draft);
+
+  assert.equal(result.configSaved, true);
+  assert.equal(storedConfig.messageId, publishedMessage.id);
+  assert.equal(storedConfig.rosterNamesByUserId['111111111111111111'], 'Kevin_Monterrey');
+  assert.equal(storedConfig.rosterNamesByUserId['222222222222222222'], 'Maya_Florenzia');
   deleteCompanyStructureDraft(draft.id);
 });

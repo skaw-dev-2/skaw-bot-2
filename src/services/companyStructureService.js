@@ -114,6 +114,7 @@ function defaultConfig(guildId) {
     messageId: null,
     messageChannelId: null,
     lastUpdatedAt: null,
+    rosterNamesByUserId: {},
     updatedAt: new Date().toISOString(),
     sections: DEFAULT_SECTIONS.map(section => ({ ...section })),
   };
@@ -137,6 +138,11 @@ function normalizeConfig(raw, guildId) {
       : null,
     messageId: raw.messageId ? String(raw.messageId) : null,
     messageChannelId: raw.messageChannelId ? String(raw.messageChannelId) : null,
+    rosterNamesByUserId: raw.rosterNamesByUserId && typeof raw.rosterNamesByUserId === 'object'
+      ? Object.fromEntries(Object.entries(raw.rosterNamesByUserId)
+          .filter(([userId, name]) => /^\d{17,20}$/.test(userId) && typeof name === 'string')
+          .map(([userId, name]) => [userId, normalizeRosterName(name)]))
+      : {},
     sections: Array.isArray(raw.sections)
       ? raw.sections.map(section => ({
           ...section,
@@ -209,7 +215,18 @@ export async function canManageCompanyStructure(interaction) {
   return [...managementRoleIds].some(roleId => member.roles.cache.has(roleId));
 }
 
-function safeDisplayName(value) {
+function normalizeRosterName(value) {
+  return String(value || 'Unknown')
+    // Remove Markdown escapes left by older preview edits before normalizing.
+    .replace(/\\+([_*~|>])/g, '$1')
+    .replace(/[\r\n]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, '_')
+    .replace(/_+/g, '_')
+    .slice(0, 80) || 'Unknown';
+}
+
+function escapeMarkdownText(value) {
   return String(value || 'Unknown')
     .replace(/\\/g, '\\\\')
     .replace(/([_*~|>])/g, '\\$1')
@@ -221,6 +238,7 @@ export async function buildCompanyStructureSnapshot(guild, config) {
   await guild.roles.fetch();
   const members = await fetchGuildMembers(guild);
   const sectionOrder = [...config.sections].sort((a, b) => a.order - b.order);
+  const rosterNamesByUserId = { ...(config.rosterNamesByUserId || {}) };
   const missingRoles = sectionOrder
     .filter(section => section.enabled && !guild.roles.cache.has(section.roleId))
     .map(section => ({ key: section.key, title: section.title, roleId: section.roleId }));
@@ -267,15 +285,27 @@ export async function buildCompanyStructureSnapshot(guild, config) {
       });
     }
 
-    const uniqueNames = new Map();
+    const uniqueEntries = new Map();
     for (const member of holders) {
-      uniqueNames.set(member.id, safeDisplayName(member.displayName || member.user?.username));
+      const userId = String(member.id);
+      const savedName = config.rosterNamesByUserId?.[userId];
+      const displayName = normalizeRosterName(savedName || member.displayName || member.user?.username);
+      uniqueEntries.set(userId, { userId, displayName });
+    }
+
+    const memberEntries = [...uniqueEntries.values()].sort((a, b) =>
+      a.displayName.localeCompare(b.displayName, 'id', { sensitivity: 'base' })
+      || a.userId.localeCompare(b.userId),
+    );
+    for (const entry of memberEntries) {
+      rosterNamesByUserId[entry.userId] = entry.displayName;
     }
 
     return {
       ...section,
       roleExists,
-      members: [...uniqueNames.values()].sort((a, b) => a.localeCompare(b, 'id', { sensitivity: 'base' })),
+      memberEntries,
+      members: memberEntries.map(entry => entry.displayName),
     };
   });
 
@@ -285,12 +315,13 @@ export async function buildCompanyStructureSnapshot(guild, config) {
     const role = guild.roles.cache.get(section.roleId);
     for (const member of members.values()) {
       if (!member.roles.cache.has(section.roleId)) continue;
-      const current = workshopMemberships.get(member.id) || {
-        displayName: safeDisplayName(member.displayName || member.user?.username),
+      const userId = String(member.id);
+      const current = workshopMemberships.get(userId) || {
+        displayName: rosterNamesByUserId[userId] || normalizeRosterName(member.displayName || member.user?.username),
         workshops: [],
       };
       current.workshops.push(role?.name || section.title);
-      workshopMemberships.set(member.id, current);
+      workshopMemberships.set(userId, current);
     }
   }
   const workshopConflicts = [...workshopMemberships.values()]
@@ -301,6 +332,7 @@ export async function buildCompanyStructureSnapshot(guild, config) {
     sections,
     missingRoles,
     workshopConflicts,
+    rosterNamesByUserId,
     generatedAt: new Date().toISOString(),
   };
 }
@@ -319,10 +351,10 @@ function renderStructureText(snapshot) {
 
   return visibleSections.map(section => {
     const heading = section.customTitle
-      ? '**' + safeDisplayName(section.title) + '**'
+      ? '**' + escapeMarkdownText(section.title) + '**'
       : '**<@&' + section.roleId + '>**';
     const memberLines = section.members.length > 0
-      ? section.members.map(name => '• ' + name).join('\n')
+      ? section.members.map(name => '• ' + escapeMarkdownText(name)).join('\n')
       : 'N/A';
     return heading + '\n' + memberLines;
   }).join('\n\n');
@@ -453,6 +485,7 @@ export async function createCompanyStructureDraft(client, guild, ownerId) {
     config: structuredClone(config),
     snapshot,
     overrides: {},
+    pendingRosterNamesByUserId: {},
   };
   draftStore.set(draft.id, draft);
   while (draftStore.size > 100) draftStore.delete(draftStore.keys().next().value);
@@ -471,14 +504,27 @@ export function deleteCompanyStructureDraft(draftId) {
 }
 
 export function getDraftSnapshotView(draft) {
+  const pendingNames = draft.pendingRosterNamesByUserId || {};
   return {
     ...draft.snapshot,
-    sections: draft.snapshot.sections.map(section => ({
-      ...section,
-      members: Object.hasOwn(draft.overrides, section.key)
+    rosterNamesByUserId: {
+      ...(draft.snapshot.rosterNamesByUserId || {}),
+      ...pendingNames,
+    },
+    sections: draft.snapshot.sections.map(section => {
+      const memberEntries = Array.isArray(section.memberEntries)
+        ? section.memberEntries.map(entry => ({
+            ...entry,
+            displayName: pendingNames[String(entry.userId)] || entry.displayName,
+          }))
+        : [];
+      const members = Object.hasOwn(draft.overrides, section.key)
         ? [...draft.overrides[section.key]]
-        : [...section.members],
-    })),
+        : (memberEntries.length > 0
+          ? memberEntries.map(entry => entry.displayName)
+          : [...section.members]);
+      return { ...section, memberEntries, members };
+    }),
   };
 }
 
@@ -487,11 +533,52 @@ export function setCompanyStructureDraftRoster(draft, sectionKey, rawText) {
   if (!section) throw new Error('That category is unavailable in this preview.');
   const names = String(rawText || '')
     .split(/\r?\n/)
-    .map(line => line.replace(/^\s*(?:[•*-]\s*)/, '').trim())
-    .filter(Boolean)
-    .map(safeDisplayName);
+    .map(line => normalizeRosterName(line.replace(/^\s*(?:[•*-]\s*)/, '').trim()))
+    .filter(Boolean);
   if (names.length > 100) throw new Error('A category can contain at most 100 manually edited preview entries.');
-  draft.overrides[sectionKey] = [...new Set(names)];
+
+  // Keep the editor forgiving: it accepts both a normal display name and
+  // names copied from older embeds that already contain Markdown backslashes.
+  const oldEntries = Array.isArray(section.memberEntries) ? section.memberEntries : [];
+  const matchForInput = new Array(names.length).fill(null);
+  const usedUserIds = new Set();
+
+  // First preserve identities for unchanged names, even when the roster was reordered.
+  for (let inputIndex = 0; inputIndex < names.length; inputIndex += 1) {
+    const normalizedInput = names[inputIndex].toLocaleLowerCase('id');
+    const match = oldEntries.find(entry =>
+      !usedUserIds.has(String(entry.userId))
+      && String(entry.displayName).toLocaleLowerCase('id') === normalizedInput,
+    );
+    if (match) {
+      matchForInput[inputIndex] = match;
+      usedUserIds.add(String(match.userId));
+    }
+  }
+
+  // If the line count is unchanged, treat remaining unmatched lines as renames
+  // of the remaining members. With a changed line count, do not guess identity.
+  const remainingInputs = matchForInput
+    .map((entry, index) => entry ? -1 : index)
+    .filter(index => index >= 0);
+  const remainingEntries = oldEntries.filter(entry => !usedUserIds.has(String(entry.userId)));
+  if (names.length === oldEntries.length && remainingInputs.length === remainingEntries.length) {
+    remainingInputs.forEach((inputIndex, index) => {
+      const entry = remainingEntries[index];
+      matchForInput[inputIndex] = entry;
+      usedUserIds.add(String(entry.userId));
+    });
+  }
+
+  draft.pendingRosterNamesByUserId ??= {};
+  for (let index = 0; index < matchForInput.length; index += 1) {
+    const entry = matchForInput[index];
+    if (entry?.userId) {
+      draft.pendingRosterNamesByUserId[String(entry.userId)] = names[index];
+    }
+  }
+
+  draft.overrides[sectionKey] = names;
 }
 
 export async function publishCompanyStructureDraft(client, draft) {
@@ -516,16 +603,13 @@ export async function publishCompanyStructureDraft(client, draft) {
   // Publish the reviewed preview snapshot instead of issuing a second opcode-8
   // guild-member request. The config timestamp check above ensures its category
   // configuration still matches the draft; roster edits are applied below.
-  const snapshot = structuredClone(draft.snapshot);
-  if (snapshot.missingRoles.length > 0) {
+  if (draft.snapshot.missingRoles.length > 0) {
     throw new Error('Publishing is blocked because one or more configured Discord roles were missing in the preview. Run /cs update again before publishing.');
   }
 
-  for (const [sectionKey, names] of Object.entries(draft.overrides)) {
-    const section = snapshot.sections.find(item => item.key === sectionKey);
-    if (section) section.members = [...names];
-  }
-
+  // Use the preview's roster edits and apply a renamed member consistently to
+  // every category where the same Discord user ID appears.
+  const snapshot = getDraftSnapshotView(draft);
   const embeds = buildCompanyStructureEmbeds(snapshot, currentConfig, { preview: false });
   const channel = await client.channels.fetch(currentConfig.channelId).catch(() => null);
   if (!channel || !channel.isTextBased() || channel.isDMBased() || typeof channel.send !== 'function') {
@@ -559,6 +643,11 @@ export async function publishCompanyStructureDraft(client, draft) {
 
   const persistedConfig = {
     ...currentConfig,
+    rosterNamesByUserId: {
+      ...(currentConfig.rosterNamesByUserId || {}),
+      ...(draft.snapshot.rosterNamesByUserId || {}),
+      ...(draft.pendingRosterNamesByUserId || {}),
+    },
     messageId: message.id,
     messageChannelId: currentConfig.channelId,
     lastUpdatedAt: new Date().toISOString(),

@@ -304,10 +304,10 @@ export async function openAutoResponderPanel(message, client) {
     return message.channel.send(buildDashboardPayload(config));
 }
 
-export async function handleAutoResponderMessage(message, client) {
+export async function handleAutoResponderMessage(message, client, guildConfigOverride = null) {
     if (!message || message.author?.bot || !message.guild) return false;
 
-    const guildConfig = await getGuildConfig(client, message.guild.id).catch(() => null);
+    const guildConfig = guildConfigOverride || await getGuildConfig(client, message.guild.id).catch(() => null);
     const managementPrefix = guildConfig?.prefix || getCommandPrefix();
     const trimmed = String(message.content || '').trim();
 
@@ -475,7 +475,7 @@ async function handleButton(interaction) {
     }
     if (id.startsWith('skaw_ar_back_list:')) {
         const config = await getAutoResponderConfig(interaction.client, interaction.guildId);
-        return interaction.update(buildListPayload(config, Number(arg || 0)));
+        return interaction.update(buildListPayload(config, Number(id.split(':')[1] || 0)));
     }
     return false;
 }
@@ -590,7 +590,6 @@ async function handleModal(interaction) {
             if (updated.embed.imageUrl && !/^https:\/\//i.test(updated.embed.imageUrl)) return interaction.reply({ content: 'Image URL harus menggunakan HTTPS.', flags: MessageFlags.Ephemeral });
             if (!/^#?[0-9a-f]{6}$/i.test(updated.embed.color)) return interaction.reply({ content: 'Warna Embed harus berupa hex 6 karakter, misalnya #2563EB.', flags: MessageFlags.Ephemeral });
         }
-        updated.enabled = false;
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const result = await upsertAutoResponderTemplate(interaction.client, interaction.guildId, updated, interaction.user.id);
         await updatePanelMessage(interaction.client, interaction.guildId, channelId, messageId, buildTemplateDetailPayload(result.config, result.template)).catch(() => {});

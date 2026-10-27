@@ -91,10 +91,17 @@ const publishButton = {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     try {
       const result = await publishCompanyStructureDraft(client, draft);
-      deleteCompanyStructureDraft(draftId);
       const message = result.action === 'edited'
         ? 'The existing Company Structure message was updated.'
         : 'The Company Structure message was published.';
+      if (draft.previewMessage?.editable) {
+        await draft.previewMessage.edit({
+          content: '✅ ' + message + ' Destination: <#' + result.channelId + '>',
+          components: [],
+          allowedMentions: { parse: [] },
+        }).catch(() => {});
+      }
+      deleteCompanyStructureDraft(draftId);
       const persistenceNote = result.configSaved
         ? ''
         : '\n⚠️ The message was published, but its ID could not be saved. Check the database before the next update to avoid a duplicate.';

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildCompanyStructureEmbeds, buildCompanyStructureSnapshot, createCompanyStructureDraft, getCompanyStructureDraft, deleteCompanyStructureDraft, setCompanyStructureDraftRoster } from '../src/services/companyStructureService.js';
+import { buildCompanyStructureEmbeds, buildCompanyStructureSnapshot, createCompanyStructureDraft, getCompanyStructureDraft, deleteCompanyStructureDraft, setCompanyStructureDraftRoster, publishCompanyStructureDraft } from '../src/services/companyStructureService.js';
 
 const ROLE = Object.freeze({
   ceo: '1432365826136080625',
@@ -196,8 +196,17 @@ test('saved roster names are stable by Discord user ID while role membership rem
   };
   members[0].displayName = 'Kevin_New_Discord_Display';
   members[1].displayName = 'Maya_New_Discord_Display';
+  guild.id = config.guildId;
 
-  const snapshot = await buildCompanyStructureSnapshot(guild, config);
+  let storedConfig = { ...config, updatedAt: new Date().toISOString() };
+  const client = {
+    db: {
+      get: async () => storedConfig,
+      set: async (_key, value) => { storedConfig = value; return true; },
+    },
+  };
+  const draft = await createCompanyStructureDraft(client, guild, '333333333333333333');
+  const snapshot = draft.snapshot;
   const byKey = Object.fromEntries(snapshot.sections.map(section => [section.key, section]));
 
   assert.deepEqual(byKey.ceo.members, ['Kevin_Previous_Name']);
@@ -205,6 +214,7 @@ test('saved roster names are stable by Discord user ID while role membership rem
   assert.deepEqual(byKey['workshop-1'].members, ['Kevin_Previous_Name']);
   assert.equal(byKey.ceo.memberEntries[0].userId, kevinId);
   assert.equal(snapshot.rosterNamesByUserId[kevinId], 'Kevin_Previous_Name');
+  deleteCompanyStructureDraft(draft.id);
 });
 
 test('roster names replace spaces with one underscore and accept old Markdown-escaped names', async () => {
@@ -261,4 +271,34 @@ test('a member who loses a workshop role is removed from that workshop while the
   assert.deepEqual(byKey['workshop-1'].members, []);
   assert.deepEqual(byKey.ceo.members, ['Kevin_Saved_Name']);
   assert.equal(snapshot.rosterNamesByUserId[kevinId], 'Kevin_Saved_Name');
+});
+
+
+test('publishing persists newly discovered canonical names by Discord user ID', async () => {
+  const { guild, config } = makeRuntime();
+  guild.id = config.guildId;
+  let storedConfig = { ...config, updatedAt: new Date().toISOString(), channelId: '555555555555555555', bannerUrl: null };
+  const publishedMessage = { id: '666666666666666666' };
+  const channel = {
+    isTextBased: () => true,
+    isDMBased: () => false,
+    send: async () => publishedMessage,
+  };
+  const client = {
+    db: {
+      get: async () => storedConfig,
+      set: async (_key, value) => { storedConfig = value; return true; },
+    },
+    guilds: { fetch: async () => guild },
+    channels: { fetch: async () => channel },
+  };
+
+  const draft = await createCompanyStructureDraft(client, guild, '333333333333333333');
+  const result = await publishCompanyStructureDraft(client, draft);
+
+  assert.equal(result.configSaved, true);
+  assert.equal(storedConfig.messageId, publishedMessage.id);
+  assert.equal(storedConfig.rosterNamesByUserId['111111111111111111'], 'Kevin_Monterrey');
+  assert.equal(storedConfig.rosterNamesByUserId['222222222222222222'], 'Maya_Florenzia');
+  deleteCompanyStructureDraft(draft.id);
 });

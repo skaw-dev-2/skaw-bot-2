@@ -12,8 +12,8 @@ const BRAND_BLUE = 0x2563eb;
 const SNOWFLAKE_RE = /^\d{17,20}$/;
 
 export const EMPLOYEE_LOG_TYPES = Object.freeze({
-    sign_in: { label: 'Employee Sign In', shortLabel: 'Sign In', title: 'EMPLOYEE SIGN-IN', emoji: '🟢', subtitle: 'OFFICIAL PERSONNEL RECORD', channelLabel: 'Sign In channel', roleFields: ['position'], bannerEvent: 'employee-sign-in', actorLabel: 'Recorded by' },
-    sign_out: { label: 'Employee Sign Out', shortLabel: 'Sign Out', title: 'EMPLOYEE SIGN-OUT', emoji: '🔵', subtitle: 'OFFICIAL PERSONNEL RECORD', channelLabel: 'Sign Out channel', roleFields: ['position'], bannerEvent: 'employee-sign-out', actorLabel: 'Recorded by' },
+    sign_in: { label: 'Employee Sign In', shortLabel: 'Sign In', title: 'EMPLOYEE SIGN-IN', emoji: '🟢', subtitle: 'OFFICIAL PERSONNEL RECORD', channelLabel: 'Sign In channel', roleFields: ['division', 'position'], bannerEvent: 'employee-sign-in', actorLabel: 'Recorded by' },
+    sign_out: { label: 'Employee Sign Out', shortLabel: 'Sign Out', title: 'EMPLOYEE SIGN-OUT', emoji: '🔵', subtitle: 'OFFICIAL PERSONNEL RECORD', channelLabel: 'Sign Out channel', roleFields: ['division', 'position'], bannerEvent: 'employee-sign-out', actorLabel: 'Recorded by' },
     promotion: { label: 'Employee Promotion Letter', shortLabel: 'Promotion', title: 'EMPLOYEE PROMOTION', emoji: '🏆', subtitle: 'CAREER DEVELOPMENT', channelLabel: 'Promotion channel', roleFields: ['previousRank', 'newRank'], bannerEvent: 'promotion', actorLabel: 'Issued by' },
     demote: { label: 'Employee Demotion Notice', shortLabel: 'Demote', title: 'EMPLOYEE DEMOTION', emoji: '🔻', subtitle: 'PERSONNEL STATUS UPDATE', channelLabel: 'Demotion channel', roleFields: ['previousRank', 'newRank'], bannerEvent: 'demotion', actorLabel: 'Issued by' },
     dismissal: { label: 'Employee Dismissal Notice', shortLabel: 'Dismissal', title: 'EMPLOYEE DISMISSAL', emoji: '⛔', subtitle: 'EMPLOYMENT TERMINATION', channelLabel: 'Dismissal channel', roleFields: ['position'], bannerEvent: 'dismissal', actorLabel: 'Issued by' },
@@ -222,6 +222,13 @@ function getReasonLabel(type) {
     return 'Reason';
 }
 
+const EXIT_REASON_CATEGORY_LABELS = Object.freeze({
+    dismissal: 'Dismissal',
+    personal_resignation: 'Personal Resignation',
+    blacklist: 'Blacklist',
+    others: 'Others',
+});
+
 export function buildEmployeeLogBody(type, data = {}) {
     const template = EMPLOYEE_LOG_TYPES[type];
     if (!template) throw new Error('Jenis log tidak valid.');
@@ -236,10 +243,20 @@ export function buildEmployeeLogBody(type, data = {}) {
         if (reason) lines.push(`**${label}:** ${reason}`);
     };
 
-    if (type === 'sign_in' || type === 'sign_out') {
+    if (type === 'sign_in') {
         lines.push(`**Employee:** ${employee}`);
-        addPosition();
+        addPosition('Division', data.division);
+        addPosition('Position', data.position);
         addReason();
+    } else if (type === 'sign_out') {
+        lines.push(`**Employee:** ${employee}`);
+        addPosition('Division', data.division);
+        addPosition('Position', data.position);
+        const category = EXIT_REASON_CATEGORY_LABELS[data.reasonCategory] || '';
+        if (category) lines.push(`**Reason:** ${category}`);
+        else if (reason) addReason();
+        else lines.push('**Reason:** Belum ditentukan');
+        if (category && reason) lines.push(`**Reason Details:** ${reason}`);
     } else if (type === 'resignation') {
         lines.push(`**Employee:** ${employee}`);
         addPosition();
@@ -419,7 +436,7 @@ async function saveEmployeeLogRecord(client, guildId, record) {
     await client.db.set(RECORD_KEY(guildId, record.recordId), record);
 }
 
-export async function updateEmployeeLogRecord(client, guildId, recordId, { reason = '', notes = '' } = {}, updatedBy = null) {
+export async function updateEmployeeLogRecord(client, guildId, recordId, input = {}, updatedBy = null) {
     const record = await getEmployeeLogRecord(client, guildId, recordId);
     if (!record) throw new Error('Record data was not found or is no longer editable.');
     if (record.guildId !== String(guildId)) throw new Error('This record belongs to another server.');
@@ -430,14 +447,25 @@ export async function updateEmployeeLogRecord(client, guildId, recordId, { reaso
     const message = await channel.messages.fetch(record.messageId).catch(() => null);
     if (!message || message.author?.id !== client.user?.id) throw new Error('The original Employee Logs message is unavailable or is not owned by this bot.');
 
-    const nextReason = cleanText(reason, 'Reason', { required: false, maxLength: 900 });
-    const nextNotes = cleanText(notes, 'Additional Notes', { required: false, maxLength: 900 });
+    const has = key => Object.prototype.hasOwnProperty.call(input || {}, key);
+    const nextReason = cleanText(has('reason') ? input.reason : (record.data?.reason || ''), 'Reason', { required: false, maxLength: 900 });
+    const nextNotes = cleanText(has('notes') ? input.notes : (record.data?.notes || ''), 'Additional Notes', { required: false, maxLength: 900 });
+    const categoryCandidate = has('reasonCategory') ? String(input.reasonCategory || '') : String(record.data?.reasonCategory || '');
+    const nextReasonCategory = Object.hasOwn(EXIT_REASON_CATEGORY_LABELS, categoryCandidate) ? categoryCandidate : '';
+    const nextDivision = String(has('division') ? (input.division || '') : (record.data?.division || ''));
+    const nextPosition = String(has('position') ? (input.position || '') : (record.data?.position || ''));
     const previousReason = String(record.data?.reason || '');
     const previousNotes = String(record.data?.notes || '');
+    const previousReasonCategory = String(record.data?.reasonCategory || '');
+    const previousDivision = String(record.data?.division || '');
+    const previousPosition = String(record.data?.position || '');
     const editedAt = new Date().toISOString();
     const changes = {};
     if (previousReason !== nextReason) changes.reason = { before: previousReason, after: nextReason };
     if (previousNotes !== nextNotes) changes.notes = { before: previousNotes, after: nextNotes };
+    if (previousReasonCategory !== nextReasonCategory) changes.reasonCategory = { before: previousReasonCategory, after: nextReasonCategory };
+    if (previousDivision !== nextDivision) changes.division = { before: previousDivision, after: nextDivision };
+    if (previousPosition !== nextPosition) changes.position = { before: previousPosition, after: nextPosition };
     const editHistory = Array.isArray(record.editHistory) ? [...record.editHistory] : [];
     if (Object.keys(changes).length) {
         editHistory.push({
@@ -452,21 +480,24 @@ export async function updateEmployeeLogRecord(client, guildId, recordId, { reaso
             ...record.data,
             reason: nextReason,
             notes: nextNotes,
+            reasonCategory: nextReasonCategory,
+            division: nextDivision,
+            position: nextPosition,
             recordId: record.recordId,
             recordedAt: record.publishedAt,
         },
         editHistory: editHistory.slice(-100),
-        updatedAt: editedAt,
-        updatedBy: updatedBy ? String(updatedBy) : null,
+        updatedAt: Object.keys(changes).length ? editedAt : record.updatedAt || null,
+        updatedBy: Object.keys(changes).length && updatedBy ? String(updatedBy) : record.updatedBy || null,
     };
+    if (!Object.keys(changes).length) return { message, record };
     const config = await getEmployeeLogsConfig(client, guildId);
     const embed = buildEmployeeLogEmbed(record.type, nextRecord.data, record.bannerUrl || resolveEmployeeLogsBanner(config, record.type));
-    const existing = record;
     await saveEmployeeLogRecord(client, guildId, nextRecord);
     try {
         await message.edit({ embeds: [embed], components: [buildEmployeeLogEditRow(recordId)], allowedMentions: { parse: [] } });
     } catch (error) {
-        await saveEmployeeLogRecord(client, guildId, existing).catch(() => {});
+        await saveEmployeeLogRecord(client, guildId, record).catch(() => {});
         throw error;
     }
     const guild = client.guilds?.cache?.get?.(String(guildId)) || null;
@@ -475,7 +506,6 @@ export async function updateEmployeeLogRecord(client, guildId, recordId, { reaso
     });
     return { message, record: nextRecord };
 }
-
 export async function sendEmployeeLog(client, guild, type, data) {
     const template = EMPLOYEE_LOG_TYPES[type];
     if (!template) throw new Error('Jenis log tidak valid.');

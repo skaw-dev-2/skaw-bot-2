@@ -249,9 +249,6 @@ async function findAuditActor(guild, memberId, addedIds, removedIds) {
     return null;
 }
 
-const pendingRoleChanges = new Map();
-const ROLE_CHANGE_COALESCE_MS = 1_200;
-
 function directoryPositionRole(profile, catalog) {
     const position = profile?.currentPosition;
     const id = String(position?.id || '');

@@ -548,8 +548,9 @@ export async function sendEmployeeLog(client, guild, type, data) {
     const bannerUrl = resolveEmployeeLogsBanner(config, type);
     const embed = buildEmployeeLogEmbed(type, publishedData, bannerUrl);
     const allowedMentions = { parse: [] };
-    // Send first without components. The Edit button is attached only after its durable record is saved.
-    const message = await channel.send({ embeds: [embed], allowedMentions });
+    // recordId is available before sending, so include Edit/Audit controls in the initial
+    // API request. Automatic role logs should never depend on a second message edit to expose them.
+    const message = await channel.send({ embeds: [embed], components: [buildEmployeeLogEditRow(recordId)], allowedMentions });
 
     const record = {
         guildId: String(guild.id),
@@ -567,22 +568,22 @@ export async function sendEmployeeLog(client, guild, type, data) {
     };
     let editButtonAttached = false;
     try {
+        // The controls are already attached in channel.send; persist the record before
+        // treating the published log as complete.
         await saveEmployeeLogRecord(client, guild.id, record);
-        await message.edit({ components: [buildEmployeeLogEditRow(recordId)], allowedMentions });
         editButtonAttached = true;
     } catch (recordError) {
-        // A published record without a durable Edit button violates this feature's
-        // contract. Attempt to roll back the public message rather than silently
-        // publish an incomplete record. If the channel forbids deletion, log it.
+        // A clickable record must have durable storage. Roll back the public message
+        // if persistence fails so the Edit button cannot point to a missing record.
         await message.delete().catch(deleteError => {
-            console.error('[Employee Logs] Could not roll back a record whose Edit state failed:', deleteError?.message || deleteError);
+            console.error('[Employee Logs] Could not roll back a record whose durable save failed:', deleteError?.message || deleteError);
         });
         if (typeof client.db.delete === 'function') {
             await client.db.delete(RECORD_KEY(guild.id, recordId)).catch(() => {});
         } else {
             await client.db.set(RECORD_KEY(guild.id, recordId), null).catch(() => {});
         }
-        throw new Error(`Employee Log could not be safely published with its Edit button: ${recordError?.message || recordError}`);
+        throw new Error(`Employee Log could not be safely published because its durable record could not be saved: ${recordError?.message || recordError}`);
     }
 
     await upsertEmployeeDirectoryFromLog(client, guild, record).catch(directoryError => {
@@ -616,3 +617,75 @@ export async function getEmployeeLogAudit(client, guildId, { type = null, limit 
     return filtered.slice(-Math.max(1, Math.min(1000, Number(limit) || 10))).reverse();
 }
 
+/**
+ * Restore Edit/Audit controls on already-published warning records that lost their
+ * component row. The durable audit entries let us find the original message without
+ * creating a duplicate warning or changing its Record ID.
+ */
+export async function repairEmployeeLogEditButtons(client, guildId, { type = 'warning', limit = 1000 } = {}) {
+    if (!client?.db) throw new Error('Database belum siap.');
+    if (!Object.hasOwn(EMPLOYEE_LOG_TYPES, type)) throw new Error('Jenis employee log tidak dikenal.');
+
+    const entries = await getEmployeeLogAudit(client, guildId, { type, limit });
+    const result = {
+        scanned: entries.length,
+        repaired: 0,
+        alreadyComplete: 0,
+        missingRecords: 0,
+        missingMessages: 0,
+        failed: 0,
+    };
+
+    for (const entry of entries) {
+        const recordId = String(entry?.recordId || '');
+        if (!recordId) {
+            result.missingRecords++;
+            continue;
+        }
+
+        const record = await getEmployeeLogRecord(client, guildId, recordId).catch(() => null);
+        if (!record || String(record.guildId) !== String(guildId) || record.type !== type) {
+            result.missingRecords++;
+            continue;
+        }
+
+        const channelId = String(record.channelId || entry.channelId || '');
+        const messageId = String(record.messageId || entry.messageId || '');
+        const channel = await client.channels.fetch(channelId).catch(() => null);
+        if (!channel || !channel.isTextBased?.() || channel.isDMBased?.()
+            || String(channel.guildId) !== String(guildId) || typeof channel.messages?.fetch !== 'function') {
+            result.missingMessages++;
+            continue;
+        }
+
+        const message = await channel.messages.fetch(messageId).catch(() => null);
+        if (!message || String(message.author?.id || '') !== String(client.user?.id || '')) {
+            result.missingMessages++;
+            continue;
+        }
+
+        const existingIds = new Set((message.components || [])
+            .flatMap(row => row.components || [])
+            .map(component => component.customId)
+            .filter(Boolean));
+        const editId = 'skaw_el_edit_record:' + recordId;
+        const auditId = 'skaw_el_audit_record:' + recordId;
+        if (existingIds.has(editId) && existingIds.has(auditId)) {
+            result.alreadyComplete++;
+            continue;
+        }
+
+        try {
+            await message.edit({
+                components: [buildEmployeeLogEditRow(recordId)],
+                allowedMentions: { parse: [] },
+            });
+            result.repaired++;
+        } catch (error) {
+            result.failed++;
+            console.warn('[Employee Logs] Could not restore warning Edit controls for ' + recordId + ':', error?.message || error);
+        }
+    }
+
+    return result;
+}

@@ -240,7 +240,13 @@ export async function buildCompanyStructureSnapshot(guild, config) {
 }
 
 function renderStructureText(snapshot) {
-  const visibleSections = snapshot.sections.filter(section => section.enabled && section.roleExists && section.members.length > 0);
+  // Empty workshops remain visible as N/A to match SKAW's existing structure
+  // format. Other empty categories are omitted to keep the message compact.
+  const visibleSections = snapshot.sections.filter(section =>
+    section.enabled
+      && section.roleExists
+      && (section.members.length > 0 || section.kind === 'workshop'),
+  );
   if (visibleSections.length === 0) {
     return 'No members currently match the configured Company Structure roles.';
   }
@@ -249,7 +255,9 @@ function renderStructureText(snapshot) {
     const heading = section.customTitle
       ? '**' + safeDisplayName(section.title) + '**'
       : '**<@&' + section.roleId + '>**';
-    const memberLines = section.members.map(name => '• ' + name).join('\n');
+    const memberLines = section.members.length > 0
+      ? section.members.map(name => '• ' + name).join('\n')
+      : 'N/A';
     return heading + '\n' + memberLines;
   }).join('\n\n');
 }

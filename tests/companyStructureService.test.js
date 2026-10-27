@@ -125,32 +125,50 @@ test('unassigned mechanics stay in Mechanic Division while empty workshop sectio
 });
 
 
-test('Mechanic Division shows every assigned Workshop role inline without separate workshop lists', async () => {
+test('Mechanic Division roster sorts by lowest Workshop number and shows multiple assignments inline', async () => {
   const { guild, config, sourceMembers } = makeRuntime();
   config.sections = config.sections.map(section => ({ ...section }));
   const workshop2Id = '1436228814949715998';
+  const workshop3Id = '1436228874823405589';
   guild.roles.cache.set(workshop2Id, { id: workshop2Id, name: 'Workshop 2' });
-  config.sections.push({
-    key: 'workshop-2',
-    title: 'Workshop 2',
-    roleId: workshop2Id,
-    kind: 'workshop',
-    order: 312,
-    enabled: true,
-  });
+  guild.roles.cache.set(workshop3Id, { id: workshop3Id, name: 'Workshop 3' });
+  config.sections.push(
+    {
+      key: 'workshop-2',
+      title: 'Workshop 2',
+      roleId: workshop2Id,
+      kind: 'workshop',
+      order: 312,
+      enabled: true,
+    },
+    {
+      key: 'workshop-3',
+      title: 'Workshop 3',
+      roleId: workshop3Id,
+      kind: 'workshop',
+      order: 313,
+      enabled: true,
+    },
+  );
+
+  // Kevin sorts alphabetically first, but belongs to Workshop 2.
+  sourceMembers[0].roles = sourceMembers[0].roles.filter(roleId => roleId !== ROLE.workshop1);
   sourceMembers[0].roles.push(workshop2Id);
-  sourceMembers[1].roles.push(ROLE.mechanicDivision, ROLE.workshop1, workshop2Id);
+  // Maya belongs to Workshop 1 and Workshop 3, so her lowest Workshop wins.
+  sourceMembers[1].roles.push(ROLE.mechanicDivision, ROLE.workshop1, workshop3Id);
   sourceMembers[1].roles = [...new Set(sourceMembers[1].roles)];
 
   const snapshot = await buildCompanyStructureSnapshot(guild, config);
   const embeds = buildCompanyStructureEmbeds(snapshot, { ...config, bannerUrl: null, lastUpdatedAt: null });
   const description = embeds.map(embed => embed.toJSON().description || '').join('\n');
+  const mechanicBlock = description.split('**<@&1414623229288513586>**\n')[1]?.split('\n\n> **')[0];
 
-  assert.match(description, /<@&1414623229288513586>/);
-  assert.ok(description.includes('• Kevin\\_Monterrey (<@&1436228415492456448>, <@&1436228814949715998>)'));
-  assert.ok(description.includes('• Maya\\_Florenzia (<@&1436228415492456448>, <@&1436228814949715998>)'));
+  assert.ok(mechanicBlock);
+  assert.ok(mechanicBlock.indexOf('• Maya\\_Florenzia (<@&1436228415492456448>, <@&1436228874823405589>)')
+    < mechanicBlock.indexOf('• Kevin\\_Monterrey (<@&1436228814949715998>)'));
   assert.ok(!description.includes('**<@&1436228415492456448>**'));
   assert.ok(!description.includes('**<@&1436228814949715998>**'));
+  assert.ok(!description.includes('**<@&1436228874823405589>**'));
   assert.deepEqual(snapshot.workshopConflicts, []);
 });
 

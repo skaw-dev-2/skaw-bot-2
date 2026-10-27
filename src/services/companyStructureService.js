@@ -343,9 +343,22 @@ function renderStructureText(snapshot) {
     section.kind !== 'management' && section.kind !== 'managementFallback',
   );
 
+  const workshopNumber = section => {
+    const label = String(section.title || '') + ' ' + String(section.key || '');
+    const match = label.match(/(?:workshop|ws)[ _-]*#?([0-9]+)/i);
+    return match ? Number(match[1]) : null;
+  };
   const workshopSections = snapshot.sections
     .filter(section => section.enabled && section.roleExists && section.kind === 'workshop')
-    .sort((a, b) => a.order - b.order);
+    .sort((a, b) => {
+      const aNumber = workshopNumber(a);
+      const bNumber = workshopNumber(b);
+      if (aNumber !== null && bNumber !== null && aNumber !== bNumber) return aNumber - bNumber;
+      if (aNumber !== null && bNumber === null) return -1;
+      if (aNumber === null && bNumber !== null) return 1;
+      return a.order - b.order;
+    });
+  const workshopRoleOrder = new Map(workshopSections.map((section, index) => [section.roleId, index]));
   const workshopRoleIdsByUserId = new Map();
   for (const workshop of workshopSections) {
     for (const entry of workshop.memberEntries || []) {
@@ -373,17 +386,38 @@ function renderStructureText(snapshot) {
       nameQueuesByName.set(key, queue);
     }
 
-    const memberLines = section.members.length > 0
-      ? section.members.map(name => {
+    const memberRows = section.members.map(name => {
+      // Match a display name back to its member ID so manual roster edits
+      // can retain saved identities and Workshop assignments.
+      const queue = nameQueuesByName.get(normalizeRosterName(name));
+      const entry = queue?.shift();
+      const workshopRoleIds = section.key === 'mechanic-division' && entry?.userId
+        ? (workshopRoleIdsByUserId.get(String(entry.userId)) || [])
+        : [];
+      return { name, entry, workshopRoleIds };
+    });
+
+    if (section.key === 'mechanic-division') {
+      // Primary sort is the lowest-numbered Workshop role on the mechanic.
+      // Multi-Workshop mechanics appear in that earliest Workshop's position;
+      // mechanics without a Workshop role are placed at the bottom.
+      memberRows.sort((a, b) => {
+        const aRank = a.workshopRoleIds.length > 0
+          ? Math.min(...a.workshopRoleIds.map(roleId => workshopRoleOrder.get(roleId) ?? Number.MAX_SAFE_INTEGER))
+          : Number.MAX_SAFE_INTEGER;
+        const bRank = b.workshopRoleIds.length > 0
+          ? Math.min(...b.workshopRoleIds.map(roleId => workshopRoleOrder.get(roleId) ?? Number.MAX_SAFE_INTEGER))
+          : Number.MAX_SAFE_INTEGER;
+        return aRank - bRank
+          || a.name.localeCompare(b.name, 'id', { sensitivity: 'base' })
+          || String(a.entry?.userId || '').localeCompare(String(b.entry?.userId || ''));
+      });
+    }
+
+    const memberLines = memberRows.length > 0
+      ? memberRows.map(({ name, workshopRoleIds }) => {
           let line = '• ' + escapeMarkdownText(name);
           if (section.key === 'mechanic-division') {
-            // Match the displayed name back to its member ID, then include
-            // every configured Workshop role the member currently has.
-            const queue = nameQueuesByName.get(normalizeRosterName(name));
-            const entry = queue?.shift();
-            const workshopRoleIds = entry?.userId
-              ? (workshopRoleIdsByUserId.get(String(entry.userId)) || [])
-              : [];
             const assignment = workshopRoleIds.length > 0
               ? workshopRoleIds.map(roleId => '<@&' + roleId + '>').join(', ')
               : 'Belum ditempatkan';

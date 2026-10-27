@@ -40,11 +40,6 @@ import {
     getEmployeeRoleRegistry,
     registerEmployeeRole,
     disableEmployeeRole,
-    getEmployeeExitReview,
-    listEmployeeExitReviews,
-    claimEmployeeExitReview,
-    releaseEmployeeExitReview,
-    completeEmployeeExitReview,
 } from './employeeRoleRegistryService.js';
 import { SKAW_EMPLOYEE_ROLE_CATALOG } from './employeeLogsAutoRoleService.js';
 import { formatDirectoryTimestamp, searchEmployeeDirectory, getEmployeeDirectoryIndex, syncEmployeeDirectoryMembership } from './employeeDirectoryService.js';
@@ -83,7 +78,7 @@ function getSession(interaction, id) {
     return session;
 }
 function roleFieldLabel(field) {
-    return ({ position: 'Position / jabatan', previousRank: 'Previous Rank', newRank: 'New Rank', fromRole: 'Previous Position', toRole: 'New Position' })[field] || 'Position';
+    return ({ division: 'Division / divisi', position: 'Position / jabatan', previousRank: 'Previous Rank', newRank: 'New Rank', fromRole: 'Previous Position', toRole: 'New Position' })[field] || 'Position';
 }
 function userSelectRow(session) {
     return new ActionRowBuilder().addComponents(new UserSelectMenuBuilder()
@@ -147,13 +142,37 @@ function previewButtons(sessionId) {
 }
 
 function buildPublishedRecordEditModal(record) {
+    const isSignOut = record.type === 'sign_out';
     return new ModalBuilder()
         .setCustomId(`skaw_el_edit_record_modal:${record.recordId}`)
         .setTitle('Edit Employee Log')
         .addComponents(
-            textInput('editReason', 'Reason (optional)', 'Add or update the reason.', false, TextInputStyle.Paragraph, 900, record.data?.reason || ''),
+            textInput('editReason', isSignOut ? 'Reason Details (optional)' : 'Reason (optional)', isSignOut ? 'Add details about the selected exit reason.' : 'Add or update the reason.', false, TextInputStyle.Paragraph, 900, record.data?.reason || ''),
             textInput('editNotes', 'Additional Notes (optional)', 'Add or update additional notes.', false, TextInputStyle.Paragraph, 900, record.data?.notes || ''),
         );
+}
+
+const EXIT_REASON_CATEGORIES = [
+    { label: 'Dismissal', value: 'dismissal', description: 'Employment ended by SKAW Management.' },
+    { label: 'Personal Resignation', value: 'personal_resignation', description: 'Employee chose to resign.' },
+    { label: 'Blacklist', value: 'blacklist', description: 'Exit associated with a blacklist record.' },
+    { label: 'Others', value: 'others', description: 'Another reason not listed above.' },
+    { label: 'Belum ditentukan', value: 'unset', description: 'Clear the category and choose it later.' },
+];
+
+function buildSignOutEditControls(record) {
+    const current = String(record.data?.reasonCategory || 'unset');
+    const menu = new StringSelectMenuBuilder()
+        .setCustomId(`skaw_el_reason_category:${record.recordId}`)
+        .setPlaceholder('Pilih kategori Reason')
+        .setMinValues(1).setMaxValues(1)
+        .addOptions(EXIT_REASON_CATEGORIES.map(item => ({ ...item, default: item.value === current })));
+    return [
+        new ActionRowBuilder().addComponents(menu),
+        new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`skaw_el_edit_record_details:${record.recordId}`).setLabel('Edit Reason Details / Notes').setEmoji('✏️').setStyle(ButtonStyle.Secondary),
+        ),
+    ];
 }
 
 async function handlePublishedRecordEditButton(interaction) {
@@ -165,6 +184,36 @@ async function handlePublishedRecordEditButton(interaction) {
         || String(interaction.message?.author?.id || '') !== String(interaction.client.user?.id || '')) {
         return sendPrivate(interaction, 'This Edit button is not linked to the original Employee Log message.');
     }
+    if (record.type === 'sign_out') {
+        return interaction.reply({
+            content: 'Pilih kategori alasan Sign-Out. Untuk keterangan tambahan, buka **Edit Reason Details / Notes**.',
+            components: buildSignOutEditControls(record),
+            flags: MessageFlags.Ephemeral,
+            allowedMentions: { parse: [] },
+        });
+    }
+    return interaction.showModal(buildPublishedRecordEditModal(record));
+}
+
+async function handlePublishedRecordReasonCategory(interaction) {
+    const recordId = interaction.customId.slice('skaw_el_reason_category:'.length);
+    const record = await getEmployeeLogRecord(interaction.client, interaction.guildId, recordId);
+    if (!record || record.type !== 'sign_out') return sendPrivate(interaction, 'This Sign-Out record is no longer available to edit.');
+    const selected = interaction.values[0];
+    const reasonCategory = selected === 'unset' ? '' : selected;
+    const result = await updateEmployeeLogRecord(interaction.client, interaction.guildId, recordId, { reasonCategory }, interaction.user.id);
+    return interaction.update({
+        content: '✅ Reason category updated on the original Employee Sign-Out log. You can also edit details or notes below.',
+        embeds: [],
+        components: buildSignOutEditControls(result.record),
+        allowedMentions: { parse: [] },
+    });
+}
+
+async function handlePublishedRecordEditDetailsButton(interaction) {
+    const recordId = interaction.customId.slice('skaw_el_edit_record_details:'.length);
+    const record = await getEmployeeLogRecord(interaction.client, interaction.guildId, recordId);
+    if (!record || record.type !== 'sign_out') return sendPrivate(interaction, 'This Sign-Out record is no longer available to edit.');
     return interaction.showModal(buildPublishedRecordEditModal(record));
 }
 
@@ -195,7 +244,7 @@ async function handlePublishedRecordAuditButton(interaction) {
     for (const item of history) {
         const details = [];
         for (const [field, change] of Object.entries(item.changes || {})) {
-            const label = field === 'reason' ? 'Reason' : field === 'notes' ? 'Additional Notes' : field;
+            const label = field === 'reason' ? 'Reason Details' : field === 'reasonCategory' ? 'Reason Category' : field === 'notes' ? 'Additional Notes' : field === 'division' ? 'Division' : field === 'position' ? 'Position' : field;
             const before = escapeMarkdown(String(change?.before || '')).slice(0, 180) || '(empty)';
             const after = escapeMarkdown(String(change?.after || '')).slice(0, 180) || '(empty)';
             details.push('**' + label + ':** ' + before + ' → ' + after);
@@ -571,67 +620,6 @@ function buildRegistryForm(category, session) {
     return modal;
 }
 
-function buildExitReviewList(reviews) {
-    const embed = new EmbedBuilder()
-        .setColor(0xd97706)
-        .setTitle('PENDING EMPLOYEE EXIT REVIEWS')
-        .setDescription(reviews.length
-            ? 'These members lost the Company Staff role. Management must classify the exit before a final employee log is published.'
-            : 'No pending employee exits need review.')
-        .setFooter({ text: 'One membership exit produces one final classification.' });
-    const components = [];
-    if (reviews.length) {
-        const menu = new StringSelectMenuBuilder()
-            .setCustomId('skaw_el_exit_review_pick')
-            .setPlaceholder('Choose an employee exit to review')
-            .setMinValues(1).setMaxValues(1)
-            .addOptions(reviews.slice(0, 25).map(review => ({
-                label: (review.displayName || 'Unknown member').slice(0, 100),
-                description: review.reviewId + ' · ' + formatDirectoryTimestamp(review.detectedAt),
-                value: review.reviewId,
-            })));
-        components.push(new ActionRowBuilder().addComponents(menu));
-    }
-    components.push(new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('skaw_el_dashboard:home').setLabel('Dashboard').setStyle(ButtonStyle.Secondary)));
-    return { embeds: [embed], components, allowedMentions: { parse: [] } };
-}
-
-function buildExitReviewDetail(review) {
-    const text = [
-        '**Employee:** ' + (review.displayName || 'Unknown member') + ' (<@' + review.userId + '>)',
-        '**Review ID:** ' + review.reviewId,
-        '**Role removed:** <@&' + BASE_EMPLOYEE_ROLE.id + '>',
-        '**Detected:** ' + formatDirectoryTimestamp(review.detectedAt),
-        '**Former position:** ' + (review.formerPositionId ? '<@&' + review.formerPositionId + '>' : 'Not recorded'),
-        '',
-        'Choose one final classification. The log is only published after Management confirms the outcome.',
-    ].join('\n');
-    return {
-        embeds: [new EmbedBuilder().setColor(0xd97706).setTitle('EMPLOYEE EXIT REVIEW').setDescription(text)
-            .setFooter({ text: 'Sign Out is universal; Resignation and Dismissal explain the exit.' })],
-        components: [
-            new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setCustomId('skaw_el_exit_outcome:' + review.reviewId + ':sign_out').setLabel('Sign Out').setEmoji('🔵').setStyle(ButtonStyle.Primary),
-                new ButtonBuilder().setCustomId('skaw_el_exit_outcome:' + review.reviewId + ':resignation').setLabel('Resignation').setEmoji('📄').setStyle(ButtonStyle.Secondary),
-                new ButtonBuilder().setCustomId('skaw_el_exit_outcome:' + review.reviewId + ':dismissal').setLabel('Dismissal').setEmoji('⛔').setStyle(ButtonStyle.Danger),
-            ),
-            new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('skaw_el_dashboard:reviews').setLabel('Back to Exit Reviews').setStyle(ButtonStyle.Secondary)),
-        ],
-        allowedMentions: { parse: [] },
-    };
-}
-
-function buildExitReasonModal(reviewId, outcome) {
-    const label = outcome === 'resignation' ? 'Resignation Reason' : outcome === 'dismissal' ? 'Dismissal Reason' : 'Exit Reason (optional)';
-    const modal = new ModalBuilder()
-        .setCustomId('skaw_el_exit_form:' + reviewId + ':' + outcome)
-        .setTitle((outcome === 'sign_out' ? 'Confirm Sign Out' : outcome === 'resignation' ? 'Confirm Resignation' : 'Confirm Dismissal').slice(0, 45));
-    modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder()
-        .setCustomId('reason').setLabel(label).setPlaceholder('Enter the approved reason, if applicable.')
-        .setStyle(TextInputStyle.Paragraph).setRequired(outcome !== 'sign_out').setMaxLength(900)));
-    return modal;
-}
-
 function buildFindModal() {
     return new ModalBuilder().setCustomId('skaw_el_find_form').setTitle('Find Employee')
         .addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder()
@@ -713,13 +701,7 @@ async function handleAdminInteraction(interaction) {
                 .setFooter({ text: 'SKAW GROUP • EMPLOYEE DIRECTORY' });
             return interaction.editReply({ embeds: [summary], components: [new ActionRowBuilder().addComponents(
                 new ButtonBuilder().setCustomId('skaw_el_dashboard:home').setLabel('Dashboard').setStyle(ButtonStyle.Secondary),
-                new ButtonBuilder().setCustomId('skaw_el_dashboard:reviews').setLabel('Exit Reviews').setStyle(ButtonStyle.Danger),
             )], allowedMentions: { parse: [] } });
-        }
-        if (action === 'reviews') {
-            const reviews = await listEmployeeExitReviews(interaction.client, interaction.guildId, { status: 'pending', limit: 25 });
-            await interaction.deferUpdate();
-            return interaction.editReply(buildExitReviewList(reviews));
         }
     }
 
@@ -885,121 +867,6 @@ async function handleAdminInteraction(interaction) {
         return interaction.editReply({ content: '✅ Role mapping saved. Automatic classification will use it for future role changes.', ...buildRoleRegistryPanelPayload(next), allowedMentions: { parse: [] } });
     }
 
-    if (interaction.isStringSelectMenu?.() && id === 'skaw_el_exit_review_pick') {
-        const review = await getEmployeeExitReview(interaction.client, interaction.guildId, interaction.values[0]);
-        if (!review || review.status !== 'pending') return sendPrivate(interaction, 'This Exit Review is no longer pending.');
-        return interaction.update({ content: '', ...buildExitReviewDetail(review), allowedMentions: { parse: [] } });
-    }
-
-    if (interaction.isButton?.() && id.startsWith('skaw_el_exit_outcome:')) {
-        const parts = id.split(':');
-        const reviewId = parts[1];
-        const outcome = parts[2];
-        const review = await getEmployeeExitReview(interaction.client, interaction.guildId, reviewId);
-        if (!review || review.status !== 'pending') return sendPrivate(interaction, 'This Exit Review is no longer pending.');
-        if (!['sign_out', 'resignation', 'dismissal'].includes(outcome)) return sendPrivate(interaction, 'Unknown exit classification.');
-        return interaction.showModal(buildExitReasonModal(reviewId, outcome));
-    }
-
-    if (interaction.isModalSubmit?.() && id === 'skaw_el_default_banner_form') {
-        const url = interaction.fields.getTextInputValue('url').trim();
-        await interaction.deferUpdate();
-        await setEmployeeLogsBanner(interaction.client, interaction.guildId, url, interaction.user.id);
-        const values = await Promise.all([getEmployeeLogsConfig(interaction.client, interaction.guildId), getEmployeeAutoRoleConfig(interaction.client, interaction.guildId)]);
-        return interaction.editReply({ content: '✅ Default banner saved.', ...buildSettingsPanel(values[0], values[1]), allowedMentions: { parse: [] } });
-    }
-
-    if (interaction.isModalSubmit?.() && id.startsWith('skaw_el_event_banner_form:')) {
-        const eventKey = id.slice('skaw_el_event_banner_form:'.length);
-        if (!Object.hasOwn(EMPLOYEE_LOG_BANNER_EVENTS, eventKey)) return sendPrivate(interaction, 'Unknown event banner.');
-        const url = interaction.fields.getTextInputValue('url').trim();
-        await interaction.deferUpdate();
-        await setEmployeeLogsEventBanner(interaction.client, interaction.guildId, eventKey, url, interaction.user.id);
-        const values = await Promise.all([getEmployeeLogsConfig(interaction.client, interaction.guildId), getEmployeeAutoRoleConfig(interaction.client, interaction.guildId)]);
-        return interaction.editReply({ content: '✅ Event-specific banner saved for ' + EMPLOYEE_LOG_BANNER_EVENTS[eventKey].label + '.', ...buildSettingsPanel(values[0], values[1]), allowedMentions: { parse: [] } });
-    }
-
-    if (interaction.isModalSubmit?.() && id === 'skaw_el_find_form') {
-        const query = interaction.fields.getTextInputValue('query').trim();
-        await interaction.deferUpdate();
-        const matches = await searchEmployeeDirectory(interaction.client, interaction.guildId, query, { limit: 10 });
-        const cleanQuery = query.replace(/[\r\n]/g, ' ').slice(0, 100);
-        const embed = new EmbedBuilder().setColor(0x2563eb).setTitle('EMPLOYEE DIRECTORY SEARCH')
-            .setDescription(matches.length ? 'Results for **' + cleanQuery + '**' : 'No employee records matched **' + cleanQuery + '**.');
-        for (const record of matches.slice(0, 10)) {
-            const position = record.currentPosition?.name || record.lastKnownPosition?.name || 'Not recorded';
-            embed.addFields({
-                name: (record.displayName || 'Unknown member').slice(0, 250),
-                value: [
-                    '<@' + record.userId + '> · ' + (record.status || 'unknown').toUpperCase(),
-                    'Position: ' + position,
-                    'First Sign In: ' + formatDirectoryTimestamp(record.firstSignInAt),
-                    'Last Sign Out: ' + formatDirectoryTimestamp(record.lastSignOutAt),
-                    'History entries: ' + (Array.isArray(record.history) ? record.history.length : 0),
-                ].join('\n').slice(0, 1000),
-                inline: false,
-            });
-        }
-        return interaction.editReply({ content: '', embeds: [embed], components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('skaw_el_dashboard:home').setLabel('Dashboard').setStyle(ButtonStyle.Secondary))], allowedMentions: { parse: [] } });
-    }
-
-    if (interaction.isModalSubmit?.() && id.startsWith('skaw_el_exit_form:')) {
-        const parts = id.split(':');
-        const reviewId = parts[1];
-        const outcome = parts[2];
-        const reason = interaction.fields.getTextInputValue('reason').trim();
-        await interaction.deferUpdate();
-        let claimed = false;
-        let published = false;
-        try {
-            const review = await claimEmployeeExitReview(interaction.client, interaction.guildId, reviewId, interaction.user.id);
-            claimed = true;
-            const liveMember = await interaction.guild.members.fetch(review.userId).catch(() =>
-                interaction.guild.members.cache.get(review.userId) || null);
-            if (liveMember?.roles?.cache?.has?.(BASE_EMPLOYEE_ROLE.id)) {
-                await releaseEmployeeExitReview(interaction.client, interaction.guildId, reviewId);
-                claimed = false;
-                await cancelPendingEmployeeExitReviews(interaction.client, interaction.guildId, review.userId);
-                return interaction.editReply({
-                    content: 'This Exit Review was cancelled because Company Staff membership was restored before the final log was published.',
-                    embeds: [],
-                    components: [new ActionRowBuilder().addComponents(
-                        new ButtonBuilder().setCustomId('skaw_el_dashboard:reviews').setLabel('Back to Exit Reviews').setStyle(ButtonStyle.Secondary),
-                        new ButtonBuilder().setCustomId('skaw_el_dashboard:home').setLabel('Dashboard').setStyle(ButtonStyle.Secondary),
-                    )],
-                    allowedMentions: { parse: [] },
-                });
-            }
-            const result = await sendEmployeeLog(interaction.client, interaction.guild, outcome, {
-                userId: review.userId,
-                displayName: review.displayName,
-                position: review.formerPositionId || '',
-                reason,
-                notes: '',
-                recordedBy: interaction.user.id,
-                automatic: false,
-            });
-            published = true;
-            await completeEmployeeExitReview(interaction.client, interaction.guildId, reviewId, {
-                outcome,
-                reason,
-                recordId: result.recordId,
-                resolvedBy: interaction.user.id,
-            });
-            return interaction.editReply({
-                content: '✅ Exit Review completed as ' + EMPLOYEE_LOG_TYPES[outcome].shortLabel + '. Log sent to ' + result.channel + '.\nRecord ID: ' + result.recordId,
-                embeds: [],
-                components: [new ActionRowBuilder().addComponents(
-                    new ButtonBuilder().setCustomId('skaw_el_dashboard:reviews').setLabel('Back to Exit Reviews').setStyle(ButtonStyle.Secondary),
-                    new ButtonBuilder().setCustomId('skaw_el_dashboard:home').setLabel('Dashboard').setStyle(ButtonStyle.Secondary),
-                )],
-                allowedMentions: { parse: [] },
-            });
-        } catch (error) {
-            if (claimed && !published) await releaseEmployeeExitReview(interaction.client, interaction.guildId, reviewId).catch(() => {});
-            throw error;
-        }
-    }
     return false;
 }
 
@@ -1018,12 +885,12 @@ async function handleInteraction(interaction) {
         'skaw_el_channel_type', 'skaw_el_channel_pick:', 'skaw_el_event_banner_pick',
         'skaw_el_clear_event_banner_pick', 'skaw_el_registry_role_pick:', 'skaw_el_registry_edit_pick',
         'skaw_el_registry_disable_pick', 'skaw_el_registry_category', 'skaw_el_registry_form:',
-        'skaw_el_exit_review_pick', 'skaw_el_exit_outcome:', 'skaw_el_exit_form:',
         'skaw_el_default_banner_form', 'skaw_el_event_banner_form:', 'skaw_el_find_form',
     ];
     if (adminPrefixes.some(prefix => id.startsWith(prefix))) return handleAdminInteraction(interaction);
 
     if (interaction.isButton?.()) {
+        if (interaction.customId.startsWith('skaw_el_edit_record_details:')) return handlePublishedRecordEditDetailsButton(interaction);
         if (interaction.customId.startsWith('skaw_el_edit_record:')) return handlePublishedRecordEditButton(interaction);
         if (interaction.customId.startsWith('skaw_el_audit_record:')) return handlePublishedRecordAuditButton(interaction);
         if (interaction.customId.startsWith('skaw_el_start:')) return handleStart(interaction);
@@ -1032,6 +899,7 @@ async function handleInteraction(interaction) {
         if (interaction.customId.startsWith('skaw_el_confirm:')) return handleConfirm(interaction);
         if (interaction.customId.startsWith('skaw_el_cancel:')) return handleCancel(interaction);
     }
+    if (interaction.isStringSelectMenu?.() && interaction.customId.startsWith('skaw_el_reason_category:')) return handlePublishedRecordReasonCategory(interaction);
     if (interaction.isUserSelectMenu?.() && interaction.customId.startsWith('skaw_el_user:')) return handleUserSelect(interaction);
     if (interaction.isRoleSelectMenu?.() && interaction.customId.startsWith('skaw_el_role:')) return handleRoleSelect(interaction);
     if (interaction.isModalSubmit?.() && interaction.customId.startsWith('skaw_el_edit_record_modal:')) return handlePublishedRecordEditModal(interaction);
@@ -1046,12 +914,11 @@ export function buildEmployeeLogsPanel(config = null) {
         .setTitle('EMPLOYEE MANAGEMENT SYSTEM')
         .setDescription([
             '**CENTRAL PERSONNEL CONSOLE**',
-            'Manage employee records, role mappings, membership exits, and system configuration from one place.',
+            'Manage employee records, role mappings, automatic role classification, and system configuration from one place.',
             '',
             '• Manual logs and editable employee records',
-            '• Role Registry and automatic role classification',
-            '• Employee profile search and activity reports',
-            '• Exit review queue for Company Staff membership changes',
+            '• Instant Sign-In / Sign-Out and role-change logs',
+            '• Role Registry, employee search, and activity reports',
         ].join('\n'))
         .setFooter({ text: 'SKAW GROUP • EMPLOYEE LOGS' })
         .setTimestamp(new Date());
@@ -1066,7 +933,6 @@ export function buildEmployeeLogsPanel(config = null) {
                 new ButtonBuilder().setCustomId('skaw_el_dashboard:roles').setLabel('Role Registry').setEmoji('🏷️').setStyle(ButtonStyle.Secondary),
             ),
             new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setCustomId('skaw_el_dashboard:reviews').setLabel('Exit Reviews').setEmoji('📥').setStyle(ButtonStyle.Danger),
                 new ButtonBuilder().setCustomId('skaw_el_dashboard:sync').setLabel('Sync Members').setEmoji('🔄').setStyle(ButtonStyle.Secondary),
             ),
         ],

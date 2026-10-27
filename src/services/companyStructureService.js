@@ -349,16 +349,35 @@ function renderStructureText(snapshot) {
     return 'No members currently match the configured Company Structure roles.';
   }
 
-  return visibleSections.map(section => {
+  const managementSections = visibleSections.filter(section =>
+    section.kind === 'management' || section.kind === 'managementFallback',
+  );
+  const otherSections = visibleSections.filter(section =>
+    section.kind !== 'management' && section.kind !== 'managementFallback',
+  );
+
+  let isFirstHeading = true;
+  const renderSection = section => {
     // Always render the configured Discord role as a real role mention.
     // Category titles are management metadata; using them here would show
     // plain text instead of the role tag.
-    const heading = '**<@&' + section.roleId + '>**';
+    const heading = (isFirstHeading ? '' : '> ') + '**<@&' + section.roleId + '>**';
+    isFirstHeading = false;
+
     const memberLines = section.members.length > 0
       ? section.members.map(name => '• ' + escapeMarkdownText(name)).join('\n')
       : 'N/A';
     return heading + '\n' + memberLines;
-  }).join('\n\n');
+  };
+
+  const managementText = managementSections.map(renderSection).join('\n');
+  const otherText = otherSections.map(renderSection).join('\n');
+  const separator = '-------------------------------------------------';
+
+  if (managementText && otherText) {
+    return managementText + '\n\n' + separator + '\n\n' + otherText;
+  }
+  return managementText || otherText;
 }
 
 function chunkText(text, maxChunkLength) {

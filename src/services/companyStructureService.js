@@ -140,7 +140,7 @@ function normalizeConfig(raw, guildId) {
     messageChannelId: raw.messageChannelId ? String(raw.messageChannelId) : null,
     rosterNamesByUserId: raw.rosterNamesByUserId && typeof raw.rosterNamesByUserId === 'object'
       ? Object.fromEntries(Object.entries(raw.rosterNamesByUserId)
-          .filter(([userId, name]) => /^\\d{17,20}$/.test(userId) && typeof name === 'string')
+          .filter(([userId, name]) => /^\d{17,20}$/.test(userId) && typeof name === 'string')
           .map(([userId, name]) => [userId, normalizeRosterName(name)]))
       : {},
     sections: Array.isArray(raw.sections)

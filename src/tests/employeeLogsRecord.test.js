@@ -100,4 +100,8 @@ test('editing Reason and Additional Notes updates the same message and keeps Rec
     const saved = await getEmployeeLogRecord(client, guild.id, result.recordId);
     assert.equal(saved.data.reason, 'New employee assignment.');
     assert.equal(saved.data.notes, 'Documents verified.');
+    assert.equal(saved.editHistory.length, 1);
+    assert.equal(saved.editHistory[0].editedBy, '12345678901234567');
+    assert.deepEqual(saved.editHistory[0].changes.reason, { before: '', after: 'New employee assignment.' });
+    assert.deepEqual(saved.editHistory[0].changes.notes, { before: '', after: 'Documents verified.' });
 });

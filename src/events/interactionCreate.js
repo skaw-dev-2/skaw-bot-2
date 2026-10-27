@@ -20,6 +20,7 @@ import { isCollectorManagedComponent } from '../utils/collectorComponents.js';
 import { ResponseCoordinator } from '../utils/responseCoordinator.js';
 import { enforceDefaultCommandPermissions } from '../utils/permissionGuard.js';
 import { handleEmployeeLogsComponent } from '../services/employeeLogsInteractionService.js';
+import { handleAutoResponderInteraction } from '../services/autoResponderPanelService.js';
 
 const COMMAND_ERROR_SUBTYPES = {
   warn: 'warn_failed',
@@ -58,6 +59,16 @@ export default {
       try {
         InteractionHelper.patchInteractionResponses(interaction);
         ResponseCoordinator.attach(interaction);
+
+        // Auto Responder panel controls and multi-step modal forms use custom IDs.
+        // Route them before generic component handlers so they remain interactive.
+        if (interaction.customId?.startsWith('skaw_ar_') && (
+          interaction.isButton?.() || interaction.isStringSelectMenu?.() || interaction.isChannelSelectMenu?.()
+          || interaction.isModalSubmit?.()
+        )) {
+          await handleAutoResponderInteraction(interaction);
+          return;
+        }
 
         // Employee Logs buttons, selects and modals must be routed before the
         // generic interaction handlers so public Edit buttons remain functional.

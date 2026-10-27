@@ -41,6 +41,63 @@ const DEFAULT_SECTIONS = [
 
 const draftStore = new Map();
 
+// Full guild-member fetches use Discord Gateway opcode 8, which is rate limited.
+// Coalesce concurrent requests and briefly reuse a successful result; Discord's
+// member add/update/remove events keep the manager cache current in the meantime.
+const memberFetchCache = new WeakMap();
+const memberFetchInFlight = new WeakMap();
+const MEMBER_FETCH_CACHE_TTL_MS = 20_000;
+const MAX_MEMBER_FETCH_ATTEMPTS = 3;
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function fetchGuildMembers(guild) {
+  const manager = guild.members;
+  const cached = memberFetchCache.get(manager);
+  if (cached && Date.now() - cached.fetchedAt < MEMBER_FETCH_CACHE_TTL_MS) {
+    return cached.members;
+  }
+
+  const currentRequest = memberFetchInFlight.get(manager);
+  if (currentRequest) return currentRequest;
+
+  const request = (async () => {
+    for (let attempt = 1; attempt <= MAX_MEMBER_FETCH_ATTEMPTS; attempt += 1) {
+      try {
+        const members = await manager.fetch();
+        memberFetchCache.set(manager, { members, fetchedAt: Date.now() });
+        return members;
+      } catch (error) {
+        const message = String(error?.message || error);
+        const retryMatch = message.match(/retry after\\s+([\\d.]+)\\s+seconds?/i);
+        const isOpcodeRateLimit = /opcode\\s+8.*rate.?limit/i.test(message);
+        if (attempt >= MAX_MEMBER_FETCH_ATTEMPTS || (!retryMatch && !isOpcodeRateLimit)) {
+          throw error;
+        }
+
+        // Respect Discord's explicit retry-after value. If the gateway error
+        // omits it, use a conservative pause before retrying once more.
+        const retryMs = retryMatch
+          ? Math.ceil(Number(retryMatch[1]) * 1000) + 300
+          : 6_000;
+        await sleep(Math.max(300, retryMs));
+      }
+    }
+    throw new Error('Unable to fetch the server member list after rate-limit retries.');
+  })();
+
+  memberFetchInFlight.set(manager, request);
+  try {
+    return await request;
+  } finally {
+    if (memberFetchInFlight.get(manager) === request) {
+      memberFetchInFlight.delete(manager);
+    }
+  }
+}
+
 function configKey(guildId) {
   return 'guild:' + guildId + ':company_structure';
 }
@@ -157,7 +214,7 @@ function safeDisplayName(value) {
 
 export async function buildCompanyStructureSnapshot(guild, config) {
   await guild.roles.fetch();
-  const members = await guild.members.fetch();
+  const members = await fetchGuildMembers(guild);
   const sectionOrder = [...config.sections].sort((a, b) => a.order - b.order);
   const missingRoles = sectionOrder
     .filter(section => section.enabled && !guild.roles.cache.has(section.roleId))
@@ -440,7 +497,10 @@ export async function publishCompanyStructureDraft(client, draft) {
     throw new Error('Company Structure settings changed after this preview. Run /cs update again before publishing.');
   }
 
-  const snapshot = await buildCompanyStructureSnapshot(guild, currentConfig);
+  // Publish the reviewed preview snapshot instead of issuing a second opcode-8
+  // guild-member request. The config timestamp check above ensures its category
+  // configuration still matches the draft; roster edits are applied below.
+  const snapshot = structuredClone(draft.snapshot);
   if (snapshot.missingRoles.length > 0) {
     throw new Error('Publishing is blocked because one or more configured Discord roles are missing. Resolve them in /cs manage and preview again.');
   }

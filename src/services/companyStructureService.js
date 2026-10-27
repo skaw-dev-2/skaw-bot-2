@@ -309,24 +309,10 @@ export async function buildCompanyStructureSnapshot(guild, config) {
     };
   });
 
-  const workshopSections = sections.filter(section => section.enabled && section.roleExists && section.kind === 'workshop');
-  const workshopMemberships = new Map();
-  for (const section of workshopSections) {
-    const role = guild.roles.cache.get(section.roleId);
-    for (const member of members.values()) {
-      if (!member.roles.cache.has(section.roleId)) continue;
-      const userId = String(member.id);
-      const current = workshopMemberships.get(userId) || {
-        displayName: rosterNamesByUserId[userId] || normalizeRosterName(member.displayName || member.user?.username),
-        workshops: [],
-      };
-      current.workshops.push(role?.name || section.title);
-      workshopMemberships.set(userId, current);
-    }
-  }
-  const workshopConflicts = [...workshopMemberships.values()]
-    .filter(item => item.workshops.length > 1)
-    .map(item => ({ displayName: item.displayName, workshops: item.workshops }));
+  // Multiple workshop roles are valid placements now, not a conflict. The
+  // Company Structure renderer will display every assigned workshop beside
+  // the member in the single Mechanic Division roster.
+  const workshopConflicts = [];
 
   return {
     sections,
@@ -338,12 +324,13 @@ export async function buildCompanyStructureSnapshot(guild, config) {
 }
 
 function renderStructureText(snapshot) {
-  // Empty workshops remain visible as N/A to match SKAW's existing structure
-  // format. Other empty categories are omitted to keep the message compact.
+  // Workshops supply assignment metadata for the mechanic roster; they are
+  // no longer rendered as separate member lists.
   const visibleSections = snapshot.sections.filter(section =>
     section.enabled
       && section.roleExists
-      && (section.members.length > 0 || section.kind === 'workshop'),
+      && section.kind !== 'workshop'
+      && section.members.length > 0,
   );
   if (visibleSections.length === 0) {
     return 'No members currently match the configured Company Structure roles.';
@@ -356,6 +343,20 @@ function renderStructureText(snapshot) {
     section.kind !== 'management' && section.kind !== 'managementFallback',
   );
 
+  const workshopSections = snapshot.sections
+    .filter(section => section.enabled && section.roleExists && section.kind === 'workshop')
+    .sort((a, b) => a.order - b.order);
+  const workshopRoleIdsByUserId = new Map();
+  for (const workshop of workshopSections) {
+    for (const entry of workshop.memberEntries || []) {
+      const userId = String(entry.userId || '');
+      if (!userId) continue;
+      const assignedRoles = workshopRoleIdsByUserId.get(userId) || [];
+      assignedRoles.push(workshop.roleId);
+      workshopRoleIdsByUserId.set(userId, assignedRoles);
+    }
+  }
+
   let isFirstHeading = true;
   const renderSection = section => {
     // Always render the configured Discord role as a real role mention.
@@ -364,8 +365,32 @@ function renderStructureText(snapshot) {
     const heading = (isFirstHeading ? '' : '> ') + '**<@&' + section.roleId + '>**';
     isFirstHeading = false;
 
+    const nameQueuesByName = new Map();
+    for (const entry of section.memberEntries || []) {
+      const key = normalizeRosterName(entry.displayName);
+      const queue = nameQueuesByName.get(key) || [];
+      queue.push(entry);
+      nameQueuesByName.set(key, queue);
+    }
+
     const memberLines = section.members.length > 0
-      ? section.members.map(name => '• ' + escapeMarkdownText(name)).join('\n')
+      ? section.members.map(name => {
+          let line = '• ' + escapeMarkdownText(name);
+          if (section.key === 'mechanic-division') {
+            // Match the displayed name back to its member ID, then include
+            // every configured Workshop role the member currently has.
+            const queue = nameQueuesByName.get(normalizeRosterName(name));
+            const entry = queue?.shift();
+            const workshopRoleIds = entry?.userId
+              ? (workshopRoleIdsByUserId.get(String(entry.userId)) || [])
+              : [];
+            const assignment = workshopRoleIds.length > 0
+              ? workshopRoleIds.map(roleId => '<@&' + roleId + '>').join(', ')
+              : 'Belum ditempatkan';
+            line += ' (' + assignment + ')';
+          }
+          return line;
+        }).join('\n')
       : 'N/A';
     return heading + '\n' + memberLines;
   };
@@ -472,27 +497,15 @@ export function buildCompanyStructureEmbeds(snapshot, config, options = {}) {
   });
   embeds.push(...structureEmbeds);
 
-  if (isPreview && ((snapshot.missingRoles || []).length > 0 || (snapshot.workshopConflicts || []).length > 0)) {
-    const warningParts = [];
-    if (snapshot.missingRoles.length > 0) {
-      const missingText = snapshot.missingRoles
-        .map(role => '• ' + role.title + ' (' + role.roleId + ')')
-        .join('\n')
-        .slice(0, 1500);
-      warningParts.push('**MISSING ROLES — Publish is blocked**\n' + missingText + '\nFix or remove these categories in /cs manage, then run /cs update again.');
-    }
-    if ((snapshot.workshopConflicts || []).length > 0) {
-      const conflictText = snapshot.workshopConflicts
-        .slice(0, 20)
-        .map(item => '• ' + item.displayName + ': ' + item.workshops.join(', '))
-        .join('\n')
-        .slice(0, 1800);
-      warningParts.push('**MULTIPLE WORKSHOP ASSIGNMENTS — Please review**\n' + conflictText + '\nThis is a warning only; Publishing remains available.');
-    }
+  if (isPreview && (snapshot.missingRoles || []).length > 0) {
+    const missingText = snapshot.missingRoles
+      .map(role => '• ' + role.title + ' (' + role.roleId + ')')
+      .join('\n')
+      .slice(0, 1500);
     embeds.unshift(new EmbedBuilder()
-      .setColor(snapshot.missingRoles.length > 0 ? 0xE74C3C : 0xE67E22)
-      .setTitle(snapshot.missingRoles.length > 0 ? 'Review required • missing Discord roles' : 'Review required • workshop assignments')
-      .setDescription(warningParts.join('\n\n').slice(0, 4000)));
+      .setColor(0xE74C3C)
+      .setTitle('Review required • missing Discord roles')
+      .setDescription('**MISSING ROLES — Publish is blocked**\n' + missingText + '\nFix or remove these categories in /cs manage, then run /cs update again.'));
   }
 
   if (embeds.length > 10) {

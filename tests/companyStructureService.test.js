@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildCompanyStructureSnapshot } from '../src/services/companyStructureService.js';
+import { buildCompanyStructureEmbeds, buildCompanyStructureSnapshot } from '../src/services/companyStructureService.js';
 
 const ROLE = Object.freeze({
   ceo: '1432365826136080625',
@@ -98,4 +98,23 @@ test('primary management role follows the configured section order, not role pos
 
   assert.deepEqual(membersByKey.deputy, ['Kevin Monterrey']);
   assert.deepEqual(membersByKey.ceo, []);
+});
+
+test('empty configured workshops remain visible as N/A', async () => {
+  const { guild, config } = makeRuntime();
+  const originalFetch = guild.members.fetch;
+  guild.members.fetch = async () => {
+    const members = await originalFetch();
+    return new Map([...members.entries()].map(([id, member]) => [id, {
+      ...member,
+      roles: { cache: { has: roleId => roleId !== ROLE.workshop1 && member.roles.cache.has(roleId) } },
+    }]));
+  };
+
+  const snapshot = await buildCompanyStructureSnapshot(guild, config);
+  const embeds = buildCompanyStructureEmbeds(snapshot, { ...config, bannerUrl: null, lastUpdatedAt: null });
+  const description = embeds.map(embed => embed.data?.description ?? embed.toJSON?.().description ?? '').join('\n');
+
+  assert.match(description, /Workshop 1/);
+  assert.match(description, /N\/A/);
 });

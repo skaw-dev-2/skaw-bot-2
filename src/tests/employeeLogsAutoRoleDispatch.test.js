@@ -109,7 +109,8 @@ test('assigning Company Staff first then Division and Position enriches the same
     assert.ok(signInRecord);
     const originalRecordId = signInRecord.recordId;
     assert.equal(publishedMessages.length, 1);
-    assert.doesNotMatch(description(publishedMessages[0]), /\*\*Position:\*\*/);
+    assert.ok(description(publishedMessages[0]).includes('**Division:** Belum ditetapkan'));
+    assert.ok(description(publishedMessages[0]).includes('**Position:** Belum ditetapkan'));
 
     await handleEmployeeLogsRoleUpdate(staffOnly, staffWithDivision, client);
     await handleEmployeeLogsRoleUpdate(staffWithDivision, fullyAssigned, client);
@@ -121,6 +122,23 @@ test('assigning Company Staff first then Division and Position enriches the same
     assert.equal(saved.recordId, originalRecordId);
     assert.equal(saved.data.division, ROLE.division);
     assert.equal(saved.data.position, ROLE.trainee);
+});
+
+test('roles assigned before Company Staff are included in the first Sign-In', async () => {
+    const { client, guild, publishedMessages } = createRuntime();
+    const civilian = member(client, guild, [ROLE.civilian]);
+    const rolesReady = member(client, guild, [ROLE.civilian, ROLE.division, ROLE.trainee]);
+    const staffAdded = member(client, guild, [ROLE.base, ROLE.division, ROLE.trainee]);
+
+    await handleEmployeeLogsRoleUpdate(civilian, rolesReady, client);
+    assert.equal(publishedMessages.length, 0, 'Division/Position alone should not create a membership log');
+
+    const result = await handleEmployeeLogsRoleUpdate(rolesReady, staffAdded, client);
+    assert.equal(result.processed, true);
+    assert.equal(publishedMessages.length, 1);
+    assert.match(description(publishedMessages[0]), /^## EMPLOYEE SIGN-IN/m);
+    assert.ok(description(publishedMessages[0]).includes(`**Division:** <@&${ROLE.division}>`));
+    assert.ok(description(publishedMessages[0]).includes(`**Position:** <@&${ROLE.trainee}>`));
 });
 
 test('removing Company Staff immediately publishes Sign-Out with no review queue', async () => {

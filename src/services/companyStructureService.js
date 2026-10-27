@@ -497,12 +497,24 @@ export async function publishCompanyStructureDraft(client, draft) {
     throw new Error('Company Structure settings changed after this preview. Run /cs update again before publishing.');
   }
 
+  // Refresh the role cache (a normal REST role request, not opcode 8) so a
+  // role deleted after preview cannot slip through to publication.
+  await guild.roles.fetch();
+  const currentlyMissingRoles = currentConfig.sections.filter(section =>
+    section.enabled && !guild.roles.cache.has(section.roleId),
+  );
+  if (currentlyMissingRoles.length > 0) {
+    throw new Error('Publishing is blocked because configured Discord roles are missing: '
+      + currentlyMissingRoles.map(section => section.title).join(', ')
+      + '. Resolve them in /cs manage and preview again.');
+  }
+
   // Publish the reviewed preview snapshot instead of issuing a second opcode-8
   // guild-member request. The config timestamp check above ensures its category
   // configuration still matches the draft; roster edits are applied below.
   const snapshot = structuredClone(draft.snapshot);
   if (snapshot.missingRoles.length > 0) {
-    throw new Error('Publishing is blocked because one or more configured Discord roles are missing. Resolve them in /cs manage and preview again.');
+    throw new Error('Publishing is blocked because one or more configured Discord roles were missing in the preview. Run /cs update again before publishing.');
   }
 
   for (const [sectionKey, names] of Object.entries(draft.overrides)) {

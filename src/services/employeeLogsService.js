@@ -425,16 +425,33 @@ export async function updateEmployeeLogRecord(client, guildId, recordId, { reaso
     const message = await channel.messages.fetch(record.messageId).catch(() => null);
     if (!message || message.author?.id !== client.user?.id) throw new Error('The original Employee Logs message is unavailable or is not owned by this bot.');
 
+    const nextReason = cleanText(reason, 'Reason', { required: false, maxLength: 900 });
+    const nextNotes = cleanText(notes, 'Additional Notes', { required: false, maxLength: 900 });
+    const previousReason = String(record.data?.reason || '');
+    const previousNotes = String(record.data?.notes || '');
+    const editedAt = new Date().toISOString();
+    const changes = {};
+    if (previousReason !== nextReason) changes.reason = { before: previousReason, after: nextReason };
+    if (previousNotes !== nextNotes) changes.notes = { before: previousNotes, after: nextNotes };
+    const editHistory = Array.isArray(record.editHistory) ? [...record.editHistory] : [];
+    if (Object.keys(changes).length) {
+        editHistory.push({
+            editedAt,
+            editedBy: SNOWFLAKE_RE.test(String(updatedBy || '')) ? String(updatedBy) : null,
+            changes,
+        });
+    }
     const nextRecord = {
         ...record,
         data: {
             ...record.data,
-            reason: cleanText(reason, 'Reason', { required: false, maxLength: 900 }),
-            notes: cleanText(notes, 'Additional Notes', { required: false, maxLength: 900 }),
+            reason: nextReason,
+            notes: nextNotes,
             recordId: record.recordId,
             recordedAt: record.publishedAt,
         },
-        updatedAt: new Date().toISOString(),
+        editHistory: editHistory.slice(-100),
+        updatedAt: editedAt,
         updatedBy: updatedBy ? String(updatedBy) : null,
     };
     const config = await getEmployeeLogsConfig(client, guildId);

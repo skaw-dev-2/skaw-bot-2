@@ -115,6 +115,6 @@ test('empty configured workshops remain visible as N/A', async () => {
   const embeds = buildCompanyStructureEmbeds(snapshot, { ...config, bannerUrl: null, lastUpdatedAt: null });
   const description = embeds.map(embed => embed.data?.description ?? embed.toJSON?.().description ?? '').join('\n');
 
-  assert.match(description, /Workshop 1/);
+  assert.match(description, /<@&1436228415492456448>/);
   assert.match(description, /N\/A/);
 });

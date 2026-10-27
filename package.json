@@ -14,7 +14,8 @@
     "backup:db": "node scripts/backup.js",
     "restore:db": "node scripts/restore.js",
     "backup:drill": "node scripts/restore-drill.js",
-    "test:employee-logs": "node --test src/tests/employeeRoleRegistry.test.js src/tests/employeeLogsAutoRole.test.js src/tests/employeeLogsAutoRoleDispatch.test.js src/tests/employeeLogsRecord.test.js src/tests/employeeLogsDirectoryIntegration.test.js src/tests/employeeDirectoryService.test.js"
+    "test:employee-logs": "node --test src/tests/employeeRoleRegistry.test.js src/tests/employeeLogsAutoRole.test.js src/tests/employeeLogsAutoRoleDispatch.test.js src/tests/employeeLogsRecord.test.js src/tests/employeeLogsDirectoryIntegration.test.js src/tests/employeeDirectoryService.test.js",
+    "check:employee-logs": "node scripts/check-employee-logs-v2.mjs"
   },
   "dependencies": {
     "@discordjs/rest": "^2.6.1",

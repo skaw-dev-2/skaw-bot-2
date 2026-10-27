@@ -19,7 +19,7 @@ function requireManageGuild(interaction) {
 }
 
 function safeText(value, max = 180) {
-    return escapeMarkdown(String(value ?? '').replace(/[\\r\\n\\t]+/g, ' ').replace(/\\s+/g, ' ').trim().slice(0, max)) || 'Not recorded';
+    return escapeMarkdown(String(value ?? '').replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max)) || 'Not recorded';
 }
 
 function employeeFindEmbed(query, records) {
@@ -31,7 +31,7 @@ function employeeFindEmbed(query, records) {
         const position = record.currentPosition?.name || record.lastKnownPosition?.name || 'Not recorded';
         const history = Array.isArray(record.history) ? record.history.slice(-3).reverse() : [];
         const historyLines = history.length
-            ? history.map(item => '• ' + safeText(item.type, 30) + ' — ' + formatDirectoryTimestamp(item.publishedAt)).join('\\n')
+            ? history.map(item => '• ' + safeText(item.type, 30) + ' — ' + formatDirectoryTimestamp(item.publishedAt)).join('\n')
             : 'No activity history recorded yet.';
         embed.addFields({
             name: safeText(record.displayName, 100),
@@ -43,7 +43,7 @@ function employeeFindEmbed(query, records) {
                 'Last Blacklist: ' + formatDirectoryTimestamp(record.lastBlacklistAt),
                 'Recent history:',
                 historyLines,
-            ].join('\\n').slice(0, 1000),
+            ].join('\n').slice(0, 1000),
             inline: false,
         });
     }

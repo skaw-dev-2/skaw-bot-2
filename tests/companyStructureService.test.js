@@ -123,6 +123,21 @@ test('empty configured workshops remain visible as N/A', async () => {
 });
 
 
+test('custom category titles still render as Discord role mentions in Company Structure', async () => {
+  const { guild, config } = makeRuntime();
+  const ceoSection = config.sections.find(section => section.key === 'ceo');
+  ceoSection.title = 'Modshoper | SKAW';
+  ceoSection.customTitle = true;
+
+  const snapshot = await buildCompanyStructureSnapshot(guild, config);
+  const embeds = buildCompanyStructureEmbeds(snapshot, { ...config, bannerUrl: null, lastUpdatedAt: null });
+  const description = embeds.map(embed => embed.toJSON().description || '').join('\\n');
+
+  assert.match(description, /\\*\\*<@&1432365826136080625>\\*\\*/);
+  assert.doesNotMatch(description, /\\*\\*Modshoper \\| SKAW\\*\\*/);
+});
+
+
 test('published Company Structure shows a visible Last Updated timestamp in Jakarta time', async () => {
   const { guild, config } = makeRuntime();
   const snapshot = await buildCompanyStructureSnapshot(guild, config);

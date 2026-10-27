@@ -130,7 +130,7 @@ test('footer image is attached to the final structure embed below roster text, i
     bannerUrl,
     footerImageUrl,
     lastUpdatedAt: null,
-  });
+  }, { preview: true });
   const json = embeds.map(embed => embed.toJSON());
   const structureEmbed = json.at(-1);
 

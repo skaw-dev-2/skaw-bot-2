@@ -239,7 +239,7 @@ export async function createEmployeeExitReview(client, guildId, input) {
     const userId = String(input?.userId || '');
     if (!SNOWFLAKE_RE.test(userId)) throw new Error('Employee ID tidak valid untuk Exit Review.');
     const reviews = await readReviews(client, guildId);
-    const existing = reviews.find(item => item.userId === userId && item.status !== 'resolved');
+    const existing = reviews.find(item => item.userId === userId && ['pending', 'processing'].includes(item.status));
     if (existing) return { ...existing, duplicate: true };
     const review = normalizeReview({
         reviewId: makeReviewId(),

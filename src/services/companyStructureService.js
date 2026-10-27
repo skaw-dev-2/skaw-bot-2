@@ -408,12 +408,12 @@ export function buildCompanyStructureEmbeds(snapshot, config, options = {}) {
 
   const chunks = chunkText(structureText, 3500);
   const publishedAt = config.lastUpdatedAt ? new Date(config.lastUpdatedAt) : null;
-  const nowText = formatJakartaTimestamp(new Date());
+  const displayUpdatedAt = publishedAt || new Date();
   const footerText = isPreview
     ? (publishedAt
       ? 'Preview • Last published ' + formatJakartaTimestamp(publishedAt) + ' • timestamp updates on Publish'
       : 'Preview only • timestamp updates on Publish')
-    : 'Last Updated: ' + nowText;
+    : 'SKAW Group • Company Structure';
 
   const embeds = [];
   if (config.bannerUrl) {
@@ -425,16 +425,24 @@ export function buildCompanyStructureEmbeds(snapshot, config, options = {}) {
   }
 
   const structureEmbeds = chunks.map((chunk, index) => {
+    const isFinalStructureEmbed = index === chunks.length - 1;
+    const timestampLine = isPreview
+      ? (publishedAt
+        ? '🕒 **Last Published:** ' + formatJakartaTimestamp(publishedAt) + ' • updates on Publish'
+        : '🕒 **Last Updated:** Will be set on Publish')
+      : '🕒 **Last Updated:** ' + formatJakartaTimestamp(displayUpdatedAt);
+    const description = isFinalStructureEmbed ? chunk + '\n\n' + timestampLine : chunk;
+
     const embed = new EmbedBuilder()
       .setColor(0x0878FF)
-      .setDescription(chunk);
+      .setDescription(description);
 
     if (!config.bannerUrl && index === 0) {
       embed.setTitle(isPreview ? 'COMPANY STRUCTURE • PREVIEW' : 'COMPANY STRUCTURE');
     }
 
-    if (index === chunks.length - 1) {
-      // Keep the footer image inside the final structure embed, below its roster text.
+    if (isFinalStructureEmbed) {
+      // Keep the footer image inside the final structure embed, below its roster and timestamp.
       if (config.footerImageUrl) embed.setImage(config.footerImageUrl);
       embed.setFooter({ text: footerText });
     }
@@ -610,7 +618,9 @@ export async function publishCompanyStructureDraft(client, draft) {
   // Use the preview's roster edits and apply a renamed member consistently to
   // every category where the same Discord user ID appears.
   const snapshot = getDraftSnapshotView(draft);
-  const embeds = buildCompanyStructureEmbeds(snapshot, currentConfig, { preview: false });
+  const publicationTimestamp = new Date().toISOString();
+  const publicationConfig = { ...currentConfig, lastUpdatedAt: publicationTimestamp };
+  const embeds = buildCompanyStructureEmbeds(snapshot, publicationConfig, { preview: false });
   const channel = await client.channels.fetch(currentConfig.channelId).catch(() => null);
   if (!channel || !channel.isTextBased() || channel.isDMBased() || typeof channel.send !== 'function') {
     throw new Error('The configured Company Structure channel is unavailable or is not a text channel. Open /cs manage to fix it.');
@@ -650,7 +660,7 @@ export async function publishCompanyStructureDraft(client, draft) {
     },
     messageId: message.id,
     messageChannelId: currentConfig.channelId,
-    lastUpdatedAt: new Date().toISOString(),
+    lastUpdatedAt: publicationTimestamp,
   };
 
   let configSaved = true;

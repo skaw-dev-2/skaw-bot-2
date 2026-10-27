@@ -122,6 +122,38 @@ test('empty configured workshops remain visible as N/A', async () => {
   assert.match(description, /N\/A/);
 });
 
+
+test('published Company Structure shows a visible Last Updated timestamp in Jakarta time', async () => {
+  const { guild, config } = makeRuntime();
+  const snapshot = await buildCompanyStructureSnapshot(guild, config);
+  const lastUpdatedAt = '2026-10-27T11:45:00.000Z';
+
+  const embeds = buildCompanyStructureEmbeds(snapshot, {
+    ...config,
+    bannerUrl: null,
+    lastUpdatedAt,
+  }, { preview: false });
+  const finalEmbed = embeds.at(-1).toJSON();
+
+  assert.match(finalEmbed.description, /Last Updated:\*\* 27 Oct 2026, 18:45 WIB/);
+  assert.equal(finalEmbed.footer.text, 'SKAW Group • Company Structure');
+});
+
+test('unpublished Company Structure preview tells managers its timestamp is set on publish', async () => {
+  const { guild, config } = makeRuntime();
+  const snapshot = await buildCompanyStructureSnapshot(guild, config);
+
+  const embeds = buildCompanyStructureEmbeds(snapshot, {
+    ...config,
+    bannerUrl: null,
+    lastUpdatedAt: null,
+  }, { preview: true });
+  const finalEmbed = embeds.at(-1).toJSON();
+
+  assert.match(finalEmbed.description, /Last Updated:\*\* Will be set on Publish/);
+  assert.match(finalEmbed.footer.text, /Preview only/);
+});
+
 test('footer image is attached to the final structure embed below roster text, independently of banner', async () => {
   const { guild, config } = makeRuntime();
   const snapshot = await buildCompanyStructureSnapshot(guild, config);

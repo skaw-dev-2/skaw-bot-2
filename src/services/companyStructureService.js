@@ -3,7 +3,8 @@ import { EmbedBuilder, PermissionFlagsBits } from 'discord.js';
 
 export const COMPANY_STRUCTURE_CHANNEL_ID = '1510967982044745738';
 export const MANAGEMENT_COMPANY_ROLE_ID = '1414623053471547474';
-export const COMPANY_STRUCTURE_DRAFT_TTL_MS = 12 * 60 * 1000;
+// Drafts remain available until published, canceled, or the bot process restarts.
+// Do not expire a draft by elapsed time: managers may need longer to review the roster.
 
 const DEFAULT_SECTIONS = [
   { key: 'ceo', title: 'Chief Executive Officer', roleId: '1432365826136080625', kind: 'management', order: 10, enabled: true },
@@ -459,13 +460,10 @@ export async function createCompanyStructureDraft(client, guild, ownerId) {
 }
 
 export function getCompanyStructureDraft(draftId) {
-  const draft = draftStore.get(draftId);
-  if (!draft) return null;
-  if (Date.now() - draft.createdAt > COMPANY_STRUCTURE_DRAFT_TTL_MS) {
-    draftStore.delete(draftId);
-    return null;
-  }
-  return draft;
+  // Deliberately no time-based expiry. A manager can review and edit the
+  // structure for as long as needed; drafts are removed on cancel/publish,
+  // or when a bot restart clears this in-memory store.
+  return draftStore.get(draftId) || null;
 }
 
 export function deleteCompanyStructureDraft(draftId) {

@@ -82,7 +82,7 @@ const publishButton = {
     }
     const draft = getCompanyStructureDraft(draftId);
     if (!draft || draft.ownerId !== interaction.user.id) {
-      return interaction.reply({ content: 'This preview expired. Run /cs update to create a new one.', flags: MessageFlags.Ephemeral });
+      return interaction.reply({ content: 'This preview session is no longer available. It may have been cleared by a bot restart or canceled; run /cs update to create a new one.', flags: MessageFlags.Ephemeral });
     }
     if (!(await canManageCompanyStructure(interaction))) {
       return interaction.reply({ content: 'Only SKAW Management or a server Administrator/Manager can publish the structure.', flags: MessageFlags.Ephemeral });
@@ -152,7 +152,7 @@ const editMembersButton = {
     }
     const draft = getCompanyStructureDraft(draftId);
     if (!draft) {
-      return interaction.reply({ content: 'This preview expired. Run /cs update again.', flags: MessageFlags.Ephemeral });
+      return interaction.reply({ content: 'This preview session is no longer available. It may have been cleared by a bot restart or canceled; run /cs update again.', flags: MessageFlags.Ephemeral });
     }
 
     const view = getDraftSnapshotView(draft);

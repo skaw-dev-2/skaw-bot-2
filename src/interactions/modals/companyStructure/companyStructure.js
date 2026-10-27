@@ -171,7 +171,7 @@ const rosterModal = {
 
     const draft = getCompanyStructureDraft(draftId);
     if (!draft || draft.guildId !== interaction.guildId) {
-      return interaction.reply({ content: 'This preview expired. Run /cs update again.', flags: MessageFlags.Ephemeral });
+      return interaction.reply({ content: 'This preview session is no longer available. It may have been cleared by a bot restart or canceled; run /cs update again.', flags: MessageFlags.Ephemeral });
     }
     if (!(await canManageCompanyStructure(interaction))) {
       return interaction.reply({ content: 'Only SKAW Management or a server Administrator/Manager can edit the preview.', flags: MessageFlags.Ephemeral });
@@ -185,17 +185,34 @@ const rosterModal = {
 
       const components = [buildPreviewControls(draft, snapshot)];
       const updatePayload = { embeds, components, allowedMentions: { parse: [] } };
-      // Use the original /cs update interaction webhook to edit its ephemeral
-      // response. Do not call Message.edit() on an ephemeral preview message.
+      // Prefer refreshing the current private preview. Discord interaction
+      // webhooks can expire after 15 minutes, so never let that invalidate the
+      // roster draft itself. If the prior preview can no longer be edited,
+      // reply with a fresh private preview and use that interaction as the new
+      // refresh target for subsequent edits.
+      let previewRefreshed = false;
       if (draft.previewInteraction?.token && typeof draft.previewInteraction.editReply === 'function') {
-        await draft.previewInteraction.editReply(updatePayload);
+        try {
+          await draft.previewInteraction.editReply(updatePayload);
+          previewRefreshed = true;
+        } catch {
+          // The original interaction webhook may have expired. Create a new
+          // ephemeral preview below, using this interaction as the new target.
+        }
+      }
+
+      if (previewRefreshed) {
         return interaction.reply({
-          content: 'Preview roster saved and the original preview has been refreshed. These edits apply only to this draft; the next /cs update reads Discord roles again.',
+          content: 'Preview roster saved and refreshed. These edits apply only to this draft; the next /cs update reads Discord roles again.',
           flags: MessageFlags.Ephemeral,
         });
       }
+
+      draft.previewInteraction = interaction;
       return interaction.reply({
-        content: 'Preview roster saved, but the original preview session is no longer available (for example, after a bot restart). Run /cs update to create a new preview.',
+        content: 'Preview roster saved. A refreshed private preview is shown here because the previous preview could no longer be refreshed. Continue using the buttons on this newest preview.',
+        embeds,
+        components,
         flags: MessageFlags.Ephemeral,
         allowedMentions: { parse: [] },
       });

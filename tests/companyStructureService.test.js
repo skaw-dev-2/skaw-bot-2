@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildCompanyStructureEmbeds, buildCompanyStructureSnapshot } from '../src/services/companyStructureService.js';
+import { buildCompanyStructureEmbeds, buildCompanyStructureSnapshot, createCompanyStructureDraft, getCompanyStructureDraft, deleteCompanyStructureDraft } from '../src/services/companyStructureService.js';
 
 const ROLE = Object.freeze({
   ceo: '1432365826136080625',
@@ -153,4 +153,31 @@ test('repeated previews reuse the recently fetched guild member list', async () 
   await buildCompanyStructureSnapshot(guild, config);
 
   assert.equal(fetchCount, 1);
+});
+
+
+test('Company Structure draft stays available after the former 12-minute timeout', async () => {
+  const { guild, config } = makeRuntime();
+  guild.id = config.guildId;
+
+  let storedConfig = {
+    ...config,
+    guildId: config.guildId,
+    updatedAt: new Date().toISOString(),
+  };
+  const client = {
+    db: {
+      get: async () => storedConfig,
+      set: async (_key, value) => {
+        storedConfig = value;
+        return true;
+      },
+    },
+  };
+
+  const draft = await createCompanyStructureDraft(client, guild, '333333333333333333');
+  draft.createdAt = Date.now() - (24 * 60 * 60 * 1000);
+
+  assert.equal(getCompanyStructureDraft(draft.id), draft);
+  deleteCompanyStructureDraft(draft.id);
 });

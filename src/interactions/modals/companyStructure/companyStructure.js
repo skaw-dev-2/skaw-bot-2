@@ -91,6 +91,7 @@ const settingsModal = {
       const config = await getCompanyStructureConfig(client, guildId);
       config.channelId = channelId;
       config.bannerUrl = bannerUrl;
+      config.bannerConfigured = true;
       await saveCompanyStructureConfig(client, guildId, config);
 
       return interaction.reply({

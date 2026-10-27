@@ -150,6 +150,6 @@ test('restoring Company Staff cancels a pending exit review and records a new Si
 
     const reviews = store.get(`guild:${GUILD_ID}:employee_logs:exit_reviews`);
     assert.equal(reviews[0].status, 'cancelled');
-    assert.equal(publishedMessages.length, 1);
-    assert.match(publishedMessages[0].payload.embeds[0].description, /^## EMPLOYEE SIGN-IN/m);
+    assert.equal(publishedMessages.length, 0, 'restoring membership before exit review resolution should not fabricate a Sign-In');
+
 });

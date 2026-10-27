@@ -1,5 +1,6 @@
 import { AuditLogEvent, PermissionFlagsBits } from 'discord.js';
 import {
+    EMPLOYEE_LOG_TYPES,
     getEmployeeAutoRoleConfig,
     getEmployeeLogRecord,
     updateEmployeeLogRecord,

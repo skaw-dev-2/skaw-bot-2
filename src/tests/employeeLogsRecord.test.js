@@ -58,7 +58,7 @@ test('publishing saves a durable record and attaches the Edit button', async () 
         recordedBy: '12345678901234567',
     });
     assert.equal(result.editButtonAttached, true);
-    assert.match(message.payload.embeds[0].description, /\*\*Employee:\*\* Kevin Monterrey \(\*\*<@12345678901234567>\*\*\)/);
+    assert.match((message.payload.embeds[0]?.data?.description ?? message.payload.embeds[0]?.description), /\*\*Employee:\*\* Kevin Monterrey \(\*\*<@12345678901234567>\*\*\)/);
     assert.equal(message.payload.components[0].components[0].label, 'Edit');
     assert.equal(message.payload.components[0].components[0].emoji, '✏️');
     const record = await getEmployeeLogRecord(client, guild.id, result.recordId);
@@ -74,7 +74,7 @@ test('publishing resolves the server display name rather than the Discord userna
         position: '1414629137389322244',
         recordedBy: '12345678901234567',
     });
-    const description = message.payload.embeds[0].description;
+    const description = (message.payload.embeds[0]?.data?.description ?? message.payload.embeds[0]?.description);
     assert.match(description, /\*\*Employee:\*\* Kevin Monterrey \(\*\*<@12345678901234567>\*\*\)/);
     assert.doesNotMatch(description, /Kevin_Monterrey/);
 });
@@ -91,7 +91,7 @@ test('editing Reason and Additional Notes updates the same message and keeps Rec
         reason: 'New employee assignment.',
         notes: 'Documents verified.',
     }, '12345678901234567');
-    const description = message.payload.embeds[0].description;
+    const description = (message.payload.embeds[0]?.data?.description ?? message.payload.embeds[0]?.description);
     assert.match(description, /\*\*Reason:\*\* New employee assignment\./);
     assert.match(description, /\*\*ADDITIONAL NOTES\*\*/);
     assert.match(description, /Documents verified\./);

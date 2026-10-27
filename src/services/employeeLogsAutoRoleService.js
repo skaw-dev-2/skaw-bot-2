@@ -13,11 +13,6 @@ import {
 } from './employeeRoleRegistryService.js';
 import { getEmployeeDirectoryRecord } from './employeeDirectoryService.js';
 
-const DEDUPE_KEY = guildId => `guild:${guildId}:employee_logs:auto_role_dedupe`;
-const DEDUPE_WINDOW_MS = 15_000;
-const DEDUPE_STORE_WINDOW_MS = 10 * 60_000;
-const recentInProcess = new Map();
-
 /**
  * SKAW role catalogue. IDs are the values supplied by Management.
  * `active` means this role identifies a current employee/partner position.
@@ -103,9 +98,9 @@ function bestDivisionRole(roleIds, catalog = SKAW_EMPLOYEE_ROLE_CATALOG) {
 function classifyPositionTransition(previous, next) {
     if (!previous || !next || previous.id === next.id) return null;
     // A division marker is a department membership role, not a rank itself.
-    // Division <-> first rank changes can happen in separate Discord updates;
-    // don't mislabel either direction as Promotion/Demotion. The coalescer below
-    // handles quick multi-role assignments as one transition where possible.
+    // Division <-> first rank changes are not Promotion/Demotion events.
+    // The persisted directory position detects the eventual rank transition when
+    // the new rank is assigned in a separate Discord event.
     if (previous.domain === next.domain
         && (previous.kind === 'division' || next.kind === 'division')) return null;
     if (previous.domain === next.domain) {
@@ -215,47 +210,6 @@ function diffRoleIds(oldRoleIds, newRoleIds) {
         added: [...newSet].filter(id => !oldSet.has(id)).sort(),
         removed: [...oldSet].filter(id => !newSet.has(id)).sort(),
     };
-}
-
-function signatureFor(guildId, memberId, added, removed) {
-    return `${guildId}:${memberId}:A[${added.join(',')}]:R[${removed.join(',')}]`;
-}
-
-async function wasRecentlyProcessed(client, guildId, signature) {
-    const now = Date.now();
-    const localTime = recentInProcess.get(signature);
-    if (localTime && now - localTime < DEDUPE_WINDOW_MS) return true;
-    recentInProcess.set(signature, now);
-    if (recentInProcess.size > 1000) {
-        for (const [key, timestamp] of recentInProcess) {
-            if (now - timestamp > DEDUPE_STORE_WINDOW_MS) recentInProcess.delete(key);
-        }
-    }
-
-    try {
-        const raw = await client.db.get(DEDUPE_KEY(guildId), {});
-        const map = raw && typeof raw === 'object' ? raw : {};
-        if (map[signature] && now - Number(map[signature]) < DEDUPE_WINDOW_MS) return true;
-    } catch (error) {
-        console.warn('[Employee Auto Logs] Could not read duplicate-event state:', error?.message || error);
-    }
-    return false;
-}
-
-async function markProcessed(client, guildId, signature) {
-    try {
-        const now = Date.now();
-        const raw = await client.db.get(DEDUPE_KEY(guildId), {});
-        const map = raw && typeof raw === 'object' ? raw : {};
-        for (const [key, timestamp] of Object.entries(map)) {
-            if (now - Number(timestamp) > DEDUPE_STORE_WINDOW_MS) delete map[key];
-        }
-        map[signature] = now;
-        const entries = Object.entries(map).sort((a, b) => Number(a[1]) - Number(b[1]));
-        await client.db.set(DEDUPE_KEY(guildId), Object.fromEntries(entries.slice(-300)));
-    } catch (error) {
-        console.warn('[Employee Auto Logs] Could not persist duplicate-event state:', error?.message || error);
-    }
 }
 
 async function findAuditActor(guild, memberId, addedIds, removedIds) {

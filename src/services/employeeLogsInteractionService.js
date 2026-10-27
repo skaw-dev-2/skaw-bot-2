@@ -46,7 +46,7 @@ import {
     completeEmployeeExitReview,
 } from './employeeRoleRegistryService.js';
 import { SKAW_EMPLOYEE_ROLE_CATALOG } from './employeeLogsAutoRoleService.js';
-import { formatDirectoryTimestamp, searchEmployeeDirectory, getEmployeeDirectoryIndex } from './employeeDirectoryService.js';
+import { formatDirectoryTimestamp, searchEmployeeDirectory, getEmployeeDirectoryIndex, syncEmployeeDirectoryMembership } from './employeeDirectoryService.js';
 
 const SESSION_TTL_MS = 15 * 60 * 1000;
 const sessions = new Map();
@@ -649,6 +649,28 @@ async function handleAdminInteraction(interaction) {
             await interaction.deferUpdate();
             return interaction.editReply(buildRoleRegistryPanelPayload(registry));
         }
+        if (action === 'sync') {
+            await interaction.deferUpdate();
+            const result = await syncEmployeeDirectoryMembership(interaction.client, interaction.guild);
+            const summary = new EmbedBuilder().setColor(0x2563eb).setTitle('COMPANY STAFF DIRECTORY SYNC')
+                .setDescription([
+                    'Membership profiles initialized from <@&' + BASE_EMPLOYEE_ROLE.id + '>.',
+                    '',
+                    'Members scanned: ' + result.scanned,
+                    'Company Staff members: ' + result.matched,
+                    'New profiles created: ' + result.created,
+                    'Former profiles reactivated: ' + result.activated,
+                    'Unchanged profiles: ' + result.unchanged,
+                    '',
+                    '**Sign-In logs created: 0**',
+                    'This sync initializes current membership without fabricating historical Sign-In records.',
+                ].join('\\n'))
+                .setFooter({ text: 'SKAW GROUP • EMPLOYEE DIRECTORY' });
+            return interaction.editReply({ embeds: [summary], components: [new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('skaw_el_dashboard:home').setLabel('Dashboard').setStyle(ButtonStyle.Secondary),
+                new ButtonBuilder().setCustomId('skaw_el_dashboard:reviews').setLabel('Exit Reviews').setStyle(ButtonStyle.Danger),
+            )], allowedMentions: { parse: [] } });
+        }
         if (action === 'reviews') {
             const reviews = await listEmployeeExitReviews(interaction.client, interaction.guildId, { status: 'pending', limit: 25 });
             await interaction.deferUpdate();
@@ -983,6 +1005,7 @@ export function buildEmployeeLogsPanel(config = null) {
             ),
             new ActionRowBuilder().addComponents(
                 new ButtonBuilder().setCustomId('skaw_el_dashboard:reviews').setLabel('Exit Reviews').setEmoji('📥').setStyle(ButtonStyle.Danger),
+                new ButtonBuilder().setCustomId('skaw_el_dashboard:sync').setLabel('Sync Members').setEmoji('🔄').setStyle(ButtonStyle.Secondary),
             ),
         ],
         allowedMentions: { parse: [] },

@@ -1,0 +1,54 @@
+name: Company Structure checks
+
+on:
+  push:
+    branches:
+      - feature/company-structure-manager
+    paths:
+      - 'src/commands/Utility/cs.js'
+      - 'src/services/companyStructureService.js'
+      - 'src/interactions/buttons/companyStructure/**'
+      - 'src/interactions/modals/companyStructure/**'
+      - 'src/interactions/selectMenus/companyStructure/**'
+      - 'tests/companyStructureService.test.js'
+      - 'tests/companyStructureCommand.test.js'
+      - '.github/workflows/company-structure-checks.yml'
+  pull_request:
+    paths:
+      - 'src/commands/Utility/cs.js'
+      - 'src/services/companyStructureService.js'
+      - 'src/interactions/buttons/companyStructure/**'
+      - 'src/interactions/modals/companyStructure/**'
+      - 'src/interactions/selectMenus/companyStructure/**'
+      - 'tests/companyStructureService.test.js'
+      - 'tests/companyStructureCommand.test.js'
+      - '.github/workflows/company-structure-checks.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  company-structure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Check JavaScript syntax
+        run: |
+          node --check src/commands/Utility/cs.js
+          node --check src/services/companyStructureService.js
+          node --check src/interactions/buttons/companyStructure/companyStructure.js
+          node --check src/interactions/modals/companyStructure/companyStructure.js
+          node --check src/interactions/selectMenus/companyStructure/companyStructure.js
+          node --check tests/companyStructureService.test.js
+          node --check tests/companyStructureCommand.test.js
+      - name: Run Company Structure tests
+        run: node --test tests/companyStructureService.test.js tests/companyStructureCommand.test.js

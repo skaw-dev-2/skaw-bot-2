@@ -231,7 +231,12 @@ function prepareCommandsForRegistration(commands) {
     }
 
     logger.warn(`Command count (${commands.length}) exceeds Discord limit (${MAX_COMMANDS}), truncating...`);
-    const truncated = commands.slice(0, MAX_COMMANDS);
+    // Keep key feature commands discoverable when this project exceeds Discord's global cap.
+    const prioritized = [
+        ...commands.filter(command => command.name === 'role'),
+        ...commands.filter(command => command.name !== 'role'),
+    ];
+    const truncated = prioritized.slice(0, MAX_COMMANDS);
     logger.info(`Truncated to ${truncated.length} commands for registration`);
     return truncated;
 }

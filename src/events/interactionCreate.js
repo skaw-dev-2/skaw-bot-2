@@ -21,6 +21,7 @@ import { ResponseCoordinator } from '../utils/responseCoordinator.js';
 import { enforceDefaultCommandPermissions } from '../utils/permissionGuard.js';
 import { handleEmployeeLogsComponent } from '../services/employeeLogsInteractionService.js';
 import { handleAutoResponderInteraction } from '../services/autoResponderPanelService.js';
+import { handleRoleTemplateInteraction } from '../services/roleTemplatePanelService.js';
 
 const COMMAND_ERROR_SUBTYPES = {
   warn: 'warn_failed',
@@ -59,6 +60,14 @@ export default {
       try {
         InteractionHelper.patchInteractionResponses(interaction);
         ResponseCoordinator.attach(interaction);
+
+        // Role Template panel components and modal submissions use custom IDs.
+        if (interaction.customId?.startsWith('skaw_rt_') && (
+          interaction.isButton?.() || interaction.isStringSelectMenu?.() || interaction.isRoleSelectMenu?.() || interaction.isModalSubmit?.()
+        )) {
+          await handleRoleTemplateInteraction(interaction);
+          return;
+        }
 
         // Auto Responder panel controls and multi-step modal forms use custom IDs.
         // Route them before generic component handlers so they remain interactive.

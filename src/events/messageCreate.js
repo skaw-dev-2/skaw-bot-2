@@ -19,6 +19,7 @@ import {
   recordCorrectCount,
 } from '../services/countingGameService.js';
 import { handleAutoResponderMessage } from '../services/autoResponderPanelService.js';
+import { handleRoleTemplateMessage } from '../services/roleTemplatePanelService.js';
 
 const MESSAGE_XP_RATE_LIMIT_ATTEMPTS = 12;
 const MESSAGE_XP_RATE_LIMIT_WINDOW_MS = 10000;
@@ -43,6 +44,9 @@ export default {
       if (autoResponderProcessed) {
         return;
       }
+
+      const roleTemplateProcessed = await handleRoleTemplateMessage(message, client, guildConfig);
+      if (roleTemplateProcessed) return;
 
       await handlePrefixCommand(message, client, guildConfig);
 

@@ -150,8 +150,8 @@ function buildListPayload(config, page = 0) {
         components.push(new ActionRowBuilder().addComponents(menu));
     }
     components.push(new ActionRowBuilder().addComponents(
-        button('skaw_ar_list:' + Math.max(0, selectedPage - 1), 'Previous', ButtonStyle.Secondary, '◀', selectedPage === 0),
-        button('skaw_ar_list:' + Math.min(pages - 1, selectedPage + 1), 'Next', ButtonStyle.Secondary, '▶', selectedPage >= pages - 1),
+        button('skaw_ar_list:' + Math.max(0, selectedPage - 1) + ':prev', 'Previous', ButtonStyle.Secondary, '◀', selectedPage === 0),
+        button('skaw_ar_list:' + Math.min(pages - 1, selectedPage + 1) + ':next', 'Next', ButtonStyle.Secondary, '▶', selectedPage >= pages - 1),
         button('skaw_ar_create', 'Create', ButtonStyle.Success, '➕'),
         button('skaw_ar_home', 'Dashboard', ButtonStyle.Secondary, '↩️'),
     ));

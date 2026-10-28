@@ -127,6 +127,69 @@ function makeModalInteraction(client, customId, values = {}) {
     };
 }
 
+test('template list pagination buttons always have unique component custom IDs', async () => {
+    const { client } = runtime({ templates: [template()] });
+    const interaction = {
+        customId: 'skaw_ar_list:0',
+        client,
+        guildId: GUILD_ID,
+        user: { id: '12345678901234567' },
+        memberPermissions: { has: () => true },
+        deferred: false,
+        replied: false,
+        inGuild: () => true,
+        isButton: () => true,
+        isStringSelectMenu: () => false,
+        isChannelSelectMenu: () => false,
+        isModalSubmit: () => false,
+        async update(payload) { this.lastUpdate = payload; return payload; },
+        async reply(payload) { this.replied = true; this.lastReply = payload; return payload; },
+        async followUp(payload) { this.lastReply = payload; return payload; },
+    };
+
+    assert.equal(await handleAutoResponderInteraction(interaction), true);
+    const rows = interaction.lastUpdate.components;
+    const customIds = rows.flatMap(row => row.components.map(component => component.data.custom_id));
+    assert.equal(customIds.length, new Set(customIds).size, 'all component custom IDs must be unique');
+
+    const navIds = rows[rows.length - 1].components.slice(0, 2).map(component => component.data.custom_id);
+    assert.equal(navIds[0], 'skaw_ar_list:0:prev');
+    assert.equal(navIds[1], 'skaw_ar_list:0:next');
+});
+
+test('template list pagination IDs remain unique and retain target pages on multi-page lists', async () => {
+    const templates = Array.from({ length: 21 }, (_, index) => template({
+        id: 'template-' + index,
+        name: 'Template ' + index,
+        triggers: [{ type: 'keyword', value: 'trigger-' + index }],
+    }));
+    const { client } = runtime({ templates });
+    const interaction = {
+        customId: 'skaw_ar_list:0',
+        client,
+        guildId: GUILD_ID,
+        user: { id: '12345678901234567' },
+        memberPermissions: { has: () => true },
+        deferred: false,
+        replied: false,
+        inGuild: () => true,
+        isButton: () => true,
+        isStringSelectMenu: () => false,
+        isChannelSelectMenu: () => false,
+        isModalSubmit: () => false,
+        async update(payload) { this.lastUpdate = payload; return payload; },
+        async reply(payload) { this.replied = true; this.lastReply = payload; return payload; },
+        async followUp(payload) { this.lastReply = payload; return payload; },
+    };
+
+    assert.equal(await handleAutoResponderInteraction(interaction), true);
+    const rows = interaction.lastUpdate.components;
+    const customIds = rows.flatMap(row => row.components.map(component => component.data.custom_id));
+    assert.equal(customIds.length, new Set(customIds).size, 'all component custom IDs must be unique');
+    const navIds = rows[rows.length - 1].components.slice(0, 2).map(component => component.data.custom_id);
+    assert.equal(navIds[0], 'skaw_ar_list:0:prev');
+    assert.equal(navIds[1], 'skaw_ar_list:1:next');
+});
 test('default Auto Responder prefix is ! and custom prefixes are validated', () => {
     assert.equal(normalizeAutoResponderConfig({}).prefix, '!');
     assert.equal(normalizeAutoResponderPrefix('?'), '?');

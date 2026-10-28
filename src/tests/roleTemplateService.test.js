@@ -11,6 +11,7 @@ const ACTOR_ID = '12345678901234567';
 const TARGET_ID = '12345678901234568';
 const ROLE_A = '22345678901234567';
 const ROLE_B = '32345678901234567';
+const WORKSHOP_ROLE = '42345678901234568';
 
 function makeClient(seed = {}) {
   const store = new Map(Object.entries(seed));
@@ -29,7 +30,7 @@ function makeRole(id, name, position, overrides = {}) {
     ...overrides,
   };
 }
-function makeAssignmentRuntime({ actorPosition = 5, rolePosition = 2, existingRoleIds = [] } = {}) {
+function makeAssignmentRuntime({ actorPosition = 5, rolePosition = 2, workshopPosition = 2, workshopRoleSelected = false, existingRoleIds = [] } = {}) {
   const store = new Map();
   store.set('guild:' + GUILD_ID + ':role_templates:v1', {
     version: 1,
@@ -41,7 +42,8 @@ function makeAssignmentRuntime({ actorPosition = 5, rolePosition = 2, existingRo
   });
   const lowRole = makeRole(ROLE_A, 'Mechanic Division', rolePosition);
   const secondRole = makeRole(ROLE_B, 'Company Staff', 1);
-  const roleCache = new Map([[ROLE_A, lowRole], [ROLE_B, secondRole]]);
+  const workshopRole = makeRole(WORKSHOP_ROLE, 'Workshop WS3', workshopPosition);
+  const roleCache = new Map([[ROLE_A, lowRole], [ROLE_B, secondRole], [WORKSHOP_ROLE, workshopRole]]);
   const targetRoles = {
     cache: new Map(existingRoleIds.map(id => [id, roleCache.get(id)]).filter(([, role]) => role)),
     added: [],
@@ -78,6 +80,7 @@ function makeAssignmentRuntime({ actorPosition = 5, rolePosition = 2, existingRo
     options: {
       getString: () => 'mechanic',
       getUser: () => ({ id: TARGET_ID, tag: 'Kings#0001' }),
+      getRole: () => workshopRoleSelected ? workshopRole : null,
     },
     async reply(payload) { replyCalls.push(payload); },
     async followUp(payload) { replyCalls.push(payload); },
@@ -147,11 +150,25 @@ test('/role rejects higher-ranked roles before making any changes', async () => 
   assert.match(runtime.replyCalls[0].content, /No roles were changed/);
 });
 
-test('/role adds only missing template roles and returns an ephemeral confirmation', async () => {
-  const runtime = makeAssignmentRuntime({ actorPosition: 20, rolePosition: 2, existingRoleIds: [ROLE_A] });
+test('/role adds an optional workshop placement separately from template roles', async () => {
+  const runtime = makeAssignmentRuntime({
+    actorPosition: 20, rolePosition: 2, workshopPosition: 3,
+    workshopRoleSelected: true, existingRoleIds: [ROLE_A],
+  });
   await roleCommand.execute(runtime.interaction, null, runtime.client);
-  assert.deepEqual(runtime.target.roles.added, [ROLE_B]);
+  assert.deepEqual(runtime.target.roles.added, [ROLE_B, WORKSHOP_ROLE]);
   assert.equal(runtime.replyCalls.length, 1);
   assert.equal(runtime.replyCalls[0].flags, 64);
+  assert.ok(runtime.replyCalls[0].content.includes('Workshop placement: **Workshop WS3** (added)'));
   assert.match(runtime.replyCalls[0].content, /No existing roles were removed/);
+});
+
+test('/role rank protection includes the selected workshop placement role', async () => {
+  const runtime = makeAssignmentRuntime({
+    actorPosition: 5, rolePosition: 2, workshopPosition: 10, workshopRoleSelected: true,
+  });
+  await roleCommand.execute(runtime.interaction, null, runtime.client);
+  assert.deepEqual(runtime.target.roles.added, []);
+  assert.match(runtime.replyCalls[0].content, /Rank protection blocked/);
+  assert.match(runtime.replyCalls[0].content, /Workshop WS3/);
 });

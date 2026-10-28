@@ -515,7 +515,7 @@ async function handleSelectMenu(interaction) {
 async function handleModal(interaction) {
     const id = interaction.customId;
     if (id.startsWith('skaw_ar_modal_create:')) {
-        const [, channelId, messageId] = parseIdParts(id, 'skaw_ar_modal_create:');
+        const [channelId, messageId] = parseIdParts(id, 'skaw_ar_modal_create:');
         const name = getFormValue(interaction, 'name');
         const keywords = commaOrNewlineList(getFormValue(interaction, 'keywords'));
         const commands = commaOrNewlineList(getFormValue(interaction, 'commands'));
@@ -551,7 +551,7 @@ async function handleModal(interaction) {
         });
     }
     if (id.startsWith('skaw_ar_modal_edit:')) {
-        const [, templateId, channelId, messageId] = parseIdParts(id, 'skaw_ar_modal_edit:');
+        const [templateId, channelId, messageId] = parseIdParts(id, 'skaw_ar_modal_edit:');
         const config = await getAutoResponderConfig(interaction.client, interaction.guildId);
         const existing = getAutoResponderTemplate(config, templateId);
         if (!existing) return interaction.reply({ content: 'Template tidak ditemukan.', flags: MessageFlags.Ephemeral });
@@ -576,7 +576,7 @@ async function handleModal(interaction) {
         return interaction.editReply({ content: '✅ Template updated: **' + result.template.name + '**.', allowedMentions: { parse: [] } });
     }
     if (id.startsWith('skaw_ar_modal_response:')) {
-        const [, templateId, channelId, messageId] = parseIdParts(id, 'skaw_ar_modal_response:');
+        const [templateId, channelId, messageId] = parseIdParts(id, 'skaw_ar_modal_response:');
         const config = await getAutoResponderConfig(interaction.client, interaction.guildId);
         const existing = getAutoResponderTemplate(config, templateId);
         if (!existing) return interaction.reply({ content: 'Template tidak ditemukan.', flags: MessageFlags.Ephemeral });
@@ -605,7 +605,7 @@ async function handleModal(interaction) {
         });
     }
     if (id.startsWith('skaw_ar_modal_advanced:')) {
-        const [, templateId, channelId, messageId] = parseIdParts(id, 'skaw_ar_modal_advanced:');
+        const [templateId, channelId, messageId] = parseIdParts(id, 'skaw_ar_modal_advanced:');
         const config = await getAutoResponderConfig(interaction.client, interaction.guildId);
         const existing = getAutoResponderTemplate(config, templateId);
         if (!existing) return interaction.reply({ content: 'Template tidak ditemukan.', flags: MessageFlags.Ephemeral });
@@ -625,7 +625,7 @@ async function handleModal(interaction) {
         return interaction.editReply({ content: '✅ Advanced Embed options saved.', allowedMentions: { parse: [] } });
     }
     if (id.startsWith('skaw_ar_modal_prefix:')) {
-        const [, channelId, messageId] = parseIdParts(id, 'skaw_ar_modal_prefix:');
+        const [channelId, messageId] = parseIdParts(id, 'skaw_ar_modal_prefix:');
         const prefix = getFormValue(interaction, 'prefix');
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const config = await setAutoResponderPrefix(interaction.client, interaction.guildId, prefix, interaction.user.id);

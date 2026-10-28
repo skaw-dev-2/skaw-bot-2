@@ -49,6 +49,28 @@ function runtime(config) {
             async delete(key) { store.delete(key); },
         },
     };
+    const panelEdits = [];
+    client.channels = {
+        async fetch(channelId) {
+            return {
+                id: channelId,
+                guildId: GUILD_ID,
+                isTextBased: () => true,
+                messages: {
+                    async fetch(messageId) {
+                        return {
+                            id: messageId,
+                            author: { id: client.user.id },
+                            async edit(payload) {
+                                panelEdits.push({ channelId, messageId, payload });
+                                return this;
+                            },
+                        };
+                    },
+                },
+            };
+        },
+    };
     store.set('guild:' + GUILD_ID + ':auto_responder:v1', structuredClone(config));
     function makeMessage(content, authorId = '12345678901234567', channelId = CHANNEL_ID, sendImpl = null) {
         const sent = [];
@@ -75,7 +97,34 @@ function runtime(config) {
             async delete() { this.deleted = true; return this; },
         };
     }
-    return { client, store, sends, makeMessage };
+    return { client, store, sends, makeMessage, panelEdits };
+}
+
+function makeModalInteraction(client, customId, values = {}) {
+    return {
+        customId,
+        client,
+        guildId: GUILD_ID,
+        user: { id: '12345678901234567' },
+        memberPermissions: { has: () => true },
+        deferred: false,
+        replied: false,
+        inGuild: () => true,
+        isButton: () => false,
+        isStringSelectMenu: () => false,
+        isChannelSelectMenu: () => false,
+        isModalSubmit: () => true,
+        fields: {
+            getTextInputValue(field) {
+                if (Object.hasOwn(values, field)) return values[field];
+                throw new Error('Missing field ' + field);
+            },
+        },
+        async deferReply() { this.deferred = true; },
+        async editReply(payload) { this.replied = true; this.lastReply = payload; return payload; },
+        async reply(payload) { this.replied = true; this.lastReply = payload; return payload; },
+        async followUp(payload) { this.lastReply = payload; return payload; },
+    };
 }
 
 test('default Auto Responder prefix is ! and custom prefixes are validated', () => {
@@ -246,4 +295,78 @@ test('interactive panel entrypoints load and are exported', () => {
     assert.equal(typeof handleAutoResponderMessage, 'function');
     assert.equal(typeof handleAutoResponderInteraction, 'function');
     assert.equal(typeof openAutoResponderPanel, 'function');
+});
+
+
+test('create modal parses channel and message IDs in the correct order and refreshes the panel', async () => {
+    const { client, panelEdits } = runtime({});
+    const interaction = makeModalInteraction(
+        client,
+        'skaw_ar_modal_create:' + CHANNEL_ID + ':11111111111111111',
+        { name: 'Mechanic Information', keywords: 'mechanic, bengkel', commands: '', matchMode: 'exact', responseMode: 'text' },
+    );
+    assert.equal(await handleAutoResponderInteraction(interaction), true);
+    const config = await getAutoResponderConfig(client, GUILD_ID);
+    assert.equal(config.templates.length, 1);
+    assert.equal(config.templates[0].name, 'Mechanic Information');
+    assert.equal(panelEdits.length, 1);
+    assert.equal(panelEdits[0].channelId, CHANNEL_ID);
+    assert.equal(panelEdits[0].messageId, '11111111111111111');
+});
+
+test('edit-template modal resolves the real template ID and saves edits', async () => {
+    const { client, panelEdits } = runtime({ templates: [template()] });
+    const interaction = makeModalInteraction(
+        client,
+        'skaw_ar_modal_edit:template123:' + CHANNEL_ID + ':11111111111111111',
+        { name: 'Updated Partnership Information', keywords: 'partnership', commands: '', matchMode: 'contains', responseMode: 'text' },
+    );
+    assert.equal(await handleAutoResponderInteraction(interaction), true);
+    const config = await getAutoResponderConfig(client, GUILD_ID);
+    assert.equal(config.templates[0].name, 'Updated Partnership Information');
+    assert.equal(config.templates[0].matchMode, 'contains');
+    assert.equal(panelEdits[0].channelId, CHANNEL_ID);
+});
+
+test('edit-response modal resolves the template ID and persists response content', async () => {
+    const { client, panelEdits } = runtime({ templates: [template()] });
+    const interaction = makeModalInteraction(
+        client,
+        'skaw_ar_modal_response:template123:' + CHANNEL_ID + ':11111111111111111',
+        { textResponse: 'Updated reply for {user}.' },
+    );
+    assert.equal(await handleAutoResponderInteraction(interaction), true);
+    const config = await getAutoResponderConfig(client, GUILD_ID);
+    assert.equal(config.templates[0].textResponse, 'Updated reply for {user}.');
+    assert.match(interaction.lastReply.content, /Response content saved/);
+    assert.equal(panelEdits[0].channelId, CHANNEL_ID);
+    assert.equal(panelEdits[0].messageId, '11111111111111111');
+});
+
+test('advanced-embed modal resolves the template ID and persists options', async () => {
+    const { client, panelEdits } = runtime({ templates: [template()] });
+    const interaction = makeModalInteraction(
+        client,
+        'skaw_ar_modal_advanced:template123:' + CHANNEL_ID + ':11111111111111111',
+        { thumbnailUrl: 'https://example.com/thumb.png', footer: 'SKAW GROUP • Official' },
+    );
+    assert.equal(await handleAutoResponderInteraction(interaction), true);
+    const config = await getAutoResponderConfig(client, GUILD_ID);
+    assert.equal(config.templates[0].embed.thumbnailUrl, 'https://example.com/thumb.png');
+    assert.equal(config.templates[0].embed.footer, 'SKAW GROUP • Official');
+    assert.equal(panelEdits[0].channelId, CHANNEL_ID);
+});
+
+test('prefix modal parses panel IDs correctly and updates settings', async () => {
+    const { client, panelEdits } = runtime({});
+    const interaction = makeModalInteraction(
+        client,
+        'skaw_ar_modal_prefix:' + CHANNEL_ID + ':11111111111111111',
+        { prefix: '?' },
+    );
+    assert.equal(await handleAutoResponderInteraction(interaction), true);
+    const config = await getAutoResponderConfig(client, GUILD_ID);
+    assert.equal(config.prefix, '?');
+    assert.equal(panelEdits[0].channelId, CHANNEL_ID);
+    assert.equal(panelEdits[0].messageId, '11111111111111111');
 });

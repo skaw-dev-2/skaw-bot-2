@@ -109,7 +109,7 @@ function detailPayload(template, guild) {
   const row1 = new ActionRowBuilder().addComponents(
     button('skaw_rt_rename:' + template.id, 'Rename'),
     button('skaw_rt_enabled:' + template.id, template.enabled ? 'Disable' : 'Enable', template.enabled ? ButtonStyle.Secondary : ButtonStyle.Success, !template.roleIds.length),
-    button('skaw_rt_delete:' + template.id + ':' + (guild?.channels?.cache?.first()?.id || '0') + ':0', 'Delete', ButtonStyle.Danger),
+    button('skaw_rt_delete:' + template.id, 'Delete', ButtonStyle.Danger),
     button('skaw_rt_back', 'Back to List'),
   );
   const row2 = new ActionRowBuilder().addComponents(

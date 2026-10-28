@@ -81,7 +81,7 @@ function uniqueSlug(name, templates, excludeId = null) {
 }
 
 export async function createRoleTemplate(client, guildId, name, actorId) {
-    const clean = String(name ?? '').trim().replace(/\\s+/g, ' ').slice(0, 80);
+    const clean = String(name ?? '').trim().replace(/\s+/g, ' ').slice(0, 80);
     if (!clean) throw new Error('Template name cannot be empty.');
     const config = await getRoleTemplateConfig(client, guildId);
     if (config.templates.length >= 200) throw new Error('Maximum of 200 templates reached.');
@@ -104,7 +104,7 @@ export async function createRoleTemplate(client, guildId, name, actorId) {
 }
 
 export async function renameRoleTemplate(client, guildId, templateId, name, actorId) {
-    const clean = String(name ?? '').trim().replace(/\\s+/g, ' ').slice(0, 80);
+    const clean = String(name ?? '').trim().replace(/\s+/g, ' ').slice(0, 80);
     if (!clean) throw new Error('Template name cannot be empty.');
     const config = await getRoleTemplateConfig(client, guildId);
     const old = getRoleTemplateById(config, templateId);
@@ -128,7 +128,7 @@ export async function setRoleTemplateRoles(client, guildId, templateId, roleIds,
         throw new Error('Select up to 25 roles for a template.');
     }
     const ids = [...new Set(roleIds.map(String))];
-    if (ids.some(id => !/^\\d{17,20}$/.test(id))) throw new Error('Invalid Role ID.');
+    if (ids.some(id => !/^\d{17,20}$/.test(id))) throw new Error('Invalid Role ID.');
     const config = await getRoleTemplateConfig(client, guildId);
     const old = getRoleTemplateById(config, templateId);
     if (!old) throw new Error('Template not found.');
@@ -153,6 +153,34 @@ export async function deleteRoleTemplate(client, guildId, templateId) {
     if (!old) throw new Error('Template not found.');
     const next = await save(client, guildId, { ...config, templates: config.templates.filter(item => item.id !== old.id) });
     return { config: next, template: old };
+}
+
+
+/**
+ * Return roles that the actor may not configure/assign according to Discord's
+ * role hierarchy. The guild owner bypasses this actor-vs-role check only.
+ * The bot's own role hierarchy is still enforced separately by Discord.
+ */
+export function getRoleHierarchyViolations(actorMember, roles, guildOwnerId = null) {
+    const candidates = (Array.isArray(roles) ? roles : []).filter(Boolean);
+    const actorId = String(actorMember?.id || '');
+    const ownerId = String(guildOwnerId || actorMember?.guild?.ownerId || '');
+    if (actorId && ownerId && actorId === ownerId) return [];
+    const highest = actorMember?.roles?.highest;
+    if (!highest || typeof highest.comparePositionTo !== 'function') return candidates;
+    return candidates.filter(role => highest.comparePositionTo(role) <= 0);
+}
+
+export function getRoleAssignmentabilityIssues(roles, everyoneRoleId = null) {
+    const issues = [];
+    for (const role of Array.isArray(roles) ? roles : []) {
+        if (!role) {
+            issues.push({ role: null, reason: 'missing' });
+        } else if (String(role.id) === String(everyoneRoleId || '') || role.managed || role.editable === false) {
+            issues.push({ role, reason: 'not_assignable' });
+        }
+    }
+    return issues;
 }
 
 /** Create a safe plan before changing any member roles. */

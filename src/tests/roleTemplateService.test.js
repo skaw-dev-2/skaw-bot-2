@@ -159,7 +159,7 @@ test('/role adds an optional workshop placement separately from template roles',
   assert.deepEqual(runtime.target.roles.added, [ROLE_B, WORKSHOP_ROLE]);
   assert.equal(runtime.replyCalls.length, 1);
   assert.equal(runtime.replyCalls[0].flags, 64);
-  assert.match(runtime.replyCalls[0].content, /Workshop placement: \\*\\*Workshop WS3\\*\\* \\(added\\)/);
+  assert.ok(runtime.replyCalls[0].content.includes('Workshop placement: **Workshop WS3** (added)'));
   assert.match(runtime.replyCalls[0].content, /No existing roles were removed/);
 });
 

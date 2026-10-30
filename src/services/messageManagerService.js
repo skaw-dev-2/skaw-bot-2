@@ -46,7 +46,7 @@ function normalizeEmbedRecord(raw = {}) {
     };
 }
 
-function normalizeMessageRecord(raw, fallbackId = '') {
+export function normalizeMessageRecord(raw, fallbackId = '') {
     if (!raw || typeof raw !== 'object') return null;
     const messageId = String(raw.messageId || fallbackId || '').trim();
     const channelId = String(raw.channelId || '').trim();

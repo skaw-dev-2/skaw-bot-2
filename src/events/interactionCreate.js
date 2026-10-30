@@ -22,6 +22,7 @@ import { enforceDefaultCommandPermissions } from '../utils/permissionGuard.js';
 import { handleEmployeeLogsComponent } from '../services/employeeLogsInteractionService.js';
 import { handleAutoResponderInteraction } from '../services/autoResponderPanelService.js';
 import { handleRoleTemplateInteraction } from '../services/roleTemplatePanelService.js';
+import { handleMessageManagerInteraction, isMessageManagerInteraction } from '../commands/Utility/message.js';
 
 const COMMAND_ERROR_SUBTYPES = {
   warn: 'warn_failed',
@@ -60,6 +61,18 @@ export default {
       try {
         InteractionHelper.patchInteractionResponses(interaction);
         ResponseCoordinator.attach(interaction);
+
+        // Message Manager buttons, role selectors and modal forms must be routed
+        // before generic component handlers, including after bot restarts.
+        if (isMessageManagerInteraction(interaction) && (
+          interaction.isButton?.() ||
+          interaction.isStringSelectMenu?.() ||
+          interaction.isRoleSelectMenu?.() ||
+          interaction.isModalSubmit?.()
+        )) {
+          await handleMessageManagerInteraction(interaction);
+          return;
+        }
 
         // Role Template panel components and modal submissions use custom IDs.
         if (interaction.customId?.startsWith('skaw_rt_') && (

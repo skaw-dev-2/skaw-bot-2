@@ -331,8 +331,10 @@ function buildDraftPreview(draft) {
         );
 
         return {
-            content: '',
-            embeds: [info, buildManagedEmbed(draft.embed)],
+            content: draft.channelId
+                ? `**PREVIEW • Destination:** <#${draft.channelId}>\n\n`
+                : '**PREVIEW • Destination not selected**\n\n',
+            embeds: [buildManagedEmbed(draft.embed)],
             components,
             allowedMentions: { parse: [] },
         };

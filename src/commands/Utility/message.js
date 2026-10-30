@@ -26,10 +26,8 @@ import {
     getManagedMessage,
     getManagedMessages,
     getMessageManagerAccess,
-    memberCanManageMessageSettings,
     normalizeMessageRecord,
     removeManagedMessage,
-    requireMessageManagerAccess,
     requireMessageSettingsPermission,
     saveManagedMessage,
     setAllowedMessageRoles,
@@ -620,7 +618,7 @@ async function showManageList(interaction, update = true) {
 function createRecordFromDraft(draft, userId) {
     const now = new Date().toISOString();
     return normalizeMessageRecord({
-        messageId: draft.messageId || '',
+        messageId: draft.messageId || 'pending-message-id',
         channelId: draft.channelId,
         type: draft.type,
         content: draft.type === 'regular' ? validateRegularMessage(draft.content) : '',

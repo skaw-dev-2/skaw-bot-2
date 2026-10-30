@@ -121,15 +121,24 @@ function shortInput(customId, placeholder, value = '', maxLength = 200, required
     return input;
 }
 
-function paragraphInput(customId, placeholder, value = '', maxLength = 4096, required = true) {
+// Discord modal Text Inputs have a hard API maximum of 4000 characters,
+// even though an Embed description itself can contain up to 4096 characters.
+export function getModalInputMaxLength(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return 1;
+    return Math.min(4000, Math.max(1, Math.floor(numeric)));
+}
+
+function paragraphInput(customId, placeholder, value = '', maxLength = 4000, required = true) {
+    const safeMaxLength = getModalInputMaxLength(maxLength);
     const input = new TextInputBuilder()
         .setCustomId(customId)
         .setPlaceholder(placeholder)
         .setStyle(TextInputStyle.Paragraph)
-        .setMaxLength(maxLength)
+        .setMaxLength(safeMaxLength)
         .setRequired(required);
 
-    if (value) input.setValue(String(value).slice(0, maxLength));
+    if (value) input.setValue(String(value).slice(0, safeMaxLength));
     return input;
 }
 
@@ -184,7 +193,7 @@ function buildRegularEditModal(draft) {
         );
 }
 
-function buildEmbedCreateModal(draft) {
+export function buildEmbedCreateModal(draft) {
     return new ModalBuilder()
         .setCustomId(`${PREFIX}modal_embed:${draft.token}`)
         .setTitle('Create Embed Message')
@@ -197,8 +206,8 @@ function buildEmbedCreateModal(draft) {
             ),
             textLabel(
                 'Description',
-                'Main embed text. Maximum 4096 characters.',
-                paragraphInput(IDS.embedDescription, 'Enter the embed description...', draft.embed.description, 4096, true),
+                'Main embed text. Discord modal input limit: 4000 characters.',
+                paragraphInput(IDS.embedDescription, 'Enter the embed description...', draft.embed.description, 4000, true),
             ),
             textLabel(
                 'Color',
@@ -220,8 +229,8 @@ function buildEmbedContentModal(draft) {
             ),
             textLabel(
                 'Description',
-                'The main embed text. Your previous content is loaded.',
-                paragraphInput(IDS.embedDescription, 'Enter the embed description...', draft.embed.description, 4096, true),
+                'The main embed text. Your previous content is loaded (max 4000 characters in Discord modal).',
+                paragraphInput(IDS.embedDescription, 'Enter the embed description...', draft.embed.description, 4000, true),
             ),
         );
 }

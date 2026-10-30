@@ -7,6 +7,7 @@ on:
       - "src/services/messageManagerService.js"
       - "src/events/interactionCreate.js"
       - "src/tests/messageManagerService.test.js"
+      - "src/tests/messageManagerCommand.test.js"
       - "package.json"
       - "package-lock.json"
       - ".github/workflows/message-manager-checks.yml"
@@ -34,6 +35,7 @@ jobs:
           node --check src/commands/Utility/message.js
           node --check src/events/interactionCreate.js
           node --check src/tests/messageManagerService.test.js
+          node --check src/tests/messageManagerCommand.test.js
 
       - name: Run Message Manager tests
         run: npm run test:message-manager

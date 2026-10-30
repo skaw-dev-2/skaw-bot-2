@@ -226,6 +226,14 @@ export function validateEmbedData(raw = {}) {
     if (embed.authorName.length > 256) throw new Error('Author name cannot exceed 256 characters.');
     if (embed.footerText.length > 2048) throw new Error('Footer text cannot exceed 2048 characters.');
 
+    const totalTextLength = embed.title.length
+        + embed.description.length
+        + embed.authorName.length
+        + embed.footerText.length;
+    if (totalTextLength > 6000) {
+        throw new Error('The combined embed text (title, description, author and footer) cannot exceed 6000 characters.');
+    }
+
     embed.color = validateHexColor(embed.color);
     embed.url = validateOptionalHttpUrl(embed.url, 'Embed URL');
     embed.authorUrl = validateOptionalHttpUrl(embed.authorUrl, 'Author URL');

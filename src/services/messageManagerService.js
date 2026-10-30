@@ -337,7 +337,7 @@ export async function removeManagedMessage(client, guildId, messageId) {
     return record;
 }
 
-export async function assertCanSendManagedMessage(channel, guild, type = 'regular') {
+export async function assertCanSendManagedMessage(channel, guild, type = 'regular', requireReadHistory = false) {
     if (!channel || !guild || !channel.isTextBased?.() || channel.isDMBased?.()) {
         throw new Error('The selected channel is unavailable or cannot receive messages.');
     }
@@ -349,11 +349,13 @@ export async function assertCanSendManagedMessage(channel, guild, type = 'regula
     if (!permissions
         || !permissions.has(PermissionFlagsBits.ViewChannel)
         || !permissions.has(PermissionFlagsBits.SendMessages)
-        || (type === 'embed' && !permissions.has(PermissionFlagsBits.EmbedLinks))) {
+        || (type === 'embed' && !permissions.has(PermissionFlagsBits.EmbedLinks))
+        || (requireReadHistory && !permissions.has(PermissionFlagsBits.ReadMessageHistory))) {
         const missing = [
             !permissions?.has(PermissionFlagsBits.ViewChannel) ? 'View Channel' : null,
             !permissions?.has(PermissionFlagsBits.SendMessages) ? 'Send Messages' : null,
             type === 'embed' && !permissions?.has(PermissionFlagsBits.EmbedLinks) ? 'Embed Links' : null,
+            requireReadHistory && !permissions?.has(PermissionFlagsBits.ReadMessageHistory) ? 'Read Message History' : null,
         ].filter(Boolean);
 
         throw new Error(`I need ${missing.join(', ')} permission(s) in ${channel}.`);

@@ -109,6 +109,9 @@ async function resolveGuildMember(interaction) {
 }
 
 export function memberCanManageMessageSettings(member, interaction = null) {
+    if (member?.guild?.ownerId && member.id === member.guild.ownerId) return true;
+    if (interaction?.guild?.ownerId && interaction.user?.id === interaction.guild.ownerId) return true;
+
     const permissions = getPermissions(member, interaction);
     return permissions.has(PermissionFlagsBits.Administrator)
         || permissions.has(PermissionFlagsBits.ManageGuild);

@@ -636,7 +636,7 @@ async function confirmDraft(interaction, token) {
 
     const record = createRecordFromDraft(draft, interaction.user.id);
     const channel = await interaction.guild.channels.fetch(record.channelId).catch(() => null);
-    await assertCanSendManagedMessage(channel, interaction.guild, record.type);
+    await assertCanSendManagedMessage(channel, interaction.guild, record.type, draft.mode === 'edit');
 
     if (draft.mode === 'create') {
         const payloadRecord = { ...record, messageId: 'pending-message-id' };

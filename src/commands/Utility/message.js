@@ -502,7 +502,10 @@ async function sendPrivateError(interaction, title, description) {
         flags: MessageFlags.Ephemeral,
     };
 
-    if (interaction.deferred || interaction.replied) {
+    if (interaction.deferred) {
+        return interaction.editReply({ embeds: payload.embeds, components: [] }).catch(() => null);
+    }
+    if (interaction.replied) {
         return interaction.followUp(payload).catch(() => null);
     }
     return interaction.reply(payload).catch(() => null);
@@ -604,13 +607,18 @@ async function beginEdit(interaction, record, updateCurrentMessage = true) {
 
     saveDraft(interaction, draft);
     const payload = buildDraftPreview(draft);
+    if (interaction.deferred) return interaction.editReply(payload);
     if (updateCurrentMessage) return interaction.update(payload);
     return interaction.reply({ ...payload, flags: MessageFlags.Ephemeral });
 }
 
 async function showManageList(interaction, update = true) {
+    if (update && !interaction.deferred && !interaction.replied) {
+        await interaction.deferUpdate();
+    }
     const messages = await getManagedMessages(interaction.client, interaction.guildId, 25);
     const payload = buildManageList(messages);
+    if (interaction.deferred) return interaction.editReply(payload);
     if (update) return interaction.update(payload);
     return interaction.reply({ ...payload, flags: MessageFlags.Ephemeral });
 }
@@ -631,6 +639,7 @@ function createRecordFromDraft(draft, userId) {
 }
 
 async function confirmDraft(interaction, token) {
+    if (!interaction.deferred && !interaction.replied) await interaction.deferUpdate();
     const draft = getDraft(interaction, token);
     if (!draft) throw new Error('This editor session expired. Run `/message panel` to start again.');
 
@@ -651,7 +660,7 @@ async function confirmDraft(interaction, token) {
         }
 
         deleteDraft(interaction, token);
-        return interaction.update({
+        return interaction.editReply({
             embeds: [{
                 title: 'Message Sent Successfully',
                 description: `Your ${record.type === 'embed' ? 'Embed Message' : 'Regular Message'} was sent to ${channel}.\n\nMessage ID: \`${sent.id}\``,
@@ -682,7 +691,7 @@ async function confirmDraft(interaction, token) {
     }
 
     deleteDraft(interaction, token);
-    return interaction.update({
+    return interaction.editReply({
         embeds: [{
             title: 'Message Updated Successfully',
             description: `The original message in ${channel} has been updated. No duplicate message was created.`,
@@ -693,13 +702,14 @@ async function confirmDraft(interaction, token) {
 }
 
 async function deleteManagedMessageFlow(interaction, messageId) {
+    if (!interaction.deferred && !interaction.replied) await interaction.deferUpdate();
     const record = await getManagedMessage(interaction.client, interaction.guildId, messageId);
     if (!record) throw new Error('This message is no longer registered in Message Manager.');
 
     const channel = await interaction.guild.channels.fetch(record.channelId).catch(() => null);
     if (!channel) {
         await removeManagedMessage(interaction.client, interaction.guildId, messageId);
-        return interaction.update({
+        return interaction.editReply({
             embeds: [{ title: 'Managed Record Removed', description: 'The original channel no longer exists. The stale Message Manager record has been removed.', color: 0x57F287 }],
             components: [],
         });
@@ -724,7 +734,7 @@ async function deleteManagedMessageFlow(interaction, messageId) {
         throw error;
     }
 
-    return interaction.update({
+    return interaction.editReply({
         embeds: [{
             title: 'Message Deleted',
             description: message ? `The message in ${channel} and its Message Manager record have been deleted.` : 'The original message was already missing. Its Message Manager record has been removed.',
@@ -781,6 +791,7 @@ async function openRoleSettings(interaction, update = false, status = '') {
     setRoleDraft(interaction, roleIds);
 
     const payload = buildRoleSettingsPanel(interaction.guild, roleIds, status);
+    if (interaction.deferred) return interaction.editReply(payload);
     if (update) return interaction.update(payload);
     return interaction.reply({ ...payload, flags: MessageFlags.Ephemeral });
 }
@@ -795,13 +806,14 @@ async function handleRoleSettingsComponent(interaction) {
     }
 
     if (interaction.customId === `${PREFIX}role_save`) {
+        if (!interaction.deferred && !interaction.replied) await interaction.deferUpdate();
         const draft = getRoleDraft(interaction);
         if (!draft) throw new Error('This role settings session expired. Run `/message set` again.');
         const existingRoles = await interaction.guild.roles.fetch().catch(() => interaction.guild.roles.cache);
         const validRoleIds = draft.roleIds.filter(id => existingRoles.has(id) && id !== interaction.guildId);
         await setAllowedMessageRoles(interaction.client, interaction.guildId, validRoleIds);
         setRoleDraft(interaction, validRoleIds);
-        return interaction.update(buildRoleSettingsPanel(
+        return interaction.editReply(buildRoleSettingsPanel(
             interaction.guild,
             validRoleIds,
             '✅ Role access settings have been saved.',
@@ -809,9 +821,10 @@ async function handleRoleSettingsComponent(interaction) {
     }
 
     if (interaction.customId === `${PREFIX}role_reset`) {
+        if (!interaction.deferred && !interaction.replied) await interaction.deferUpdate();
         await setAllowedMessageRoles(interaction.client, interaction.guildId, []);
         setRoleDraft(interaction, []);
-        return interaction.update(buildRoleSettingsPanel(
+        return interaction.editReply(buildRoleSettingsPanel(
             interaction.guild,
             [],
             '✅ Access roles cleared. Only Administrator and Manage Server can use Message Manager.',
@@ -881,6 +894,9 @@ async function handleModal(interaction) {
 }
 
 async function handlePublicEdit(interaction) {
+    if (!interaction.deferred && !interaction.replied) {
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    }
     if (!(await canUsePanel(interaction))) return;
 
     const publicMessage = interaction.message;
@@ -914,13 +930,15 @@ async function handleComponent(interaction) {
     if (id === `${PREFIX}manage_pick`) {
         const messageId = interaction.values?.[0];
         if (!messageId) throw new Error('Please select a message.');
+        if (!interaction.deferred && !interaction.replied) await interaction.deferUpdate();
         const record = await getManagedMessage(interaction.client, interaction.guildId, messageId);
         if (!record) throw new Error('That message is no longer registered.');
-        return interaction.update(buildSelectedMessagePanel(record));
+        return interaction.editReply(buildSelectedMessagePanel(record));
     }
 
     if (id.startsWith(`${PREFIX}manage_edit:`)) {
         const messageId = id.split(':')[1];
+        if (!interaction.deferred && !interaction.replied) await interaction.deferUpdate();
         const record = await getManagedMessage(interaction.client, interaction.guildId, messageId);
         if (!record) throw new Error('That message is no longer registered.');
         return beginEdit(interaction, record, true);
@@ -928,9 +946,10 @@ async function handleComponent(interaction) {
 
     if (id.startsWith(`${PREFIX}manage_delete:`)) {
         const messageId = id.split(':')[1];
+        if (!interaction.deferred && !interaction.replied) await interaction.deferUpdate();
         const record = await getManagedMessage(interaction.client, interaction.guildId, messageId);
         if (!record) throw new Error('That message is no longer registered.');
-        return interaction.update(buildDeleteConfirmation(record));
+        return interaction.editReply(buildDeleteConfirmation(record));
     }
 
     if (id.startsWith(`${PREFIX}delete_confirm:`)) {
@@ -1057,12 +1076,14 @@ export default {
             const subcommand = interaction.options.getSubcommand();
             if (subcommand === 'set') {
                 if (!(await canConfigureRoles(interaction))) return;
+                await interaction.deferReply({ flags: MessageFlags.Ephemeral });
                 return openRoleSettings(interaction, false);
             }
 
             if (subcommand === 'panel') {
+                await interaction.deferReply({ flags: MessageFlags.Ephemeral });
                 if (!(await canUsePanel(interaction))) return;
-                return interaction.reply({ ...buildHomePanel(), flags: MessageFlags.Ephemeral });
+                return interaction.editReply(buildHomePanel());
             }
         } catch (error) {
             logger.error('Message Manager command failed:', error);

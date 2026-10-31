@@ -303,7 +303,9 @@ export function buildPermissionChoicePanel(role, scope, flagName, sessionToken =
   const enabled = getRolePermissionState(role, flagName);
   const embed = fieldEmbed('PERMISSION EDITOR · ' + safeName(role.name, 100), [
     '**Permission:** ' + formatPermissionName(flagName),
-    '**Current server role state:** ' + (enabled ? 'Granted' : 'Not granted'),
+    scope === 'server'
+      ? '**Current server role state:** ' + (enabled ? 'Granted' : 'Not granted')
+      : '**Current channel overwrite state:** May differ between selected targets; the confirmation preview shows each target’s current state.',
     scope === 'channel'
       ? 'This changes only the selected channel overwrite for this role. Other overwrite flags are preserved.'
       : 'This changes only this server permission bit. Every other role permission is preserved.',

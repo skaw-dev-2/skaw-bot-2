@@ -16,8 +16,15 @@ import {
 } from '../services/roleAccessManagerService.js';
 
 function permissionSet(...flags) {
-  const values = new Set(flags);
-  return { has(flag) { return values.has(flag); } };
+  const values = new Set(flags.map(flag =>
+    typeof flag === 'string' ? (PermissionFlagsBits[flag] ?? flag) : flag,
+  ));
+  return {
+    has(flag) {
+      if (Array.isArray(flag)) return flag.some(item => values.has(item));
+      return values.has(flag);
+    },
+  };
 }
 
 function makeChannel({ id, name, type = ChannelType.GuildText, view = true, overwrite = null, synced = true }) {

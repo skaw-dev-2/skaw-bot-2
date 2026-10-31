@@ -150,6 +150,7 @@ export function buildRoleAccessRoleDetail(guild, role) {
   );
   const row2 = new ActionRowBuilder().addComponents(
     button('channelpick:' + role.id + ':0', 'Bulk Channel Editor', ButtonStyle.Success, role.managed),
+    button('comparepick:' + role.id, 'Compare Role'),
     button('backups:' + role.id, 'Backups & Restore'),
     button('dashboard:0', 'All Roles'),
   );
@@ -426,8 +427,47 @@ export function buildMemberAccessPanel(guild, member, page = 0) {
   };
 }
 
+export function buildRoleComparePickerPanel(guild, role) {
+  const roles = getManageableRoles(guild)
+    .filter(item => item.id !== role.id)
+    .slice(0, 25);
+  const embed = fieldEmbed('COMPARE ROLE ACCESS', [
+    'Compare **' + safeName(role.name, 80) + '** with another role.',
+    'The comparison checks server permission flags and channel visibility.',
+    '',
+    'Select the role to compare below.',
+  ].join('\n'));
+  if (!roles.length) {
+    return {
+      embeds: [embed.setDescription('There are no other roles available to compare.')],
+      components: [new ActionRowBuilder().addComponents(button('role:' + role.id, 'Back to Role Profile'))],
+      allowedMentions: { parse: [] },
+    };
+  }
+  const select = new StringSelectMenuBuilder()
+    .setCustomId('skaw_ra_select:compare:' + role.id)
+    .setPlaceholder('Select a role to compare')
+    .setMinValues(1)
+    .setMaxValues(1)
+    .addOptions(roles.map(item => ({
+      label: roleLabel(item),
+      description: ('Position ' + item.position + ' · members ' + (item.members?.size ?? '—')).slice(0, 100),
+      value: item.id,
+    })));
+  return {
+    embeds: [embed],
+    components: [
+      new ActionRowBuilder().addComponents(select),
+      new ActionRowBuilder().addComponents(button('role:' + role.id, 'Back to Role Profile')),
+    ],
+    allowedMentions: { parse: [] },
+  };
+}
+
 export function buildBackupsPanel(role, backups) {
-  const items = backups.filter(item => String(item.snapshot?.roleId) === String(role.id)).slice(0, 18);
+  const items = backups
+    .filter(item => String(item.snapshot?.roleId) === String(role.id))
+    .slice(0, 18);
   const lines = items.map(item => {
     const created = new Date(item.createdAt).getTime();
     return '• Backup ' + item.id + ' · ' +
@@ -435,15 +475,32 @@ export function buildBackupsPanel(role, backups) {
       ' · ' + safeName(item.reason, 100) + ' · ' +
       (item.snapshot?.channelOverwrites?.length || 0) + ' overwrite(s)';
   });
+  const rows = [];
+  if (items.length) {
+    const select = new StringSelectMenuBuilder()
+      .setCustomId('skaw_ra_select:restore:' + role.id)
+      .setPlaceholder('Select a backup to preview and restore')
+      .setMinValues(1)
+      .setMaxValues(1)
+      .addOptions(items.map(item => ({
+        label: ('Backup ' + item.id).slice(0, 100),
+        description: (safeName(item.reason, 70) + ' · ' + (item.snapshot?.channelOverwrites?.length || 0) + ' overwrite(s)').slice(0, 100),
+        value: String(item.id),
+      })));
+    rows.push(new ActionRowBuilder().addComponents(select));
+  }
+  rows.push(new ActionRowBuilder().addComponents(button('role:' + role.id, 'Back to Role Profile')));
   return {
     embeds: [fieldEmbed('ROLE BACKUPS · ' + safeName(role.name, 100), [
       'Available snapshots: **' + items.length + '**',
       '',
       lines.join('\n') || 'No backups stored for this role yet.',
       '',
-      'To restore a snapshot, run /access restore with the backup ID. Restoring changes only this role’s server permissions and channel overwrites.',
+      items.length
+        ? 'Choose a backup from the menu to review its contents. Nothing is restored until you confirm the preview.'
+        : 'A backup is created automatically before the first permission change.',
     ].join('\n'))],
-    components: [new ActionRowBuilder().addComponents(button('role:' + role.id, 'Back to Role Profile'))],
+    components: rows,
     allowedMentions: { parse: [] },
   };
 }
@@ -474,6 +531,11 @@ export async function handleRoleAccessButton(interaction, client, args = []) {
       const role = await fetchRole(interaction.guild, values[0]);
       if (!role) throw new Error('Selected role no longer exists.');
       return interaction.update(buildRoleChannelPickerPanel(interaction.guild, role, values[1]));
+    }
+    if (action === 'comparepick') {
+      const role = await fetchRole(interaction.guild, values[0]);
+      if (!role) throw new Error('Selected role no longer exists.');
+      return interaction.update(buildRoleComparePickerPanel(interaction.guild, role));
     }
     if (action === 'channelperms') {
       const [roleId, sessionToken, page] = values;
@@ -626,6 +688,46 @@ export async function handleRoleAccessSelect(interaction, client, args = []) {
       const role = await fetchRole(interaction.guild, interaction.values?.[0]);
       if (!role) throw new Error('Selected role no longer exists.');
       return interaction.update(buildRoleAccessRoleDetail(interaction.guild, role));
+    }
+    if (action === 'restore') {
+      const backupId = interaction.values?.[0];
+      if (!backupId) throw new Error('Select a backup first.');
+      const pending = await createRoleBackupRestorePreview(
+        client, interaction.guild, interaction.user.id, String(backupId),
+      );
+      const role = await fetchRole(interaction.guild, pending.roleId);
+      if (!role) throw new Error('The role from this backup no longer exists.');
+      return interaction.update(buildRestorePreviewPanel(role, pending));
+    }
+    if (action === 'compare') {
+      const first = await fetchRole(interaction.guild, values[0]);
+      const second = await fetchRole(interaction.guild, interaction.values?.[0]);
+      if (!first || !second) throw new Error('Both roles must still exist.');
+      const result = compareRoleAccess(interaction.guild, first, second);
+      const permissions = result.permissionDifferences.slice(0, 12).map(item =>
+        '• **' + item.label + '** — ' + (item.first ? '✅' : '⛔') + ' ' + safeName(first.name, 45) +
+        ' / ' + (item.second ? '✅' : '⛔') + ' ' + safeName(second.name, 45),
+      );
+      const channels = result.channelDifferences.slice(0, 12).map(item =>
+        '• <#' + item.channelId + '> — ' + (item.first ? 'Visible' : 'Hidden') + ' / ' + (item.second ? 'Visible' : 'Hidden'),
+      );
+      return interaction.update({
+        embeds: [fieldEmbed('ROLE PERMISSION COMPARISON', [
+          '**' + safeName(first.name) + '** vs **' + safeName(second.name) + '**',
+          'Different server permission flags: **' + result.permissionDifferences.length + '**',
+          'Different channel visibility results: **' + result.channelDifferences.length + '**',
+          '',
+          '**Server permission differences**',
+          permissions.join('\n') || 'No differences.',
+          '',
+          '**Channel visibility differences**',
+          channels.join('\n') || 'No differences.',
+          '',
+          'Role comparison evaluates each role with @everyone, not a combined member role set.',
+        ].join('\n'))],
+        components: [new ActionRowBuilder().addComponents(button('role:' + first.id, 'Back to Role Profile'))],
+        allowedMentions: { parse: [] },
+      });
     }
     if (action === 'serverflag') {
       const role = await fetchRole(interaction.guild, values[0]);

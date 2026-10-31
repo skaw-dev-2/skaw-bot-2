@@ -502,6 +502,66 @@ export function getChannelEditorSession(token, actorId, guildId) {
   return session;
 }
 
+export function createRoleChannelAccessSession({ guildId, actorId, roleId, selectedCategoryId = null }) {
+  cleanupEphemeralState();
+  const token = randomUUID().replaceAll('-', '').slice(0, 16);
+  const session = {
+    kind: 'role-channel-visibility',
+    token,
+    guildId: String(guildId),
+    actorId: String(actorId),
+    roleId: String(roleId),
+    selectedCategoryId: selectedCategoryId ? String(selectedCategoryId) : 'uncategorized',
+    categoryPage: 0,
+    channelPage: 0,
+    desiredStates: {},
+    expiresAt: Date.now() + CHANGE_TTL_MS,
+  };
+  editorSessions.set(token, session);
+  return session;
+}
+
+export function getRoleChannelAccessSession(token, actorId, guildId) {
+  cleanupEphemeralState();
+  const session = editorSessions.get(String(token));
+  if (!session || session.kind !== 'role-channel-visibility' ||
+      session.actorId !== String(actorId) || session.guildId !== String(guildId)) return null;
+  return session;
+}
+
+export function updateRoleChannelAccessSession(token, actorId, guildId, updates = {}) {
+  const session = getRoleChannelAccessSession(token, actorId, guildId);
+  if (!session) return null;
+  if (Object.hasOwn(updates, 'selectedCategoryId')) {
+    session.selectedCategoryId = String(updates.selectedCategoryId || 'uncategorized');
+  }
+  if (Object.hasOwn(updates, 'categoryPage')) {
+    session.categoryPage = Math.max(0, Number(updates.categoryPage) || 0);
+  }
+  if (Object.hasOwn(updates, 'channelPage')) {
+    session.channelPage = Math.max(0, Number(updates.channelPage) || 0);
+  }
+  session.expiresAt = Date.now() + CHANGE_TTL_MS;
+  return session;
+}
+
+export function stageRoleChannelAccessStates(token, actorId, guildId, desiredStates = {}) {
+  const session = getRoleChannelAccessSession(token, actorId, guildId);
+  if (!session) throw new Error('This access panel expired. Reopen /access panel.');
+  for (const [channelId, value] of Object.entries(desiredStates || {})) {
+    if (typeof value !== 'boolean') continue;
+    session.desiredStates[String(channelId)] = value;
+  }
+  session.expiresAt = Date.now() + CHANGE_TTL_MS;
+  return session;
+}
+
+export function deleteRoleChannelAccessSession(token, actorId, guildId) {
+  const session = getRoleChannelAccessSession(token, actorId, guildId);
+  if (!session) return false;
+  return editorSessions.delete(String(token));
+}
+
 export function createPendingRolePermissionChange({ guildId, actorId, roleId, flagName, nextValue, previousValue }) {
   cleanupEphemeralState();
   const token = randomUUID().replaceAll('-', '').slice(0, 16);
@@ -520,7 +580,10 @@ export function createPendingRolePermissionChange({ guildId, actorId, roleId, fl
   return pending;
 }
 
-export function createPendingChannelPermissionChange({ guildId, actorId, roleId, channelIds, flagName, nextValue, previousValues }) {
+export function createPendingChannelPermissionChange({
+  guildId, actorId, roleId, channelIds, flagName, nextValue, previousValues,
+  nextValues = null, previousEffectiveValues = null,
+}) {
   cleanupEphemeralState();
   const token = randomUUID().replaceAll('-', '').slice(0, 16);
   const pending = {
@@ -529,10 +592,12 @@ export function createPendingChannelPermissionChange({ guildId, actorId, roleId,
     guildId: String(guildId),
     actorId: String(actorId),
     roleId: String(roleId),
-    channelIds: [...new Set((channelIds || []).map(String))].slice(0, 25),
+    channelIds: [...new Set((channelIds || []).map(String))].slice(0, 500),
     flagName,
     nextValue,
+    nextValues: nextValues ? { ...nextValues } : null,
     previousValues: { ...previousValues },
+    previousEffectiveValues: previousEffectiveValues ? { ...previousEffectiveValues } : null,
     expiresAt: Date.now() + CHANGE_TTL_MS,
   };
   pendingChanges.set(token, pending);
@@ -615,6 +680,63 @@ export async function createChannelPermissionPreview(client, guild, actorId, ses
   });
 }
 
+export async function createRoleChannelVisibilityPreview(client, guild, actorId, sessionToken) {
+  const session = getRoleChannelAccessSession(sessionToken, actorId, guild.id);
+  if (!session) throw new Error('This access panel expired. Reopen /access panel.');
+
+  const role = guild.roles.cache.get(session.roleId) || await guild.roles.fetch(session.roleId).catch(() => null);
+  if (!role) throw new Error('Selected role no longer exists.');
+  const { actor, botMember } = await fetchActorAndBot(guild, actorId);
+  assertCanManageRole(actor, botMember, guild, role);
+
+  if (getRolePermissionState(role, 'Administrator')) {
+    throw new Error('This role has Administrator. Administrator bypasses channel visibility rules, so its channel access cannot be managed here.');
+  }
+
+  const desiredStates = session.desiredStates || {};
+  const previousValues = {};
+  const previousEffectiveValues = {};
+  const nextValues = {};
+  const channelIds = [];
+
+  for (const [channelId, rawDesired] of Object.entries(desiredStates)) {
+    if (typeof rawDesired !== 'boolean') continue;
+    const channel = guild.channels.cache.get(String(channelId)) ||
+      await guild.channels.fetch(String(channelId)).catch(() => null);
+    if (!isInspectableGuildChannel(channel)) {
+      throw new Error('A selected channel or category is no longer available. No changes were made.');
+    }
+    if (!channel.permissionsFor(botMember)?.has(PermissionFlagsBits.ManageRoles)) {
+      throw new Error('The bot cannot manage access in #' + channel.name + '. Check its channel permissions. No changes were made.');
+    }
+
+    const currentEffective = Boolean(channel.permissionsFor(role)?.has(PermissionFlagsBits.ViewChannel));
+    if (currentEffective === rawDesired) continue;
+
+    assertChannelPermissionGrantAllowed(actor, guild, channel, 'ViewChannel', rawDesired);
+    previousValues[channel.id] = getOverwriteState(channel, role.id, 'ViewChannel');
+    previousEffectiveValues[channel.id] = currentEffective;
+    nextValues[channel.id] = rawDesired;
+    channelIds.push(channel.id);
+  }
+
+  if (!channelIds.length) {
+    throw new Error('Belum ada perubahan akses. Centang atau hapus centang channel terlebih dahulu.');
+  }
+
+  return createPendingChannelPermissionChange({
+    guildId: guild.id,
+    actorId,
+    roleId: role.id,
+    channelIds,
+    flagName: 'ViewChannel',
+    nextValue: null,
+    nextValues,
+    previousValues,
+    previousEffectiveValues,
+  });
+}
+
 export async function applyPendingRolePermissionChange(client, guild, actorId, token) {
   requirePersistentDatabase(client);
   const pending = getPendingRolePermissionChange(token, actorId, guild.id);
@@ -666,57 +788,73 @@ export async function applyPendingRolePermissionChange(client, guild, actorId, t
       const channel = guild.channels.cache.get(channelId) || await guild.channels.fetch(channelId).catch(() => null);
       if (!isInspectableGuildChannel(channel)) throw new Error('A selected channel no longer exists. No changes were made.');
       if (!channel.permissionsFor(botMember)?.has(PermissionFlagsBits.ManageRoles)) {
-        throw new Error('The bot cannot manage role overwrites in #' + channel.name + '. No changes were made.');
+        throw new Error('The bot cannot manage the overwrite in #' + channel.name + '. No changes were made.');
       }
-      assertChannelPermissionGrantAllowed(actor, guild, channel, pending.flagName, pending.nextValue);
+
+      const nextValue = pending.nextValues
+        ? pending.nextValues[channelId]
+        : pending.nextValue;
+      if (nextValue !== true && nextValue !== false && nextValue !== null) {
+        throw new Error('The access change contains an invalid View Channel state. No changes were made.');
+      }
+
+      assertChannelPermissionGrantAllowed(actor, guild, channel, pending.flagName, nextValue);
       const currentValue = getOverwriteState(channel, role.id, pending.flagName);
       if (currentValue !== pending.previousValues[channelId]) {
         pendingChanges.delete(token);
         throw new Error('Permissions in #' + channel.name + ' changed after the preview. Refresh and review the new state. No changes were made.');
       }
-      channelRecords.push(channel);
+      if (pending.previousEffectiveValues &&
+          Boolean(channel.permissionsFor(role)?.has(PermissionFlagsBits.ViewChannel)) !==
+            Boolean(pending.previousEffectiveValues[channelId])) {
+        pendingChanges.delete(token);
+        throw new Error('Effective visibility for #' + channel.name + ' changed after the preview. Refresh and review the new state. No changes were made.');
+      }
+      channelRecords.push({ channel, nextValue });
     }
 
-    const backup = await saveBackup(client, guild, role, 'Before channel permission change', actorId);
+    const backup = await saveBackup(client, guild, role, 'Before channel visibility update', actorId);
     const changed = [];
-    const reason = 'SKAW Role Access Manager: ' + pending.flagName + ' updated by ' + actorId;
+    const reason = 'SKAW Role Access Manager: ViewChannel visibility updated by ' + actorId;
     try {
-      for (const channel of channelRecords) {
+      for (const record of channelRecords) {
+        const { channel, nextValue } = record;
         markInternalChange('channel', channel.id);
         await channel.permissionOverwrites.edit(role.id, {
-          [pending.flagName]: pending.nextValue,
+          [pending.flagName]: nextValue,
         }, { reason });
-        changed.push(channel);
+        changed.push(record);
       }
     } catch (error) {
       let rollbackFailed = false;
-      for (const channel of changed.reverse()) {
+      for (const record of changed.reverse()) {
+        const { channel } = record;
         try {
           markInternalChange('channel', channel.id);
           await channel.permissionOverwrites.edit(role.id, {
             [pending.flagName]: pending.previousValues[channel.id],
-          }, { reason: 'SKAW Role Access Manager rollback after a partial bulk update' });
+          }, { reason: 'SKAW Role Access Manager rollback after a partial visibility update' });
         } catch {
           internalChangeMarkers.delete(markerKey('channel', channel.id));
           rollbackFailed = true;
         }
       }
-      // Any marker left behind after a failed rollback is harmless and expires automatically.
       await saveAuditRecord(client, guild.id, {
-        action: 'channel_permission_update_failed',
+        action: 'channel_visibility_update_failed',
         source: 'SKAW Role Access Manager',
         actorId: String(actorId),
         roleId: role.id,
         roleName: role.name,
         permission: pending.flagName,
         channelIds: pending.channelIds,
+        nextValues: pending.nextValues || null,
         rollbackFailed,
         error: String(error?.message || 'Unknown Discord API error').slice(0, 500),
         backupId: backup.id,
       });
       pendingChanges.delete(token);
       throw new Error(
-        'Discord rejected part of the bulk update. ' +
+        'Discord rejected part of the bulk visibility update. ' +
         (rollbackFailed
           ? 'Rollback could not restore every channel; use backup ' + backup.id + ' and inspect the audit log immediately.'
           : 'The bot rolled back the changes it had already applied. No partial change should remain.') +
@@ -725,19 +863,29 @@ export async function applyPendingRolePermissionChange(client, guild, actorId, t
     }
 
     const auditPersisted = await saveAuditRecord(client, guild.id, {
-      action: 'channel_permission_update',
+      action: 'channel_visibility_update',
       source: 'SKAW Role Access Manager',
       actorId: String(actorId),
       roleId: role.id,
       roleName: role.name,
       permission: pending.flagName,
-      nextValue: pending.nextValue,
+      nextValues: pending.nextValues || null,
       previousValues: pending.previousValues,
       channelIds: pending.channelIds,
       backupId: backup.id,
     });
     pendingChanges.delete(token);
-    return { scope: 'channel', role, permission: pending.flagName, nextValue: pending.nextValue, channelRecords, previousValues: pending.previousValues, backupId: backup.id, auditPersisted };
+    return {
+      scope: 'channel',
+      role,
+      permission: pending.flagName,
+      nextValue: null,
+      channelRecords: channelRecords.map(record => record.channel),
+      nextValues: pending.nextValues || Object.fromEntries(channelRecords.map(record => [record.channel.id, record.nextValue])),
+      previousValues: pending.previousValues,
+      backupId: backup.id,
+      auditPersisted,
+    };
   }
 
   throw new Error('Unknown permission change type.');

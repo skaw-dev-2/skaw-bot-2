@@ -41,10 +41,13 @@ function fieldEmbed(title, description) {
     .setFooter({ text: 'SKAW ROLE ACCESS MANAGER' });
 }
 function pageButtons(action, id, page, pages, backAction = 'role:' + id) {
+  // Discord requires every component custom_id in a message to be unique.
+  // Add direction/action suffixes so one-page views and explicit Back buttons
+  // elsewhere in the same message never collide.
   return new ActionRowBuilder().addComponents(
-    button(action + ':' + id + ':' + Math.max(0, page - 1), 'Previous', ButtonStyle.Secondary, page <= 0),
-    button(action + ':' + id + ':' + Math.min(pages - 1, page + 1), 'Next', ButtonStyle.Secondary, page >= pages - 1),
-    button(backAction, 'Back', ButtonStyle.Primary),
+    button(action + ':' + id + ':' + Math.max(0, page - 1) + ':prev', 'Previous', ButtonStyle.Secondary, page <= 0),
+    button(action + ':' + id + ':' + Math.min(pages - 1, page + 1) + ':next', 'Next', ButtonStyle.Secondary, page >= pages - 1),
+    button(backAction + ':pageback:' + action, 'Back', ButtonStyle.Primary),
   );
 }
 function getManageableRoles(guild) {
@@ -111,8 +114,8 @@ export function buildRoleAccessDashboard(guild, page = 0) {
     components: [
       new ActionRowBuilder().addComponents(select),
       new ActionRowBuilder().addComponents(
-        button('dashboard:' + Math.max(0, current - 1), 'Previous', ButtonStyle.Secondary, current === 0),
-        button('dashboard:' + Math.min(pages - 1, current + 1), 'Next', ButtonStyle.Secondary, current >= pages - 1),
+        button('dashboard:' + Math.max(0, current - 1) + ':prev', 'Previous', ButtonStyle.Secondary, current === 0),
+        button('dashboard:' + Math.min(pages - 1, current + 1) + ':next', 'Next', ButtonStyle.Secondary, current >= pages - 1),
         button('health', 'Permission Health', ButtonStyle.Primary),
         button('audit', 'Audit History'),
       ),
@@ -419,8 +422,8 @@ export function buildMemberAccessPanel(guild, member, page = 0) {
   return {
     embeds: [embed],
     components: [new ActionRowBuilder().addComponents(
-      button('memberpage:' + member.id + ':' + Math.max(0, current - 1), 'Previous', ButtonStyle.Secondary, current === 0),
-      button('memberpage:' + member.id + ':' + Math.min(pages - 1, current + 1), 'Next', ButtonStyle.Secondary, current >= pages - 1),
+      button('memberpage:' + member.id + ':' + Math.max(0, current - 1) + ':prev', 'Previous', ButtonStyle.Secondary, current === 0),
+      button('memberpage:' + member.id + ':' + Math.min(pages - 1, current + 1) + ':next', 'Next', ButtonStyle.Secondary, current >= pages - 1),
       button('dashboard:0', 'All Roles', ButtonStyle.Primary),
     )],
     allowedMentions: { parse: [] },

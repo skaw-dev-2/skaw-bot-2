@@ -342,6 +342,18 @@ test('slash command schema and panel builders serialize without invalid Discord 
     assert.ok(Array.isArray(payload.embeds));
     assert.ok(Array.isArray(payload.components));
     for (const item of payload.embeds) item.toJSON();
-    for (const row of payload.components) row.toJSON();
+
+    const customIds = [];
+    for (const row of payload.components) {
+      const serialized = row.toJSON();
+      for (const component of serialized.components || []) {
+        if (component.custom_id) customIds.push(component.custom_id);
+      }
+    }
+    assert.equal(
+      new Set(customIds).size,
+      customIds.length,
+      'message component custom IDs must be unique: ' + customIds.join(', '),
+    );
   }
 });

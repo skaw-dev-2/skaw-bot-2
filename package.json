@@ -18,7 +18,8 @@
     "test:auto-responder": "node --test src/tests/autoResponderService.test.js",
     "check:employee-logs": "node scripts/check-employee-logs-v2.mjs",
     "test:role-templates": "node --test src/tests/roleTemplateService.test.js",
-    "test:message-manager": "node --test src/tests/messageManagerService.test.js src/tests/messageManagerCommand.test.js"
+    "test:message-manager": "node --test src/tests/messageManagerService.test.js src/tests/messageManagerCommand.test.js",
+    "test:role-access": "node --test src/tests/roleAccessManagerService.test.js"
   },
   "dependencies": {
     "@discordjs/rest": "^2.6.1",

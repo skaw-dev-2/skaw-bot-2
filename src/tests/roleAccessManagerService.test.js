@@ -230,6 +230,24 @@ test('server permission change preserves unrelated bits and stores a durable pre
   assert.equal(audit[0].action, 'server_permission_update');
 });
 
+test('non-owner cannot revoke Administrator through the server permission editor', async () => {
+  const fixture = makeGuildAndActors({
+    initialPermissions: PermissionFlagsBits.Administrator,
+  });
+  await assert.rejects(
+    createServerPermissionPreview(
+      fixture.client,
+      fixture.guild,
+      fixture.actorId,
+      fixture.roleId,
+      'Administrator',
+      false,
+    ),
+    /only the server owner can grant or revoke Administrator/i,
+  );
+  assert.equal(getRolePermissionState(fixture.role, 'Administrator'), true);
+});
+
 test('permission mutations fail closed when PostgreSQL is degraded', async () => {
   const fixture = makeGuildAndActors({
     initialPermissions: PermissionFlagsBits.ManageMessages,

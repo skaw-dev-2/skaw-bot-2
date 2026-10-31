@@ -686,7 +686,7 @@ export async function applyPendingRolePermissionChange(client, guild, actorId, t
           rollbackFailed = true;
         }
       }
-      internalChangeMarkers.delete(markerKey('channel', channelRecords[changed.length]?.id));
+      // Any marker left behind after a failed rollback is harmless and expires automatically.
       await saveAuditRecord(client, guild.id, {
         action: 'channel_permission_update_failed',
         source: 'SKAW Role Access Manager',
@@ -784,3 +784,167 @@ export async function recordExternalChannelPermissionChange(client, oldChannel, 
 export const ROLE_ACCESS_PAGE_SIZE = PAGE_SIZE;
 export const ROLE_ACCESS_HIGH_RISK_PERMISSIONS = HIGH_RISK_PERMISSIONS;
 export const ROLE_ACCESS_PERMISSION_GROUPS = PERMISSION_GROUPS;
+
+
+function permissionOverwriteOptionsFromSnapshot(overwrite) {
+  const allow = BigInt(overwrite?.allow ?? '0');
+  const deny = BigInt(overwrite?.deny ?? '0');
+  const options = {};
+  for (const entry of getPermissionEntries()) {
+    if ((allow & entry.bit) === entry.bit) options[entry.name] = true;
+    else if ((deny & entry.bit) === entry.bit) options[entry.name] = false;
+    else options[entry.name] = null;
+  }
+  return options;
+}
+
+async function applyRoleSnapshotToGuild(guild, role, snapshot, botMember, reason) {
+  if (String(snapshot.guildId) !== String(guild.id) || String(snapshot.roleId) !== String(role.id)) {
+    throw new Error('The backup does not belong to this server and role.');
+  }
+  if (snapshot.version !== DATA_VERSION || !/^\d+$/.test(String(snapshot.rolePermissions))) {
+    throw new Error('This backup version or permission bitfield is not supported.');
+  }
+
+  const desiredOverwrites = new Map(
+    (Array.isArray(snapshot.channelOverwrites) ? snapshot.channelOverwrites : [])
+      .filter(item => item && /^\d{17,20}$/.test(String(item.channelId)))
+      .map(item => [String(item.channelId), item]),
+  );
+
+  // Restore the role's full server bitfield from the snapshot.
+  markInternalChange('role', role.id);
+  await role.setPermissions(BigInt(snapshot.rolePermissions), reason);
+
+  let restoredOverwrites = 0;
+  let removedOverwrites = 0;
+  let skippedDeletedChannels = 0;
+  const channels = [...guild.channels.cache.values()].filter(isInspectableGuildChannel);
+
+  for (const channel of channels) {
+    const desired = desiredOverwrites.get(channel.id);
+    const current = channel.permissionOverwrites.cache.get(role.id);
+    if (!desired && !current) continue;
+
+    if (!channel.permissionsFor(botMember)?.has(PermissionFlagsBits.ManageRoles)) {
+      throw new Error('The bot cannot manage the overwrite in #' + channel.name + '.');
+    }
+
+    markInternalChange('channel', channel.id);
+    if (desired) {
+      await channel.permissionOverwrites.edit(
+        role.id,
+        permissionOverwriteOptionsFromSnapshot(desired),
+        { reason },
+      );
+      restoredOverwrites += 1;
+    } else if (current) {
+      await channel.permissionOverwrites.delete(role.id, reason);
+      removedOverwrites += 1;
+    }
+  }
+
+  for (const channelId of desiredOverwrites.keys()) {
+    if (!guild.channels.cache.has(channelId)) skippedDeletedChannels += 1;
+  }
+
+  return { restoredOverwrites, removedOverwrites, skippedDeletedChannels };
+}
+
+export async function createRoleBackupRestorePreview(client, guild, actorId, backupId) {
+  requirePersistentDatabase(client);
+  const backups = await getRoleAccessBackups(client, guild.id, BACKUP_LIMIT);
+  const backup = backups.find(item => item.id === String(backupId));
+  if (!backup?.snapshot) throw new Error('Backup not found. Check /access backups for available backup IDs.');
+  if (String(backup.snapshot.guildId) !== String(guild.id)) throw new Error('This backup belongs to another server.');
+
+  const role = guild.roles.cache.get(String(backup.snapshot.roleId)) ||
+    await guild.roles.fetch(String(backup.snapshot.roleId)).catch(() => null);
+  if (!role) throw new Error('The role from this backup no longer exists. It cannot be restored.');
+  const { actor, botMember } = await fetchActorAndBot(guild, actorId);
+  assertCanManageRole(actor, botMember, guild, role);
+
+  const pending = {
+    token: randomUUID().replaceAll('-', '').slice(0, 16),
+    scope: 'restore',
+    guildId: String(guild.id),
+    actorId: String(actorId),
+    roleId: String(role.id),
+    backupId: backup.id,
+    snapshot: backup.snapshot,
+    expiresAt: Date.now() + CHANGE_TTL_MS,
+  };
+  pendingChanges.set(pending.token, pending);
+  return pending;
+}
+
+export async function applyRoleBackupRestorePreview(client, guild, actorId, token) {
+  requirePersistentDatabase(client);
+  const pending = getPendingRolePermissionChange(token, actorId, guild.id);
+  if (!pending || pending.scope !== 'restore') {
+    throw new Error('This restore preview has expired or is no longer available. Start again from /access backups.');
+  }
+
+  const role = guild.roles.cache.get(pending.roleId) ||
+    await guild.roles.fetch(pending.roleId).catch(() => null);
+  if (!role) throw new Error('The selected role no longer exists. Nothing was changed.');
+  const { actor, botMember } = await fetchActorAndBot(guild, actorId);
+  assertCanManageRole(actor, botMember, guild, role);
+
+  // Snapshot the current state before restore. It becomes the rollback point if Discord rejects any step.
+  const safetyBackup = await saveBackup(client, guild, role, 'Safety snapshot before restore ' + pending.backupId, actorId);
+  try {
+    const result = await applyRoleSnapshotToGuild(
+      guild,
+      role,
+      pending.snapshot,
+      botMember,
+      'SKAW Role Access Manager: restore backup ' + pending.backupId + ' by ' + actorId,
+    );
+    const auditPersisted = await saveAuditRecord(client, guild.id, {
+      action: 'role_permission_backup_restored',
+      source: 'SKAW Role Access Manager',
+      actorId: String(actorId),
+      roleId: role.id,
+      roleName: role.name,
+      restoredBackupId: pending.backupId,
+      safetyBackupId: safetyBackup.id,
+      ...result,
+    });
+    pendingChanges.delete(token);
+    return { role, restoredBackupId: pending.backupId, safetyBackupId: safetyBackup.id, auditPersisted, ...result };
+  } catch (error) {
+    let rollbackError = null;
+    try {
+      await applyRoleSnapshotToGuild(
+        guild,
+        role,
+        safetyBackup.snapshot,
+        botMember,
+        'SKAW Role Access Manager: rollback failed restore operation',
+      );
+    } catch (rollbackFailure) {
+      rollbackError = rollbackFailure;
+    }
+    await saveAuditRecord(client, guild.id, {
+      action: 'role_permission_backup_restore_failed',
+      source: 'SKAW Role Access Manager',
+      actorId: String(actorId),
+      roleId: role.id,
+      roleName: role.name,
+      restoredBackupId: pending.backupId,
+      safetyBackupId: safetyBackup.id,
+      rollbackSucceeded: !rollbackError,
+      error: String(error?.message || 'Unknown Discord API error').slice(0, 500),
+      rollbackError: rollbackError ? String(rollbackError.message || 'Unknown rollback error').slice(0, 500) : null,
+    });
+    pendingChanges.delete(token);
+    throw new Error(
+      'Restore did not complete. ' +
+      (rollbackError
+        ? 'Automatic rollback also failed; use safety backup ' + safetyBackup.id + ' and inspect the server immediately. '
+        : 'The previous permissions were automatically restored from safety backup ' + safetyBackup.id + '. ') +
+      'Discord error: ' + (error?.message || 'Unknown error'),
+    );
+  }
+}

@@ -1,0 +1,65 @@
+name: Role Access Manager checks
+
+on:
+  push:
+    branches:
+      - feature/skaw-role-access-manager
+      - main
+    paths:
+      - 'src/commands/Utility/access.js'
+      - 'src/services/roleAccessManagerService.js'
+      - 'src/services/roleAccessManagerPanelService.js'
+      - 'src/interactions/buttons/roleAccess/**'
+      - 'src/interactions/selectMenus/roleAccess/**'
+      - 'src/events/roleUpdate.js'
+      - 'src/events/channelUpdate.js'
+      - 'src/tests/roleAccessManagerService.test.js'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/role-access-manager-checks.yml'
+  pull_request:
+    paths:
+      - 'src/commands/Utility/access.js'
+      - 'src/services/roleAccessManagerService.js'
+      - 'src/services/roleAccessManagerPanelService.js'
+      - 'src/interactions/buttons/roleAccess/**'
+      - 'src/interactions/selectMenus/roleAccess/**'
+      - 'src/events/roleUpdate.js'
+      - 'src/events/channelUpdate.js'
+      - 'src/tests/roleAccessManagerService.test.js'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/role-access-manager-checks.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  role-access-manager:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Check JavaScript syntax
+        run: |
+          node --check src/commands/Utility/access.js
+          node --check src/services/roleAccessManagerService.js
+          node --check src/services/roleAccessManagerPanelService.js
+          node --check src/interactions/buttons/roleAccess/roleAccess.js
+          node --check src/interactions/selectMenus/roleAccess/roleAccess.js
+          node --check src/events/roleUpdate.js
+          node --check src/events/channelUpdate.js
+      - name: Run Role Access Manager tests
+        run: npm run test:role-access
+      - name: Run Role Template regression tests
+        run: npm run test:role-templates
+      - name: Run Auto Responder regression tests
+        run: npm run test:auto-responder

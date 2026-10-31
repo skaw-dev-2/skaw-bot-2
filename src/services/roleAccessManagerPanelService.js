@@ -356,7 +356,7 @@ export function buildRoleChannelVisibilityPreviewPanel(guild, role, pending) {
       'Perubahan ini hanya mengatur izin role yang dipilih. Anggota yang memiliki role lain masih mungkin dapat melihat channel.',
     ].filter(Boolean).join('\n'))],
     components: [new ActionRowBuilder().addComponents(
-      button('accessconfirm:' + pending.token, 'Konfirmasi & Simpan', ButtonStyle.Success),
+      button('accessconfirm:' + pending.token + ':' + (pending.sessionToken || ''), 'Konfirmasi & Simpan', ButtonStyle.Success),
       button('accesscancel:' + pending.token + ':' + (pending.sessionToken || ''), 'Kembali ke Editor', ButtonStyle.Secondary),
     )],
     allowedMentions: { parse: [] },
@@ -804,14 +804,11 @@ export async function handleRoleAccessButton(interaction, client, args = []) {
     }
     if (action === 'accessconfirm') {
       await interaction.deferUpdate();
-      const result = await applyPendingRolePermissionChange(client, interaction.guild, interaction.user.id, values[0]);
+      const [pendingToken, sessionToken] = values;
+      const oldSession = getRoleChannelAccessSession(sessionToken, interaction.user.id, interaction.guildId);
+      const result = await applyPendingRolePermissionChange(client, interaction.guild, interaction.user.id, pendingToken);
       const grants = Object.values(result.nextValues || {}).filter(value => value === true).length;
       const revokes = Object.values(result.nextValues || {}).filter(value => value === false).length;
-      const oldSession = getRoleChannelAccessSession(
-        getRoleChannelAccessSession(values[0], interaction.user.id, interaction.guildId)?.token,
-        interaction.user.id,
-        interaction.guildId,
-      );
       const freshSession = createRoleChannelAccessSession({
         guildId: interaction.guildId,
         actorId: interaction.user.id,

@@ -263,25 +263,25 @@ export function buildRoleChannelVisibilityPanel(guild, role, session, notice = n
   if (state.groups.length) {
     rows.push(new ActionRowBuilder().addComponents(
       button(
-        'accesscatpage:' + session.token + ':' + Math.max(0, state.categoryPage - 1),
+        'accesscatpage:' + session.token + ':' + Math.max(0, state.categoryPage - 1) + ':prev',
         'Kategori Sebelumnya',
         ButtonStyle.Secondary,
         state.categoryPage === 0 || isAdministrator,
       ),
       button(
-        'accesscatpage:' + session.token + ':' + Math.min(state.categoryPages - 1, state.categoryPage + 1),
+        'accesscatpage:' + session.token + ':' + Math.min(state.categoryPages - 1, state.categoryPage + 1) + ':next',
         'Kategori Berikutnya',
         ButtonStyle.Secondary,
         state.categoryPage >= state.categoryPages - 1 || isAdministrator,
       ),
       button(
-        'accesschannelpage:' + session.token + ':' + Math.max(0, state.channelPage - 1),
+        'accesschannelpage:' + session.token + ':' + Math.max(0, state.channelPage - 1) + ':prev',
         'Channel Sebelumnya',
         ButtonStyle.Secondary,
         !group || state.channelPage === 0 || isAdministrator,
       ),
       button(
-        'accesschannelpage:' + session.token + ':' + Math.min(state.channelPages - 1, state.channelPage + 1),
+        'accesschannelpage:' + session.token + ':' + Math.min(state.channelPages - 1, state.channelPage + 1) + ':next',
         'Channel Berikutnya',
         ButtonStyle.Secondary,
         !group || state.channelPage >= state.channelPages - 1 || isAdministrator,

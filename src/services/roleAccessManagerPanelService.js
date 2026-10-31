@@ -785,8 +785,10 @@ export async function handleRoleAccessButton(interaction, client, args = []) {
         .find(item => item.id === session.selectedCategoryId);
       if (!group) throw new Error('Kategori ini sudah tidak tersedia. Pilih kategori lain.');
       const nextValue = rawValue === 'true';
+      // Apply the category toggle to every existing child channel directly.
+      // This deliberately avoids changing the category overwrite itself, which
+      // could implicitly propagate to synced children before rollback can inspect them.
       const desired = Object.fromEntries(group.channels.map(item => [item.channel.id, nextValue]));
-      if (group.id !== 'uncategorized') desired[group.id] = nextValue;
       stageRoleChannelAccessStates(token, interaction.user.id, interaction.guildId, desired);
       const refreshed = getRoleChannelAccessSession(token, interaction.user.id, interaction.guildId);
       return interaction.update(buildRoleChannelVisibilityPanel(interaction.guild, role, refreshed));

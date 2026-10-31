@@ -416,16 +416,28 @@ function assertCanManageRole(actor, botMember, guild, role, options = {}) {
   }
 }
 
-function assertPermissionGrantAllowed(actor, guild, flagName) {
+function assertPermissionChangeAllowed(actor, guild, flagName, nextValue) {
   if (flagName === 'Administrator' && actor.id !== guild.ownerId) {
-    throw new Error('For safety, only the server owner can grant or remove Administrator through this panel.');
+    throw new Error('For safety, only the server owner can grant or revoke Administrator through this panel.');
   }
   const bit = permissionBit(flagName);
   if (bit === null) throw new Error('Unknown Discord permission flag.');
-  if (actor.id !== guild.ownerId &&
+  if (nextValue === true && actor.id !== guild.ownerId &&
       !actor.permissions.has(bit) &&
       !actor.permissions.has(PermissionFlagsBits.Administrator)) {
     throw new Error('Discord permission hierarchy: you cannot grant a permission that you do not have yourself.');
+  }
+}
+
+function assertChannelPermissionGrantAllowed(actor, guild, channel, flagName, nextValue) {
+  if (nextValue !== true || actor.id === guild.ownerId ||
+      actor.permissions.has(PermissionFlagsBits.Administrator)) return;
+  const bit = permissionBit(flagName);
+  if (bit === null) throw new Error('Unknown Discord permission flag.');
+  const effective = channel.permissionsFor(actor);
+  if (!effective?.has(bit)) {
+    throw new Error('You cannot grant ' + flagName + ' in #' + channel.name +
+      ' because you do not currently have that permission in the target channel.');
   }
 }
 
@@ -548,7 +560,7 @@ export async function createServerPermissionPreview(client, guild, actorId, role
   assertCanManageRole(actor, botMember, guild, role);
   const bit = permissionBit(flagName);
   if (bit === null) throw new Error('Unknown Discord permission flag.');
-  if (nextValue) assertPermissionGrantAllowed(actor, guild, flagName);
+  assertPermissionChangeAllowed(actor, guild, flagName, Boolean(nextValue));
   const previousValue = getRolePermissionState(role, flagName);
   if (previousValue === Boolean(nextValue)) throw new Error('No change needed. This permission already has the selected state.');
   return createPendingRolePermissionChange({
@@ -568,7 +580,9 @@ export async function createChannelPermissionPreview(client, guild, actorId, ses
   if (!role) throw new Error('Selected role no longer exists.');
   const { actor, botMember } = await fetchActorAndBot(guild, actorId);
   assertCanManageRole(actor, botMember, guild, role, { allowEveryoneChannel: true });
-  if (nextValue === true) assertPermissionGrantAllowed(actor, guild, flagName);
+  if (flagName === 'Administrator') {
+    throw new Error('Administrator is a server-level permission and cannot be edited through channel overwrites.');
+  }
 
   const previousValues = {};
   const validChannelIds = [];
@@ -580,6 +594,7 @@ export async function createChannelPermissionPreview(client, guild, actorId, ses
     if (!channel.permissionsFor(botMember)?.has(PermissionFlagsBits.ManageRoles)) {
       throw new Error('The bot cannot manage role overwrites in #' + channel.name + '. Check its channel access and permissions. No changes were made.');
     }
+    assertChannelPermissionGrantAllowed(actor, guild, channel, flagName, nextValue);
     previousValues[channelId] = getOverwriteState(channel, role.id, flagName);
     validChannelIds.push(channelId);
   }
@@ -609,9 +624,8 @@ export async function applyPendingRolePermissionChange(client, guild, actorId, t
   if (!role) throw new Error('Selected role no longer exists. Nothing was changed.');
   const { actor, botMember } = await fetchActorAndBot(guild, actorId);
   assertCanManageRole(actor, botMember, guild, role, { allowEveryoneChannel: pending.scope === 'channel' });
-  if (pending.nextValue === true) assertPermissionGrantAllowed(actor, guild, pending.flagName);
-
   if (pending.scope === 'server') {
+    assertPermissionChangeAllowed(actor, guild, pending.flagName, pending.nextValue);
     const currentValue = getRolePermissionState(role, pending.flagName);
     if (currentValue !== pending.previousValue) {
       pendingChanges.delete(token);
@@ -654,6 +668,7 @@ export async function applyPendingRolePermissionChange(client, guild, actorId, t
       if (!channel.permissionsFor(botMember)?.has(PermissionFlagsBits.ManageRoles)) {
         throw new Error('The bot cannot manage role overwrites in #' + channel.name + '. No changes were made.');
       }
+      assertChannelPermissionGrantAllowed(actor, guild, channel, pending.flagName, pending.nextValue);
       const currentValue = getOverwriteState(channel, role.id, pending.flagName);
       if (currentValue !== pending.previousValues[channelId]) {
         pendingChanges.delete(token);

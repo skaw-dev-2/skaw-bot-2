@@ -102,8 +102,9 @@ After each channel test, run /access member for the test member. Confirm that th
 ### Test E — audit and external change monitor
 
 1. Run /access audit and confirm the Role Access Manager change is recorded.
-2. Make one low-risk manual permission change to RA-TEST in Discord Server Settings.
-3. Run /access audit again and confirm an external role/channel update entry appears.
+2. Wait at least 20 seconds after the last bot-managed permission change so its internal-event marker has expired.
+3. Make one low-risk manual permission change to RA-TEST in Discord Server Settings.
+4. Run /access audit again and confirm an external role/channel update entry appears.
 4. Treat the actor as unresolved unless the audit record explicitly identifies one; gateway update events alone do not guarantee actor attribution.
 
 ## 6. Backup and restore test

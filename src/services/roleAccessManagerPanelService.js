@@ -41,10 +41,13 @@ function fieldEmbed(title, description) {
     .setFooter({ text: 'SKAW ROLE ACCESS MANAGER' });
 }
 function pageButtons(action, id, page, pages, backAction = 'role:' + id) {
+  // Discord requires every component custom_id in a message to be unique.
+  // Add direction/action suffixes so one-page views and explicit Back buttons
+  // elsewhere in the same message never collide.
   return new ActionRowBuilder().addComponents(
-    button(action + ':' + id + ':' + Math.max(0, page - 1), 'Previous', ButtonStyle.Secondary, page <= 0),
-    button(action + ':' + id + ':' + Math.min(pages - 1, page + 1), 'Next', ButtonStyle.Secondary, page >= pages - 1),
-    button(backAction, 'Back', ButtonStyle.Primary),
+    button(action + ':' + id + ':' + Math.max(0, page - 1) + ':prev', 'Previous', ButtonStyle.Secondary, page <= 0),
+    button(action + ':' + id + ':' + Math.min(pages - 1, page + 1) + ':next', 'Next', ButtonStyle.Secondary, page >= pages - 1),
+    button(backAction + ':pageback:' + action, 'Back', ButtonStyle.Primary),
   );
 }
 function getManageableRoles(guild) {

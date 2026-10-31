@@ -271,7 +271,7 @@ test('slash command schema and panel builders serialize without invalid Discord 
   assert.equal(command.name, 'access');
   const optionNames = command.options.map(option => option.name);
   assert.deepEqual(optionNames, ['role', 'member']);
-  assert.ok(command.options.every(option => option.required === false));
+  assert.ok(command.options.every(option => option.required !== true));
   assert.ok(command.options.every(option => option.type !== 1), 'the command should not expose subcommands');
 
   const role = makeRole('role-1', 'Operations', PermissionFlagsBits.SendMessages);

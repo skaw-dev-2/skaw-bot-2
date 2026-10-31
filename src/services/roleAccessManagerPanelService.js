@@ -357,7 +357,7 @@ export function buildRoleChannelVisibilityPreviewPanel(guild, role, pending) {
     ].filter(Boolean).join('\n'))],
     components: [new ActionRowBuilder().addComponents(
       button('accessconfirm:' + pending.token, 'Konfirmasi & Simpan', ButtonStyle.Success),
-      button('accesscancel:' + pending.token, 'Kembali ke Editor', ButtonStyle.Secondary),
+      button('accesscancel:' + pending.token + ':' + (pending.sessionToken || ''), 'Kembali ke Editor', ButtonStyle.Secondary),
     )],
     allowedMentions: { parse: [] },
   };
@@ -752,6 +752,90 @@ export async function handleRoleAccessButton(interaction, client, args = []) {
     await prepareGuild(interaction.guild);
     const [action, ...values] = args;
 
+    if (action === 'accesscatpage') {
+      const [token, page] = values;
+      const session = getRoleChannelAccessSession(token, interaction.user.id, interaction.guildId);
+      if (!session) throw new Error('This access panel expired. Reopen /access panel.');
+      const role = await fetchRole(interaction.guild, session.roleId);
+      if (!role) throw new Error('Selected role no longer exists.');
+      updateRoleChannelAccessSession(token, interaction.user.id, interaction.guildId, {
+        categoryPage: page,
+        channelPage: 0,
+      });
+      const refreshed = getRoleChannelAccessSession(token, interaction.user.id, interaction.guildId);
+      return interaction.update(buildRoleChannelVisibilityPanel(interaction.guild, role, refreshed));
+    }
+    if (action === 'accesschannelpage') {
+      const [token, page] = values;
+      const session = getRoleChannelAccessSession(token, interaction.user.id, interaction.guildId);
+      if (!session) throw new Error('This access panel expired. Reopen /access panel.');
+      const role = await fetchRole(interaction.guild, session.roleId);
+      if (!role) throw new Error('Selected role no longer exists.');
+      updateRoleChannelAccessSession(token, interaction.user.id, interaction.guildId, { channelPage: page });
+      const refreshed = getRoleChannelAccessSession(token, interaction.user.id, interaction.guildId);
+      return interaction.update(buildRoleChannelVisibilityPanel(interaction.guild, role, refreshed));
+    }
+    if (action === 'accessbulk') {
+      const [token, rawValue] = values;
+      const session = getRoleChannelAccessSession(token, interaction.user.id, interaction.guildId);
+      if (!session) throw new Error('This access panel expired. Reopen /access panel.');
+      const role = await fetchRole(interaction.guild, session.roleId);
+      if (!role) throw new Error('Selected role no longer exists.');
+      const group = collectRoleChannelGroups(interaction.guild, role, session)
+        .find(item => item.id === session.selectedCategoryId);
+      if (!group) throw new Error('Kategori ini sudah tidak tersedia. Pilih kategori lain.');
+      const nextValue = rawValue === 'true';
+      const desired = Object.fromEntries(group.channels.map(item => [item.channel.id, nextValue]));
+      if (group.id !== 'uncategorized') desired[group.id] = nextValue;
+      stageRoleChannelAccessStates(token, interaction.user.id, interaction.guildId, desired);
+      const refreshed = getRoleChannelAccessSession(token, interaction.user.id, interaction.guildId);
+      return interaction.update(buildRoleChannelVisibilityPanel(interaction.guild, role, refreshed));
+    }
+    if (action === 'accesssave') {
+      const session = getRoleChannelAccessSession(values[0], interaction.user.id, interaction.guildId);
+      if (!session) throw new Error('This access panel expired. Reopen /access panel.');
+      const role = await fetchRole(interaction.guild, session.roleId);
+      if (!role) throw new Error('Selected role no longer exists.');
+      const pending = await createRoleChannelVisibilityPreview(
+        client, interaction.guild, interaction.user.id, session.token,
+      );
+      pending.sessionToken = session.token;
+      return interaction.update(buildRoleChannelVisibilityPreviewPanel(interaction.guild, role, pending));
+    }
+    if (action === 'accessconfirm') {
+      await interaction.deferUpdate();
+      const result = await applyPendingRolePermissionChange(client, interaction.guild, interaction.user.id, values[0]);
+      const grants = Object.values(result.nextValues || {}).filter(value => value === true).length;
+      const revokes = Object.values(result.nextValues || {}).filter(value => value === false).length;
+      const oldSession = getRoleChannelAccessSession(
+        getRoleChannelAccessSession(values[0], interaction.user.id, interaction.guildId)?.token,
+        interaction.user.id,
+        interaction.guildId,
+      );
+      const freshSession = createRoleChannelAccessSession({
+        guildId: interaction.guildId,
+        actorId: interaction.user.id,
+        roleId: result.role.id,
+        selectedCategoryId: oldSession?.selectedCategoryId || null,
+      });
+      const notice = grants + ' target diizinkan, ' + revokes + ' target dicabut. Backup: ' +
+        result.backupId + '. Audit: ' + (result.auditPersisted ? 'tersimpan' : 'gagal disimpan—periksa database');
+      return interaction.editReply(buildRoleChannelVisibilityPanel(
+        interaction.guild, result.role, freshSession, notice,
+      ));
+    }
+    if (action === 'accesscancel') {
+      cancelPendingRolePermissionChange(values[0], interaction.user.id);
+      const session = getRoleChannelAccessSession(values[1], interaction.user.id, interaction.guildId);
+      if (!session) throw new Error('This access panel expired. Reopen /access panel.');
+      const role = await fetchRole(interaction.guild, session.roleId);
+      if (!role) throw new Error('Selected role no longer exists.');
+      return interaction.update(buildRoleChannelVisibilityPanel(interaction.guild, role, session));
+    }
+    if (action === 'accessdiscard') {
+      deleteRoleChannelAccessSession(values[0], interaction.user.id, interaction.guildId);
+      return interaction.update(buildRoleAccessDashboard(interaction.guild, 0));
+    }
     if (action === 'dashboard') return interaction.update(buildRoleAccessDashboard(interaction.guild, values[0]));
     if (action === 'role') {
       const role = await fetchRole(interaction.guild, values[0]);
@@ -925,10 +1009,54 @@ export async function handleRoleAccessSelect(interaction, client, args = []) {
     await prepareGuild(interaction.guild);
     const [action, ...values] = args;
 
+    if (action === 'rolepick') {
+      const role = await fetchRole(interaction.guild, interaction.values?.[0]);
+      if (!role || role.id === interaction.guild.id || role.managed) {
+        throw new Error('Pilih role server biasa yang bukan @everyone atau role integrasi.');
+      }
+      const groups = collectRoleChannelGroups(interaction.guild, role, null);
+      const session = createRoleChannelAccessSession({
+        guildId: interaction.guildId,
+        actorId: interaction.user.id,
+        roleId: role.id,
+        selectedCategoryId: groups[0]?.id || 'uncategorized',
+      });
+      return interaction.update(buildRoleChannelVisibilityPanel(interaction.guild, role, session));
+    }
     if (action === 'role') {
       const role = await fetchRole(interaction.guild, interaction.values?.[0]);
       if (!role) throw new Error('Selected role no longer exists.');
       return interaction.update(buildRoleAccessRoleDetail(interaction.guild, role));
+    }
+    if (action === 'accesscategory') {
+      const token = values[0];
+      const session = getRoleChannelAccessSession(token, interaction.user.id, interaction.guildId);
+      if (!session) throw new Error('This access panel expired. Reopen /access panel.');
+      const role = await fetchRole(interaction.guild, session.roleId);
+      if (!role) throw new Error('Selected role no longer exists.');
+      const selectedCategoryId = String(interaction.values?.[0] || 'uncategorized');
+      updateRoleChannelAccessSession(token, interaction.user.id, interaction.guildId, {
+        selectedCategoryId,
+        channelPage: 0,
+      });
+      const refreshed = getRoleChannelAccessSession(token, interaction.user.id, interaction.guildId);
+      return interaction.update(buildRoleChannelVisibilityPanel(interaction.guild, role, refreshed));
+    }
+    if (action === 'accesschannels') {
+      const token = values[0];
+      const session = getRoleChannelAccessSession(token, interaction.user.id, interaction.guildId);
+      if (!session) throw new Error('This access panel expired. Reopen /access panel.');
+      const role = await fetchRole(interaction.guild, session.roleId);
+      if (!role) throw new Error('Selected role no longer exists.');
+      const state = getRoleChannelAccessPanelState(interaction.guild, role, session);
+      const selected = new Set((interaction.values || []).map(String));
+      const desired = Object.fromEntries(state.pageChannels.map(item => [
+        item.channel.id,
+        selected.has(item.channel.id),
+      ]));
+      stageRoleChannelAccessStates(token, interaction.user.id, interaction.guildId, desired);
+      const refreshed = getRoleChannelAccessSession(token, interaction.user.id, interaction.guildId);
+      return interaction.update(buildRoleChannelVisibilityPanel(interaction.guild, role, refreshed));
     }
     if (action === 'restore') {
       const backupId = interaction.values?.[0];

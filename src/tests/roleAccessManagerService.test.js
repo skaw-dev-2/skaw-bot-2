@@ -1,6 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ChannelType, PermissionFlagsBits } from 'discord.js';
+import accessCommand from '../commands/Utility/access.js';
+import {
+  buildBackupsPanel,
+  buildMemberAccessPanel,
+  buildPermissionChoicePanel,
+  buildPermissionPreviewPanel,
+  buildRestorePreviewPanel,
+  buildRoleAccessDashboard,
+  buildRoleAccessRoleDetail,
+  buildRoleChannelPermissionPanel,
+  buildRoleChannelPickerPanel,
+  buildRoleChannelsPanel,
+  buildRoleServerPermissionsPanel,
+} from '../services/roleAccessManagerPanelService.js';
+import { createChannelEditorSession } from '../services/roleAccessManagerService.js';
 import {
   analyzeGuildPermissionHealth,
   applyPendingRolePermissionChange,
@@ -229,4 +244,82 @@ test('permission mutations fail closed when PostgreSQL is degraded', async () =>
   );
   assert.equal(getRolePermissionState(fixture.role, 'ManageMessages'), true);
   cancelPendingRolePermissionChange(pending.token, fixture.actorId);
+});
+
+
+test('slash command schema and panel builders serialize without invalid Discord components', () => {
+  const command = accessCommand.data.toJSON();
+  assert.equal(command.name, 'access');
+  const subcommands = command.options.map(option => option.name);
+  for (const name of ['panel', 'inspect', 'channels', 'member', 'compare', 'health', 'audit', 'backups', 'restore']) {
+    assert.ok(subcommands.includes(name), 'missing /access ' + name);
+  }
+
+  const role = makeRole('role-1', 'Operations', PermissionFlagsBits.SendMessages);
+  const channel = makeChannel({
+    id: '55555555555555555',
+    name: 'management',
+    view: true,
+    synced: true,
+    overwrite: { roleId: role.id, allow: PermissionFlagsBits.ViewChannel },
+  });
+  const guild = {
+    id: '44444444444444444',
+    roles: { cache: new Map([[role.id, role]]) },
+    channels: { cache: new Map([[channel.id, channel]]) },
+  };
+  role.guild = guild;
+  channel.guild = guild;
+
+  const member = {
+    id: 'member-1',
+    user: { tag: 'Member#0001' },
+    permissions: permissionSet(),
+    roles: { cache: new Map([[role.id, role]]) },
+  };
+  const backup = {
+    id: 'backup-1',
+    createdAt: new Date().toISOString(),
+    reason: 'Test backup',
+    snapshot: {
+      roleId: role.id,
+      capturedAt: new Date().toISOString(),
+      channelOverwrites: [],
+    },
+  };
+  const pending = {
+    token: 'preview-token',
+    scope: 'channel',
+    roleId: role.id,
+    flagName: 'ViewChannel',
+    nextValue: true,
+    previousValues: { [channel.id]: null },
+    channelIds: [channel.id],
+  };
+  const sessionToken = createChannelEditorSession({
+    guildId: guild.id, actorId: 'actor-1', roleId: role.id, channelIds: [channel.id],
+  });
+
+  const payloads = [
+    buildRoleAccessDashboard(guild),
+    buildRoleAccessRoleDetail(guild, role),
+    buildRoleServerPermissionsPanel(role, 0, false),
+    buildRoleServerPermissionsPanel(role, 0, true),
+    buildRoleChannelsPanel(guild, role),
+    buildRoleChannelPickerPanel(guild, role),
+    buildRoleChannelPermissionPanel(guild, role, sessionToken, 'actor-1', 0),
+    buildPermissionChoicePanel(role, 'server', 'SendMessages'),
+    buildPermissionChoicePanel(role, 'channel', 'ViewChannel', sessionToken),
+    buildPermissionPreviewPanel(guild, role, pending),
+    buildRestorePreviewPanel(role, { backupId: backup.id, snapshot: backup.snapshot, token: 'restore-token' }),
+    buildMemberAccessPanel(guild, member),
+    buildBackupsPanel(role, [backup]),
+  ];
+
+  for (const payload of payloads) {
+    assert.ok(Array.isArray(payload.embeds));
+    assert.ok(Array.isArray(payload.components));
+    for (const item of payload.embeds) item.toJSON();
+    for (const row of payload.components) row.toJSON();
+  }
 });

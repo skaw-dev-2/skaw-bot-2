@@ -10,6 +10,7 @@ import {
   buildRestorePreviewPanel,
   buildRoleAccessDashboard,
   buildRoleAccessRoleDetail,
+  buildRoleComparePickerPanel,
   buildRoleChannelPermissionPanel,
   buildRoleChannelPickerPanel,
   buildRoleChannelsPanel,
@@ -268,10 +269,10 @@ test('permission mutations fail closed when PostgreSQL is degraded', async () =>
 test('slash command schema and panel builders serialize without invalid Discord components', () => {
   const command = accessCommand.data.toJSON();
   assert.equal(command.name, 'access');
-  const subcommands = command.options.map(option => option.name);
-  for (const name of ['panel', 'inspect', 'channels', 'member', 'compare', 'health', 'audit', 'backups', 'restore']) {
-    assert.ok(subcommands.includes(name), 'missing /access ' + name);
-  }
+  const optionNames = command.options.map(option => option.name);
+  assert.deepEqual(optionNames, ['role', 'member']);
+  assert.ok(command.options.every(option => option.required === false));
+  assert.ok(command.options.every(option => option.type !== 1), 'the command should not expose subcommands');
 
   const role = makeRole('role-1', 'Operations', PermissionFlagsBits.SendMessages);
   const channel = makeChannel({
@@ -281,12 +282,14 @@ test('slash command schema and panel builders serialize without invalid Discord 
     synced: true,
     overwrite: { roleId: role.id, allow: PermissionFlagsBits.ViewChannel },
   });
+  const comparisonRole = makeRole('role-2', 'Operations Backup', 0n);
   const guild = {
     id: '44444444444444444',
-    roles: { cache: new Map([[role.id, role]]) },
+    roles: { cache: new Map([[role.id, role], [comparisonRole.id, comparisonRole]]) },
     channels: { cache: new Map([[channel.id, channel]]) },
   };
   role.guild = guild;
+  comparisonRole.guild = guild;
   channel.guild = guild;
 
   const member = {
@@ -321,6 +324,7 @@ test('slash command schema and panel builders serialize without invalid Discord 
   const payloads = [
     buildRoleAccessDashboard(guild),
     buildRoleAccessRoleDetail(guild, role),
+    buildRoleComparePickerPanel(guild, role),
     buildRoleServerPermissionsPanel(role, 0, false),
     buildRoleServerPermissionsPanel(role, 0, true),
     buildRoleChannelsPanel(guild, role),

@@ -1,5 +1,5 @@
 import {
-  ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, MessageFlags,
+  ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, EmbedBuilder, MessageFlags,
   PermissionFlagsBits, StringSelectMenuBuilder, escapeMarkdown,
 } from 'discord.js';
 import {
@@ -9,8 +9,10 @@ import {
   createRoleBackupRestorePreview, createServerPermissionPreview,
   formatPermissionName, getChannelEditorSession, getMemberEffectiveAccessEntries,
   getPermissionEntries, getPendingRolePermissionChange, getRoleAccessBackups,
-  getRoleAccessAudit, getRoleChannelAccessEntries, getRolePermissionPage,
-  getRolePermissionState,
+  getRoleAccessAudit, getRoleChannelAccessEntries, getRoleChannelAccessSession,
+  getRolePermissionPage, getRolePermissionState, createRoleChannelAccessSession,
+  stageRoleChannelAccessStates, updateRoleChannelAccessSession,
+  deleteRoleChannelAccessSession, createRoleChannelVisibilityPreview,
 } from './roleAccessManagerService.js';
 
 const BLUE = 0x0878FF;
@@ -84,46 +86,282 @@ async function updateWithError(interaction, error) {
 }
 
 export function buildRoleAccessDashboard(guild, page = 0) {
-  const roles = getManageableRoles(guild);
+  const roles = getManageableRoles(guild)
+    .filter(role => role.id !== guild.id && !role.managed);
   const pages = Math.max(1, Math.ceil(roles.length / 25));
   const current = Math.min(pages - 1, Math.max(0, Number(page) || 0));
   const items = roles.slice(current * 25, current * 25 + 25);
   const select = new StringSelectMenuBuilder()
-    .setCustomId('skaw_ra_select:role:' + current)
-    .setPlaceholder('Select a role to inspect and manage')
+    .setCustomId('skaw_ra_select:rolepick:' + current)
+    .setPlaceholder('Pilih role yang ingin diatur')
     .setMinValues(1).setMaxValues(1)
+    .setDisabled(items.length === 0)
     .addOptions(items.map(role => ({
       label: roleLabel(role),
-      description: ('Position ' + role.position + ' · members ' + (role.members?.size ?? '—')).slice(0, 100),
+      description: ('Posisi ' + role.position + ' · anggota ' + (role.members?.size ?? '—')).slice(0, 100),
       value: role.id,
     })));
-  const embed = fieldEmbed('ROLE ACCESS MANAGER', [
-    '**Centralized role permission management**',
-    'Inspect server permissions, channel access, and effective member access from one panel.',
+  const embed = fieldEmbed('SKAW ACCESS MANAGER', [
+    '**Pengaturan akses channel berdasarkan role**',
+    'Pilih satu role untuk mengatur channel mana saja yang boleh dilihat.',
     '',
-    '**Server overview**',
-    'Roles: **' + roles.length + '**',
-    'Channels: **' + guild.channels.cache.size + '**',
-    'Role list page: **' + (current + 1) + '/' + pages + '**',
+    '**Ringkasan server**',
+    'Role tersedia: **' + roles.length + '**',
+    'Total channel: **' + [...guild.channels.cache.values()].filter(channel =>
+      channel.type !== ChannelType.GuildCategory && !channel.isThread?.()
+    ).length + '**',
     '',
-    'Select a role below to open its access profile.',
-    'Administrator roles bypass channel restrictions and will be highlighted.',
+    'Pilih role dari menu di bawah. Akses dapat diatur per kategori maupun per channel.',
+    'Perubahan baru diterapkan setelah menekan **Simpan Perubahan** dan mengonfirmasi.',
   ].join('\n'));
   return {
     embeds: [embed],
     components: [
       new ActionRowBuilder().addComponents(select),
       new ActionRowBuilder().addComponents(
-        button('dashboard:' + Math.max(0, current - 1) + ':prev', 'Previous', ButtonStyle.Secondary, current === 0),
-        button('dashboard:' + Math.min(pages - 1, current + 1) + ':next', 'Next', ButtonStyle.Secondary, current >= pages - 1),
-        button('health', 'Permission Health', ButtonStyle.Primary),
-        button('audit', 'Audit History'),
+        button('dashboard:' + Math.max(0, current - 1) + ':prev', 'Sebelumnya', ButtonStyle.Secondary, current === 0),
+        button('dashboard:' + Math.min(pages - 1, current + 1) + ':next', 'Berikutnya', ButtonStyle.Secondary, current >= pages - 1),
       ),
     ],
     allowedMentions: { parse: [] },
   };
 }
 
+function collectRoleChannelGroups(guild, role, session) {
+  const groups = new Map();
+  const channels = [...(guild?.channels?.cache?.values?.() || [])]
+    .filter(channel =>
+      channel?.guild &&
+      channel.permissionOverwrites?.cache &&
+      channel.type !== ChannelType.GuildCategory &&
+      !channel.isThread?.()
+    );
+
+  for (const channel of channels) {
+    const categoryId = channel.parentId ? String(channel.parentId) : 'uncategorized';
+    const category = channel.parent || guild.channels.cache.get(categoryId) || null;
+    if (!groups.has(categoryId)) {
+      groups.set(categoryId, {
+        id: categoryId,
+        name: categoryId === 'uncategorized' ? 'Tanpa Kategori' : (category?.name || 'Kategori'),
+        position: category?.rawPosition ?? Number.MAX_SAFE_INTEGER,
+        channels: [],
+      });
+    }
+    const currentVisible = Boolean(channel.permissionsFor(role)?.has(PermissionFlagsBits.ViewChannel));
+    const visible = Object.hasOwn(session?.desiredStates || {}, channel.id)
+      ? Boolean(session.desiredStates[channel.id])
+      : currentVisible;
+    groups.get(categoryId).channels.push({
+      channel,
+      currentVisible,
+      visible,
+    });
+  }
+
+  return [...groups.values()]
+    .map(group => ({
+      ...group,
+      channels: group.channels.sort((a, b) =>
+        (a.channel.rawPosition ?? 0) - (b.channel.rawPosition ?? 0) ||
+        a.channel.name.localeCompare(b.channel.name)
+      ),
+      visibleCount: group.channels.filter(item => item.visible).length,
+    }))
+    .sort((a, b) =>
+      (a.id === 'uncategorized' ? 1 : 0) - (b.id === 'uncategorized' ? 1 : 0) ||
+      a.position - b.position ||
+      a.name.localeCompare(b.name)
+    );
+}
+
+function getRoleChannelAccessPanelState(guild, role, session) {
+  const groups = collectRoleChannelGroups(guild, role, session);
+  const categoryPages = Math.max(1, Math.ceil(groups.length / 25));
+  const categoryPage = Math.min(categoryPages - 1, Math.max(0, Number(session.categoryPage) || 0));
+  const visibleCategories = groups.slice(categoryPage * 25, categoryPage * 25 + 25);
+  let selected = groups.find(group => group.id === session.selectedCategoryId) || visibleCategories[0] || groups[0] || null;
+  if (selected && !visibleCategories.some(group => group.id === selected.id)) {
+    selected = visibleCategories[0] || selected;
+  }
+  const selectedCategoryId = selected?.id || 'uncategorized';
+  const channels = selected?.channels || [];
+  const channelPages = Math.max(1, Math.ceil(channels.length / 25));
+  const channelPage = Math.min(channelPages - 1, Math.max(0, Number(session.channelPage) || 0));
+  const pageChannels = channels.slice(channelPage * 25, channelPage * 25 + 25);
+  const allChannels = groups.flatMap(group => group.channels);
+  const stagedCount = allChannels.filter(item => item.visible !== item.currentVisible).length;
+
+  return {
+    groups,
+    categoryPages,
+    categoryPage,
+    visibleCategories,
+    selected,
+    selectedCategoryId,
+    channelPages,
+    channelPage,
+    pageChannels,
+    allChannels,
+    stagedCount,
+    visibleCount: allChannels.filter(item => item.visible).length,
+  };
+}
+
+export function buildRoleChannelVisibilityPanel(guild, role, session, notice = null) {
+  if (!session || session.kind !== 'role-channel-visibility' || session.roleId !== role.id) {
+    throw new Error('This access panel expired. Reopen /access panel.');
+  }
+
+  const state = getRoleChannelAccessPanelState(guild, role, session);
+  if (session.categoryPage !== state.categoryPage || session.selectedCategoryId !== state.selectedCategoryId ||
+      session.channelPage !== state.channelPage) {
+    updateRoleChannelAccessSession(session.token, session.actorId, guild.id, {
+      categoryPage: state.categoryPage,
+      selectedCategoryId: state.selectedCategoryId,
+      channelPage: state.channelPage,
+    });
+  }
+
+  const isAdministrator = getRolePermissionState(role, 'Administrator');
+  const total = state.allChannels.length;
+  const hidden = total - state.visibleCount;
+  const group = state.selected;
+  const categoryOptions = state.visibleCategories.map(item => ({
+    label: item.name.slice(0, 100),
+    description: (item.visibleCount + '/' + item.channels.length + ' channel dapat dilihat').slice(0, 100),
+    value: item.id,
+    default: item.id === state.selectedCategoryId,
+  }));
+  const channelOptions = state.pageChannels.map(item => ({
+    label: ('#' + item.channel.name).slice(0, 100),
+    description: item.visible ? '✅ Boleh Melihat' : '⛔ Akses Dicabut',
+    value: item.channel.id,
+    default: item.visible,
+  }));
+
+  const categorySelect = new StringSelectMenuBuilder()
+    .setCustomId('skaw_ra_select:accesscategory:' + session.token)
+    .setPlaceholder('Pilih kategori channel')
+    .setMinValues(1).setMaxValues(1)
+    .setDisabled(isAdministrator || categoryOptions.length === 0)
+    .addOptions(categoryOptions);
+
+  const rows = [];
+  if (categoryOptions.length) rows.push(new ActionRowBuilder().addComponents(categorySelect));
+
+  if (channelOptions.length) {
+    const channelSelect = new StringSelectMenuBuilder()
+      .setCustomId('skaw_ra_select:accesschannels:' + session.token)
+      .setPlaceholder('Centang channel yang boleh dilihat')
+      .setMinValues(0).setMaxValues(Math.max(1, channelOptions.length))
+      .setDisabled(isAdministrator)
+      .addOptions(channelOptions);
+    rows.push(new ActionRowBuilder().addComponents(channelSelect));
+  }
+
+  if (state.groups.length) {
+    rows.push(new ActionRowBuilder().addComponents(
+      button(
+        'accesscatpage:' + session.token + ':' + Math.max(0, state.categoryPage - 1) + ':prev',
+        'Kategori Sebelumnya',
+        ButtonStyle.Secondary,
+        state.categoryPage === 0 || isAdministrator,
+      ),
+      button(
+        'accesscatpage:' + session.token + ':' + Math.min(state.categoryPages - 1, state.categoryPage + 1) + ':next',
+        'Kategori Berikutnya',
+        ButtonStyle.Secondary,
+        state.categoryPage >= state.categoryPages - 1 || isAdministrator,
+      ),
+      button(
+        'accesschannelpage:' + session.token + ':' + Math.max(0, state.channelPage - 1) + ':prev',
+        'Channel Sebelumnya',
+        ButtonStyle.Secondary,
+        !group || state.channelPage === 0 || isAdministrator,
+      ),
+      button(
+        'accesschannelpage:' + session.token + ':' + Math.min(state.channelPages - 1, state.channelPage + 1) + ':next',
+        'Channel Berikutnya',
+        ButtonStyle.Secondary,
+        !group || state.channelPage >= state.channelPages - 1 || isAdministrator,
+      ),
+    ));
+    rows.push(new ActionRowBuilder().addComponents(
+      button('accessbulk:' + session.token + ':true', 'Izinkan Semua', ButtonStyle.Success, !group || isAdministrator),
+      button('accessbulk:' + session.token + ':false', 'Cabut Semua', ButtonStyle.Danger, !group || isAdministrator),
+    ));
+  }
+
+  rows.push(new ActionRowBuilder().addComponents(
+    button('accesssave:' + session.token, 'Simpan Perubahan', ButtonStyle.Success, state.stagedCount === 0 || isAdministrator),
+    button('accessdiscard:' + session.token, 'Batalkan', ButtonStyle.Secondary),
+  ));
+
+  const description = [
+    '**Role:** ' + safeName(role.name, 100),
+    '**Channel boleh dilihat:** ' + state.visibleCount + '/' + total,
+    '**Akses dicabut:** ' + hidden,
+    '**Perubahan belum disimpan:** ' + state.stagedCount,
+    '',
+    group
+      ? '**Kategori:** ' + safeName(group.name, 100) + ' · ' + group.visibleCount + '/' + group.channels.length + ' terlihat'
+      : 'Belum ada channel di server ini.',
+    group
+      ? '**Halaman channel:** ' + (state.channelPage + 1) + '/' + state.channelPages
+      : '',
+    '',
+    'Pilih kategori, lalu centang channel yang boleh dilihat. Pilihan kategori akan mengatur semua channel di dalamnya, termasuk yang permission-nya tidak tersinkron.',
+    'Perubahan belum diterapkan sampai kamu menekan **Simpan Perubahan**.',
+    '',
+    'Catatan: anggota masih bisa melihat channel melalui role lain atau Administrator.',
+  ];
+  if (isAdministrator) {
+    description.splice(4, 0, '⚠️ **Role ini memiliki Administrator.** Administrator melewati pembatasan channel, jadi akses channel role ini tidak dapat diubah.');
+  }
+  if (notice) description.unshift('✅ ' + notice, '');
+
+  const embed = fieldEmbed('CHANNEL VISIBILITY · ' + safeName(role.name, 100), description.filter(Boolean).join('\n'));
+  return { embeds: [embed], components: rows, allowedMentions: { parse: [] } };
+}
+
+export function buildRoleChannelVisibilityPreviewPanel(guild, role, pending) {
+  const entries = (pending.channelIds || []).map(id => {
+    const channel = guild.channels.cache.get(id);
+    return {
+      channel,
+      id,
+      next: pending.nextValues?.[id] ?? pending.nextValue,
+    };
+  });
+  const grantCount = entries.filter(item => item.next === true).length;
+  const revokeCount = entries.filter(item => item.next === false).length;
+  const lines = entries.slice(0, 14).map(item =>
+    (item.next ? '✅ Boleh Melihat — ' : '⛔ Cabut Akses — ') +
+    (item.channel?.type === ChannelType.GuildCategory
+      ? 'Kategori **' + safeName(item.channel.name, 70) + '**'
+      : '<#' + item.id + '>')
+  );
+  return {
+    embeds: [fieldEmbed('KONFIRMASI PERUBAHAN AKSES', [
+      '**Role:** ' + safeName(role.name, 100),
+      '**Channel/kategori diizinkan:** ' + grantCount,
+      '**Channel/kategori dicabut:** ' + revokeCount,
+      '**Total target berubah:** ' + entries.length,
+      '',
+      lines.join('\n') || 'Tidak ada target.',
+      entries.length > 14 ? '…dan ' + (entries.length - 14) + ' target lainnya.' : '',
+      '',
+      'Satu backup role akan disimpan sebelum perubahan diterapkan. Jika Discord menolak sebagian perubahan, bot akan mencoba mengembalikan kondisi sebelumnya.',
+      'Perubahan ini hanya mengatur izin role yang dipilih. Anggota yang memiliki role lain masih mungkin dapat melihat channel.',
+    ].filter(Boolean).join('\n'))],
+    components: [new ActionRowBuilder().addComponents(
+      button('accessconfirm:' + pending.token + ':' + (pending.sessionToken || ''), 'Konfirmasi & Simpan', ButtonStyle.Success),
+      button('accesscancel:' + pending.token + ':' + (pending.sessionToken || ''), 'Kembali ke Editor', ButtonStyle.Secondary),
+    )],
+    allowedMentions: { parse: [] },
+  };
+}
 export function buildRoleAccessRoleDetail(guild, role) {
   const granted = getPermissionEntries().filter(entry => getRolePermissionState(role, entry.name));
   const channels = getRoleChannelAccessEntries(guild, role);
@@ -514,6 +752,89 @@ export async function handleRoleAccessButton(interaction, client, args = []) {
     await prepareGuild(interaction.guild);
     const [action, ...values] = args;
 
+    if (action === 'accesscatpage') {
+      const [token, page] = values;
+      const session = getRoleChannelAccessSession(token, interaction.user.id, interaction.guildId);
+      if (!session) throw new Error('This access panel expired. Reopen /access panel.');
+      const role = await fetchRole(interaction.guild, session.roleId);
+      if (!role) throw new Error('Selected role no longer exists.');
+      updateRoleChannelAccessSession(token, interaction.user.id, interaction.guildId, {
+        categoryPage: page,
+        channelPage: 0,
+      });
+      const refreshed = getRoleChannelAccessSession(token, interaction.user.id, interaction.guildId);
+      return interaction.update(buildRoleChannelVisibilityPanel(interaction.guild, role, refreshed));
+    }
+    if (action === 'accesschannelpage') {
+      const [token, page] = values;
+      const session = getRoleChannelAccessSession(token, interaction.user.id, interaction.guildId);
+      if (!session) throw new Error('This access panel expired. Reopen /access panel.');
+      const role = await fetchRole(interaction.guild, session.roleId);
+      if (!role) throw new Error('Selected role no longer exists.');
+      updateRoleChannelAccessSession(token, interaction.user.id, interaction.guildId, { channelPage: page });
+      const refreshed = getRoleChannelAccessSession(token, interaction.user.id, interaction.guildId);
+      return interaction.update(buildRoleChannelVisibilityPanel(interaction.guild, role, refreshed));
+    }
+    if (action === 'accessbulk') {
+      const [token, rawValue] = values;
+      const session = getRoleChannelAccessSession(token, interaction.user.id, interaction.guildId);
+      if (!session) throw new Error('This access panel expired. Reopen /access panel.');
+      const role = await fetchRole(interaction.guild, session.roleId);
+      if (!role) throw new Error('Selected role no longer exists.');
+      const group = collectRoleChannelGroups(interaction.guild, role, session)
+        .find(item => item.id === session.selectedCategoryId);
+      if (!group) throw new Error('Kategori ini sudah tidak tersedia. Pilih kategori lain.');
+      const nextValue = rawValue === 'true';
+      // Apply the category toggle to every existing child channel directly.
+      // This deliberately avoids changing the category overwrite itself, which
+      // could implicitly propagate to synced children before rollback can inspect them.
+      const desired = Object.fromEntries(group.channels.map(item => [item.channel.id, nextValue]));
+      stageRoleChannelAccessStates(token, interaction.user.id, interaction.guildId, desired);
+      const refreshed = getRoleChannelAccessSession(token, interaction.user.id, interaction.guildId);
+      return interaction.update(buildRoleChannelVisibilityPanel(interaction.guild, role, refreshed));
+    }
+    if (action === 'accesssave') {
+      const session = getRoleChannelAccessSession(values[0], interaction.user.id, interaction.guildId);
+      if (!session) throw new Error('This access panel expired. Reopen /access panel.');
+      const role = await fetchRole(interaction.guild, session.roleId);
+      if (!role) throw new Error('Selected role no longer exists.');
+      const pending = await createRoleChannelVisibilityPreview(
+        client, interaction.guild, interaction.user.id, session.token,
+      );
+      pending.sessionToken = session.token;
+      return interaction.update(buildRoleChannelVisibilityPreviewPanel(interaction.guild, role, pending));
+    }
+    if (action === 'accessconfirm') {
+      await interaction.deferUpdate();
+      const [pendingToken, sessionToken] = values;
+      const oldSession = getRoleChannelAccessSession(sessionToken, interaction.user.id, interaction.guildId);
+      const result = await applyPendingRolePermissionChange(client, interaction.guild, interaction.user.id, pendingToken);
+      const grants = Object.values(result.nextValues || {}).filter(value => value === true).length;
+      const revokes = Object.values(result.nextValues || {}).filter(value => value === false).length;
+      const freshSession = createRoleChannelAccessSession({
+        guildId: interaction.guildId,
+        actorId: interaction.user.id,
+        roleId: result.role.id,
+        selectedCategoryId: oldSession?.selectedCategoryId || null,
+      });
+      const notice = grants + ' target diizinkan, ' + revokes + ' target dicabut. Backup: ' +
+        result.backupId + '. Audit: ' + (result.auditPersisted ? 'tersimpan' : 'gagal disimpan—periksa database');
+      return interaction.editReply(buildRoleChannelVisibilityPanel(
+        interaction.guild, result.role, freshSession, notice,
+      ));
+    }
+    if (action === 'accesscancel') {
+      cancelPendingRolePermissionChange(values[0], interaction.user.id);
+      const session = getRoleChannelAccessSession(values[1], interaction.user.id, interaction.guildId);
+      if (!session) throw new Error('This access panel expired. Reopen /access panel.');
+      const role = await fetchRole(interaction.guild, session.roleId);
+      if (!role) throw new Error('Selected role no longer exists.');
+      return interaction.update(buildRoleChannelVisibilityPanel(interaction.guild, role, session));
+    }
+    if (action === 'accessdiscard') {
+      deleteRoleChannelAccessSession(values[0], interaction.user.id, interaction.guildId);
+      return interaction.update(buildRoleAccessDashboard(interaction.guild, 0));
+    }
     if (action === 'dashboard') return interaction.update(buildRoleAccessDashboard(interaction.guild, values[0]));
     if (action === 'role') {
       const role = await fetchRole(interaction.guild, values[0]);
@@ -687,10 +1008,54 @@ export async function handleRoleAccessSelect(interaction, client, args = []) {
     await prepareGuild(interaction.guild);
     const [action, ...values] = args;
 
+    if (action === 'rolepick') {
+      const role = await fetchRole(interaction.guild, interaction.values?.[0]);
+      if (!role || role.id === interaction.guild.id || role.managed) {
+        throw new Error('Pilih role server biasa yang bukan @everyone atau role integrasi.');
+      }
+      const groups = collectRoleChannelGroups(interaction.guild, role, null);
+      const session = createRoleChannelAccessSession({
+        guildId: interaction.guildId,
+        actorId: interaction.user.id,
+        roleId: role.id,
+        selectedCategoryId: groups[0]?.id || 'uncategorized',
+      });
+      return interaction.update(buildRoleChannelVisibilityPanel(interaction.guild, role, session));
+    }
     if (action === 'role') {
       const role = await fetchRole(interaction.guild, interaction.values?.[0]);
       if (!role) throw new Error('Selected role no longer exists.');
       return interaction.update(buildRoleAccessRoleDetail(interaction.guild, role));
+    }
+    if (action === 'accesscategory') {
+      const token = values[0];
+      const session = getRoleChannelAccessSession(token, interaction.user.id, interaction.guildId);
+      if (!session) throw new Error('This access panel expired. Reopen /access panel.');
+      const role = await fetchRole(interaction.guild, session.roleId);
+      if (!role) throw new Error('Selected role no longer exists.');
+      const selectedCategoryId = String(interaction.values?.[0] || 'uncategorized');
+      updateRoleChannelAccessSession(token, interaction.user.id, interaction.guildId, {
+        selectedCategoryId,
+        channelPage: 0,
+      });
+      const refreshed = getRoleChannelAccessSession(token, interaction.user.id, interaction.guildId);
+      return interaction.update(buildRoleChannelVisibilityPanel(interaction.guild, role, refreshed));
+    }
+    if (action === 'accesschannels') {
+      const token = values[0];
+      const session = getRoleChannelAccessSession(token, interaction.user.id, interaction.guildId);
+      if (!session) throw new Error('This access panel expired. Reopen /access panel.');
+      const role = await fetchRole(interaction.guild, session.roleId);
+      if (!role) throw new Error('Selected role no longer exists.');
+      const state = getRoleChannelAccessPanelState(interaction.guild, role, session);
+      const selected = new Set((interaction.values || []).map(String));
+      const desired = Object.fromEntries(state.pageChannels.map(item => [
+        item.channel.id,
+        selected.has(item.channel.id),
+      ]));
+      stageRoleChannelAccessStates(token, interaction.user.id, interaction.guildId, desired);
+      const refreshed = getRoleChannelAccessSession(token, interaction.user.id, interaction.guildId);
+      return interaction.update(buildRoleChannelVisibilityPanel(interaction.guild, role, refreshed));
     }
     if (action === 'restore') {
       const backupId = interaction.values?.[0];

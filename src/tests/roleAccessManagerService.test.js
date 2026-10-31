@@ -13,10 +13,16 @@ import {
   buildRoleComparePickerPanel,
   buildRoleChannelPermissionPanel,
   buildRoleChannelPickerPanel,
+  buildRoleChannelVisibilityPanel,
+  buildRoleChannelVisibilityPreviewPanel,
   buildRoleChannelsPanel,
   buildRoleServerPermissionsPanel,
 } from '../services/roleAccessManagerPanelService.js';
-import { createChannelEditorSession } from '../services/roleAccessManagerService.js';
+import {
+  createChannelEditorSession, createRoleChannelAccessSession,
+  getRoleChannelAccessSession, stageRoleChannelAccessStates,
+  createRoleChannelVisibilityPreview,
+} from '../services/roleAccessManagerService.js';
 import {
   analyzeGuildPermissionHealth,
   applyPendingRolePermissionChange,
@@ -76,6 +82,48 @@ function makeRole(id, name, bitfield = 0n, position = 1) {
     roles: null,
     permissionsFor: undefined,
   };
+}
+
+function makeVisibilityEditableChannel({ id, name, roleId, actorId, botId, visible, parentId = null, synced = true }) {
+  const channel = makeChannel({ id, name, view: visible, synced });
+  channel.parentId = parentId;
+  let effectiveVisible = visible;
+  channel.permissionsFor = target => ({
+    has(flag) {
+      if (flag === PermissionFlagsBits.ManageRoles) return target?.id === botId;
+      if (flag === PermissionFlagsBits.ViewChannel) {
+        if (target?.id === actorId) return true;
+        if (target?.id === roleId) return effectiveVisible;
+        return false;
+      }
+      return false;
+    },
+  });
+  channel.permissionOverwrites.edit = async (targetRoleId, permissions) => {
+    const current = channel.permissionOverwrites.cache.get(String(targetRoleId));
+    let allow = current?.allow.bitfield ?? 0n;
+    let deny = current?.deny.bitfield ?? 0n;
+    const bit = PermissionFlagsBits.ViewChannel;
+    if (permissions.ViewChannel === true) {
+      allow |= bit;
+      deny &= ~bit;
+      effectiveVisible = true;
+    } else if (permissions.ViewChannel === false) {
+      deny |= bit;
+      allow &= ~bit;
+      effectiveVisible = false;
+    } else {
+      allow &= ~bit;
+      deny &= ~bit;
+      effectiveVisible = visible;
+    }
+    channel.permissionOverwrites.cache.set(String(targetRoleId), {
+      allow: { bitfield: allow },
+      deny: { bitfield: deny },
+    });
+    return channel;
+  };
+  return channel;
 }
 
 function makeGuildAndActors({ initialPermissions = 0n, degraded = false } = {}) {
@@ -266,13 +314,116 @@ test('permission mutations fail closed when PostgreSQL is degraded', async () =>
 });
 
 
+test('role channel visibility sessions stage changes independently of live permissions', () => {
+  const role = makeRole('role-1', 'Operations');
+  const session = createRoleChannelAccessSession({
+    guildId: 'guild-1',
+    actorId: 'actor-1',
+    roleId: role.id,
+    selectedCategoryId: 'category-1',
+  });
+  stageRoleChannelAccessStates(session.token, 'actor-1', 'guild-1', {
+    'channel-1': false,
+    'channel-2': true,
+  });
+  const stored = getRoleChannelAccessSession(session.token, 'actor-1', 'guild-1');
+  assert.equal(stored.desiredStates['channel-1'], false);
+  assert.equal(stored.desiredStates['channel-2'], true);
+  assert.equal(stored.selectedCategoryId, 'category-1');
+});
+
+test('bulk channel visibility preview supports mixed allow and deny targets, including unsynced channels', async () => {
+  const fixture = makeGuildAndActors();
+  let visible = true;
+  const visibleChannel = makeVisibilityEditableChannel({
+    id: '55555555555555555', name: 'trucker-chat',
+    roleId: fixture.roleId, actorId: fixture.actorId, botId: fixture.botId,
+    visible: true, parentId: '66666666666666666', synced: true,
+  });
+  const hiddenChannel = makeVisibilityEditableChannel({
+    id: '77777777777777777', name: 'trucker-orders',
+    roleId: fixture.roleId, actorId: fixture.actorId, botId: fixture.botId,
+    visible: false, parentId: '66666666666666666', synced: false,
+  });
+  visibleChannel.guild = fixture.guild;
+  hiddenChannel.guild = fixture.guild;
+  fixture.guild.channels.cache.set(visibleChannel.id, visibleChannel);
+  fixture.guild.channels.cache.set(hiddenChannel.id, hiddenChannel);
+
+  const session = createRoleChannelAccessSession({
+    guildId: fixture.guild.id,
+    actorId: fixture.actorId,
+    roleId: fixture.roleId,
+    selectedCategoryId: '66666666666666666',
+  });
+  stageRoleChannelAccessStates(session.token, fixture.actorId, fixture.guild.id, {
+    [visibleChannel.id]: false,
+    [hiddenChannel.id]: true,
+  });
+
+  const pending = await createRoleChannelVisibilityPreview(
+    fixture.client, fixture.guild, fixture.actorId, session.token,
+  );
+  assert.equal(pending.flagName, 'ViewChannel');
+  assert.equal(pending.channelIds.length, 2);
+  assert.equal(pending.nextValues[visibleChannel.id], false);
+  assert.equal(pending.nextValues[hiddenChannel.id], true);
+  assert.equal(pending.previousValues[visibleChannel.id], null);
+  assert.equal(pending.previousEffectiveValues[visibleChannel.id], true);
+  assert.equal(pending.previousEffectiveValues[hiddenChannel.id], false);
+});
+
+test('bulk channel visibility update applies mixed states with backup and audit records', async () => {
+  const fixture = makeGuildAndActors();
+  const visibleChannel = makeVisibilityEditableChannel({
+    id: '55555555555555555', name: 'trucker-chat',
+    roleId: fixture.roleId, actorId: fixture.actorId, botId: fixture.botId,
+    visible: true, synced: true,
+  });
+  const hiddenChannel = makeVisibilityEditableChannel({
+    id: '77777777777777777', name: 'trucker-orders',
+    roleId: fixture.roleId, actorId: fixture.actorId, botId: fixture.botId,
+    visible: false, synced: false,
+  });
+  visibleChannel.guild = fixture.guild;
+  hiddenChannel.guild = fixture.guild;
+  fixture.guild.channels.cache.set(visibleChannel.id, visibleChannel);
+  fixture.guild.channels.cache.set(hiddenChannel.id, hiddenChannel);
+
+  const session = createRoleChannelAccessSession({
+    guildId: fixture.guild.id,
+    actorId: fixture.actorId,
+    roleId: fixture.roleId,
+  });
+  stageRoleChannelAccessStates(session.token, fixture.actorId, fixture.guild.id, {
+    [visibleChannel.id]: false,
+    [hiddenChannel.id]: true,
+  });
+  const pending = await createRoleChannelVisibilityPreview(
+    fixture.client, fixture.guild, fixture.actorId, session.token,
+  );
+  const result = await applyPendingRolePermissionChange(
+    fixture.client, fixture.guild, fixture.actorId, pending.token,
+  );
+
+  assert.equal(result.channelRecords.length, 2);
+  assert.equal(visibleChannel.permissionsFor(fixture.role).has(PermissionFlagsBits.ViewChannel), false);
+  assert.equal(hiddenChannel.permissionsFor(fixture.role).has(PermissionFlagsBits.ViewChannel), true);
+  assert.equal(result.auditPersisted, true);
+
+  const backups = await fixture.client.db.get('guild:' + fixture.guild.id + ':role_access:backups:v1', []);
+  assert.equal(backups.length, 1);
+  const audit = await fixture.client.db.get('guild:' + fixture.guild.id + ':role_access:audit:v1', []);
+  assert.equal(audit[0].action, 'channel_visibility_update');
+  assert.equal(audit[0].channelIds.length, 2);
+});
+
 test('slash command schema and panel builders serialize without invalid Discord components', () => {
   const command = accessCommand.data.toJSON();
   assert.equal(command.name, 'access');
-  const optionNames = command.options.map(option => option.name);
-  assert.deepEqual(optionNames, ['role', 'member']);
-  assert.ok(command.options.every(option => option.required !== true));
-  assert.ok(command.options.every(option => option.type !== 1), 'the command should not expose subcommands');
+  assert.equal(command.options.length, 1);
+  assert.equal(command.options[0].name, 'panel');
+  assert.equal(command.options[0].type, 1, 'the command exposes only /access panel');
 
   const role = makeRole('role-1', 'Operations', PermissionFlagsBits.SendMessages);
   const channel = makeChannel({
@@ -320,9 +471,21 @@ test('slash command schema and panel builders serialize without invalid Discord 
   const sessionToken = createChannelEditorSession({
     guildId: guild.id, actorId: 'actor-1', roleId: role.id, channelIds: [channel.id],
   });
+  const visibilitySession = createRoleChannelAccessSession({
+    guildId: guild.id, actorId: 'actor-1', roleId: role.id, selectedCategoryId: 'uncategorized',
+  });
+  const visibilityPending = {
+    token: 'visibility-preview-token',
+    sessionToken: visibilitySession.token,
+    channelIds: [channel.id],
+    nextValues: { [channel.id]: false },
+    previousValues: { [channel.id]: null },
+  };
 
   const payloads = [
     buildRoleAccessDashboard(guild),
+    buildRoleChannelVisibilityPanel(guild, role, visibilitySession),
+    buildRoleChannelVisibilityPreviewPanel(guild, role, visibilityPending),
     buildRoleAccessRoleDetail(guild, role),
     buildRoleComparePickerPanel(guild, role),
     buildRoleServerPermissionsPanel(role, 0, false),

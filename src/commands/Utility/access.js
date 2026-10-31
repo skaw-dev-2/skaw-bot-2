@@ -3,11 +3,7 @@ import {
   PermissionFlagsBits,
   SlashCommandBuilder,
 } from 'discord.js';
-import {
-  buildMemberAccessPanel,
-  buildRoleAccessDashboard,
-  buildRoleAccessRoleDetail,
-} from '../../services/roleAccessManagerPanelService.js';
+import { buildRoleAccessDashboard } from '../../services/roleAccessManagerPanelService.js';
 
 function assertAccess(interaction) {
   if (!interaction.inGuild()) {
@@ -27,59 +23,36 @@ async function prepareGuild(guild) {
 export default {
   data: new SlashCommandBuilder()
     .setName('access')
-    .setDescription('Inspect and manage SKAW Discord role permissions and channel access.')
+    .setDescription('Manage which channels a Discord role can view.')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles)
-    .addRoleOption(option => option
-      .setName('role')
-      .setDescription('Open the permission profile for a role')
-      .setRequired(false))
-    .addUserOption(option => option
-      .setName('member')
-      .setDescription('Inspect the combined channel access of a member')
-      .setRequired(false)),
+    .addSubcommand(subcommand => subcommand
+      .setName('panel')
+      .setDescription('Open the SKAW role channel visibility manager')),
 
   async execute(interaction) {
     try {
       assertAccess(interaction);
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       await prepareGuild(interaction.guild);
-
-      const role = interaction.options.getRole('role', false);
-      const user = interaction.options.getUser('member', false);
-
-      if (role && user) {
-        throw new Error('Choose either a role or a member, not both.');
+      if (interaction.options.getSubcommand() !== 'panel') {
+        throw new Error('Use /access panel to open the channel access manager.');
       }
-
-      if (user) {
-        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-        const member = await interaction.guild.members.fetch(user.id).catch(() => null);
-        if (!member) throw new Error('That member is not in this server.');
-        return interaction.editReply({
-          ...buildMemberAccessPanel(interaction.guild, member, 0),
-          allowedMentions: { parse: [] },
-        });
-      }
-
-      const payload = role
-        ? buildRoleAccessRoleDetail(interaction.guild, role)
-        : buildRoleAccessDashboard(interaction.guild, 0);
-
-      return interaction.reply({
-        ...payload,
-        flags: MessageFlags.Ephemeral,
+      return interaction.editReply({
+        ...buildRoleAccessDashboard(interaction.guild, 0),
         allowedMentions: { parse: [] },
       });
     } catch (error) {
       const payload = {
-        content: '❌ Role Access Manager: ' +
+        content: '❌ SKAW Access Manager: ' +
           String(error?.message || 'The request could not be completed.').slice(0, 1700),
-        flags: MessageFlags.Ephemeral,
+        embeds: [],
+        components: [],
         allowedMentions: { parse: [] },
       };
       if (interaction.deferred || interaction.replied) {
-        return interaction.followUp(payload).catch(() => null);
+        return interaction.editReply(payload).catch(() => null);
       }
-      return interaction.reply(payload).catch(() => null);
+      return interaction.reply({ ...payload, flags: MessageFlags.Ephemeral }).catch(() => null);
     }
   },
 };

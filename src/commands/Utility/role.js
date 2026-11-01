@@ -15,21 +15,24 @@ function ephemeral(content) {
 export default {
   data: new SlashCommandBuilder()
     .setName('role')
-    .setDescription('Assign an enabled role template to a member')
+    .setDescription('Manage company role assignments')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
-    .addStringOption(option => option
-      .setName('template')
-      .setDescription('The enabled role template to apply')
-      .setRequired(true)
-      .setAutocomplete(true))
-    .addUserOption(option => option
-      .setName('member')
-      .setDescription('Member who will receive the template roles')
-      .setRequired(true))
-    .addRoleOption(option => option
-      .setName('workshop')
-      .setDescription('Optional workshop placement role for a Mechanic')
-      .setRequired(false)),
+    .addSubcommand(subcommand => subcommand
+      .setName('set')
+      .setDescription('Assign an enabled role template to a member')
+      .addStringOption(option => option
+        .setName('template')
+        .setDescription('The enabled role template to apply')
+        .setRequired(true)
+        .setAutocomplete(true))
+      .addUserOption(option => option
+        .setName('user')
+        .setDescription('Member who will receive the template roles')
+        .setRequired(true))
+      .addRoleOption(option => option
+        .setName('workshop')
+        .setDescription('Optional workshop placement role for a Mechanic')
+        .setRequired(false))),
 
   async autocomplete(interaction, client) {
     try {
@@ -79,7 +82,7 @@ export default {
         throw new Error('This template is disabled or has no roles. Enable it in !rolepanel first.');
       }
 
-      const targetUser = interaction.options.getUser('member', true);
+      const targetUser = interaction.options.getUser('user', true);
       const target = await guild.members.fetch(targetUser.id).catch(() => null);
       if (!target) throw new Error('Could not find that member in this server.');
 

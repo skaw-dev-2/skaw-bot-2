@@ -51,6 +51,21 @@ BACKUP_DIR=./database/backups
 
 Do not use the sample/CI key from the GitHub Actions workflow for a real database.
 
+## Connecting from your Windows PC
+
+Railway's private hostname (for example, a host ending in .railway.internal) is intended for services inside the same Railway project. It is not normally reachable directly from your home computer.
+
+For a local backup, use one of these methods:
+
+1. In the old Railway PostgreSQL service, open **Settings → Networking**, enable a **TCP Proxy/Public Access**, then copy the external connection string from the service's DATABASE_PUBLIC_URL variable into your local POSTGRES_URL. Use the TCP proxy host and port supplied by Railway, not the service's ordinary HTTP domain. Railway notes that TCP Proxy traffic may incur network-egress charges. See the [Railway PostgreSQL connection guide](https://docs.railway.com/databases/postgresql) and [TCP Proxy guide](https://docs.railway.com/networking/tcp-proxy).
+2. Alternatively, use the Railway CLI SSH tunnel: run the command shown below, keep that terminal open while the backup runs, and use the local tunnel connection details it prints. See the [railway connect CLI guide](https://docs.railway.com/cli/connect).
+
+~~~powershell
+railway connect Postgres --tunnel-only
+~~~
+
+If the external connection URL does not include sslmode=require, set POSTGRES_SSL=true in your local .env when the database endpoint requires SSL. Do not paste your actual connection URL into chat or commit it.
+
 ## 2. Create an encrypted full backup
 
 Set the **old/source** Railway PostgreSQL connection string in your local .env:

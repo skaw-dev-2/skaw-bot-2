@@ -95,20 +95,18 @@ web_modules/
 .next
 out
 
-# Nuxt.js build / generate output
+# Nuxt.js build output
 .nuxt
 dist
 
 # Gatsby files
 .cache/
-# Comment in the public line in if your project uses Gatsby and not Next.js
+# Comment in the public line in if your project uses Gatsby or not Next.js
 # https:
 # public
 
-# vuepress build output
+# vuepress v2.x temp and generated files
 .vuepress/dist
-
-# vuepress v2.x temp and cache directory
 .temp
 .cache
 
@@ -127,14 +125,14 @@ dist
 # TernJS port file
 .tern-port
 
-# Stores VSCode versions used for testing VSCode extensions
+# Stores VSCode versions used by extensions
 .vscode-test
 
 # yarn v2
 .yarn/cache
 .yarn/unplugged
 .yarn/build-state.yml
-.yarn/install-state.gz
+yarn/install-state.gz
 .pnp.*
 
 # Replit debugger
@@ -144,3 +142,12 @@ dist
 # Database backup artifacts
 backups/
 *.dump
+*.sql
+
+# Explicitly allow only encrypted SKAW database backups in this public repository.
+# The encryption key and all plaintext dumps remain excluded.
+!database/backups/
+database/backups/*
+!database/backups/.gitkeep
+!database/backups/*.dump.enc
+!database/backups/*.dump.enc.manifest.json

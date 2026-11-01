@@ -26,6 +26,7 @@ jobs:
 
     env:
       POSTGRES_URL: postgresql://titanbot:titanbot@localhost:5432/titanbot
+      POSTGRES_VERIFY_URL: postgresql://titanbot:titanbot@localhost:5432/titanbot
       POSTGRES_HOST: localhost
       POSTGRES_PORT: 5432
       POSTGRES_DB: titanbot
@@ -34,7 +35,7 @@ jobs:
       POSTGRES_SSL: "false"
       SCHEMA_VERSION: "1"
       SCHEMA_VERSION_LABEL: "baseline-v1"
-      BACKUP_RETENTION_DAYS: "7"
+      BACKUP_ENCRYPTION_KEY: "ci-only-skaw-backup-key-0123456789abcdef-not-a-production-secret"
 
     steps:
       - name: Checkout
@@ -54,6 +55,18 @@ jobs:
 
       - name: Apply migrations
         run: npm run migrate
+
+      - name: Test backup encryption and tamper detection
+        run: npm run test:backup-crypto
+
+      - name: Create encrypted full database archive
+        run: npm run backup:db
+
+      - name: Verify encrypted archive and required tables
+        run: npm run backup:verify
+
+      - name: Verify database tables and SKAW feature inventory
+        run: npm run restore:verify
 
       - name: Run restore drill
         run: npm run backup:drill

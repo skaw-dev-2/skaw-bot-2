@@ -1,6 +1,8 @@
 name: Restore Drill
 
 on:
+  pull_request:
+    branches: [main]
   schedule:
     - cron: '0 4 * * 1'
   workflow_dispatch:

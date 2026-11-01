@@ -168,10 +168,11 @@ export async function readAndValidateManifest(archivePath, manifestPath, expecte
 
 export async function listArchiveEntries(pgRestorePath, dumpPath) {
   const { spawnSync } = await import('node:child_process');
-  const result = spawnSync(pgRestorePath, ['--list', dumpPath], {
+  const executable = process.platform === 'win32' ? pgRestorePath + '.exe' : pgRestorePath;
+  const result = spawnSync(executable, ['--list', dumpPath], {
     encoding: 'utf8',
     stdio: 'pipe',
-    shell: process.platform === 'win32',
+    shell: false,
     maxBuffer: 16 * 1024 * 1024,
   });
   if (result.error) throw new Error('Could not run pg_restore: ' + result.error.message);

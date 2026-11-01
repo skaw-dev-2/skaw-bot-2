@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
 import { logger } from '../src/utils/logger.js';
+import { buildPostgresClientEnv } from './postgresEnv.js';
 import {
   assertBackupKey,
   encryptArchiveFile,
@@ -36,11 +37,13 @@ function parseArgs(argv) {
   return args;
 }
 
-function runCommand(command, args, label) {
-  const result = spawnSync(command, args, {
+function runCommand(command, args, label, env = process.env) {
+  const executable = process.platform === 'win32' ? command + '.exe' : command;
+  const result = spawnSync(executable, args, {
     encoding: 'utf8',
     stdio: 'pipe',
-    shell: process.platform === 'win32',
+    env,
+    shell: false,
     maxBuffer: 16 * 1024 * 1024,
   });
   if (result.error) throw new Error(label + ' could not start: ' + result.error.message);
@@ -89,14 +92,14 @@ async function run() {
       outputPath,
     });
 
+    const postgresEnv = buildPostgresClientEnv(databaseUrl);
     runCommand('pg_dump', [
       '--format=custom',
       '--no-owner',
       '--no-privileges',
       '--file',
       plainDumpPath,
-      databaseUrl,
-    ], 'PostgreSQL dump');
+    ], 'PostgreSQL dump', postgresEnv);
 
     const archiveListing = await listArchiveEntries('pg_restore', plainDumpPath);
     const missingTables = getMissingBackupTables(archiveListing);

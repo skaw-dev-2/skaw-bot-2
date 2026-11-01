@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { buildPostgresClientEnv } from '../../scripts/postgresEnv.js';
 import {
   assertBackupKey,
   decryptArchiveFile,
@@ -104,4 +105,20 @@ test('archive table inventory detects missing required SKAW tables', () => {
     getMissingBackupTables('TABLE public guilds\nTABLE public temp_data'),
     REQUIRED_BACKUP_TABLES.filter((name) => !['guilds', 'temp_data'].includes(name)),
   );
+});
+
+test('PostgreSQL client environment keeps credentials out of command arguments', () => {
+  const env = buildPostgresClientEnv(
+    'postgresql://backup-user:p%40ss%3Aword@db.example.test:6543/skaw_prod?sslmode=require',
+    { POSTGRES_URL: 'source-url-secret', DATABASE_URL: 'another-secret', POSTGRES_PASSWORD: 'source-password', NODE_ENV: 'production' },
+  );
+  assert.equal(env.PGHOST, 'db.example.test');
+  assert.equal(env.PGPORT, '6543');
+  assert.equal(env.PGDATABASE, 'skaw_prod');
+  assert.equal(env.PGUSER, 'backup-user');
+  assert.equal(env.PGPASSWORD, 'p@ss:word');
+  assert.equal(env.PGSSLMODE, 'require');
+  assert.equal(env.POSTGRES_URL, undefined);
+  assert.equal(env.DATABASE_URL, undefined);
+  assert.equal(env.POSTGRES_PASSWORD, undefined);
 });

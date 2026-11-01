@@ -68,10 +68,10 @@ npm run backup:db
 
 The command creates two files under database/backups/:
 
-- skaw-postgres-<timestamp>.dump.enc — encrypted full PostgreSQL archive (AES-256-GCM; key derived with scrypt).
-- skaw-postgres-<timestamp>.dump.enc.manifest.json — non-secret metadata, including file size, SHA-256, schema version, PostgreSQL client version, and table inventory.
+- skaw-postgres-[timestamp].dump.enc — encrypted full PostgreSQL archive (AES-256-GCM; key derived with scrypt).
+- skaw-postgres-[timestamp].dump.enc.manifest.json — non-secret metadata, including file size, SHA-256, schema version, PostgreSQL client version, and table inventory.
 
-The plaintext dump is created only in a temporary OS directory and removed when the command exits, including on failure. The script checks that pg_restore --list can read the archive and that all required SKAW application tables plus schema_migrations are present before accepting the backup.
+The plaintext dump is created only in a temporary OS directory and removed when the command exits, including on failure. PostgreSQL connection credentials are passed to the client through libpq environment variables rather than being placed in pg_dump/pg_restore command-line arguments. The script checks that pg_restore --list can read the archive and that all required SKAW application tables plus schema_migrations are present before accepting the backup.
 
 The bot can remain online while pg_dump runs; PostgreSQL gives the dump a consistent database snapshot. For the cleanest migration window, avoid intentionally changing critical settings while the backup is running.
 
@@ -119,7 +119,7 @@ Restore into a new, empty database whenever possible:
 npm run restore:db -- --input "database/backups/EXACT_BACKUP_FILENAME.dump.enc" --confirm
 ~~~
 
-The restore script checks the archive manifest and SHA-256, authenticates/decrypts the archive into a temporary OS directory, checks required table definitions again, then runs pg_restore with --exit-on-error and --single-transaction. It does not print the database URL in its logs. The restore operation modifies the target database; double-check that POSTGRES_RESTORE_URL points to the new database before using --confirm.
+The restore script checks the archive manifest and SHA-256, authenticates/decrypts the archive into a temporary OS directory, checks required table definitions again, then runs pg_restore with --exit-on-error and --single-transaction. Connection credentials are supplied through libpq environment variables, not process arguments. It does not print the database URL in its logs. The restore operation modifies the target database; double-check that POSTGRES_RESTORE_URL points to the new database before using --confirm.
 
 The restore script refuses to fall back to POSTGRES_URL and rejects an exact match to the source database endpoint. Legacy plaintext .dump files are rejected by default. Only use --allow-plaintext for a trusted local legacy dump, and keep that file out of GitHub.
 
@@ -148,7 +148,7 @@ Only after verification passes should the new Railway bot service receive the ne
 |---|---|
 | npm run backup:db | Create encrypted full database backup |
 | npm run backup:verify | Verify one encrypted archive and manifest |
-| npm run restore:db -- --input <file> --confirm | Restore to POSTGRES_RESTORE_URL |
+| npm run restore:db -- --input [file] --confirm | Restore to POSTGRES_RESTORE_URL |
 | npm run restore:verify | Inspect tables and SKAW feature key inventory on POSTGRES_VERIFY_URL |
 | npm run backup:drill | Existing isolated PostgreSQL restore drill |
 | npm run test:backup-crypto | Test encryption round-trip, wrong-key rejection, tamper detection, and manifest validation |

@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
 import { logger } from '../src/utils/logger.js';
+import { buildPostgresClientEnv } from './postgresEnv.js';
 import {
   assertBackupKey,
   decryptArchiveFile,
@@ -50,11 +51,13 @@ function sameDatabaseEndpoint(first, second) {
   }
 }
 
-function runCommand(command, args, label) {
-  const result = spawnSync(command, args, {
+function runCommand(command, args, label, env = process.env) {
+  const executable = process.platform === 'win32' ? command + '.exe' : command;
+  const result = spawnSync(executable, args, {
     encoding: 'utf8',
     stdio: 'pipe',
-    shell: process.platform === 'win32',
+    env,
+    shell: false,
     maxBuffer: 16 * 1024 * 1024,
   });
   if (result.error) throw new Error(label + ' could not start: ' + result.error.message);
@@ -122,6 +125,7 @@ async function run() {
       targetDatabaseConfigured: true,
     });
 
+    const targetEnv = buildPostgresClientEnv(targetUrl);
     runCommand('pg_restore', [
       '--clean',
       '--if-exists',
@@ -129,10 +133,8 @@ async function run() {
       '--no-privileges',
       '--exit-on-error',
       '--single-transaction',
-      '--dbname',
-      targetUrl,
       restoreInputPath,
-    ], 'PostgreSQL restore');
+    ], 'PostgreSQL restore', targetEnv);
 
     logger.info('Database restore completed. Run npm run restore:verify with POSTGRES_VERIFY_URL set to this target database before starting the bot.', {
       event: 'restore.completed',
@@ -143,7 +145,7 @@ async function run() {
     await rm(tempDir, { recursive: true, force: true });
   }
 }
-
+ 
 run().catch((error) => {
   logger.error('Database restore command failed', {
     event: 'restore.failed',

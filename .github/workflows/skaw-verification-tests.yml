@@ -14,6 +14,7 @@ on:
       - 'src/interactions/modals/skawVerification.js'
       - 'src/events/guildMemberAdd.js'
       - 'src/tests/skawVerificationService.test.js'
+      - 'src/tests/skawVerificationCommand.test.js'
       - 'package.json'
       - 'package-lock.json'
       - '.github/workflows/skaw-verification-tests.yml'

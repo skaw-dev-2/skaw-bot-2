@@ -5,6 +5,7 @@ import {
   buildICNickname,
   applyUnverifiedRoleOnJoin,
   buildVerificationPanelPayload,
+  handleVerificationButton,
   normalizeICNameKey,
   registerSkawMember,
   validateICNamePart,
@@ -103,6 +104,33 @@ test('new members receive the Unverified role when SKAW verification is enabled'
   assert.equal(result.assigned, true);
   assert.equal(member.roles.cache.has(fixture.unverifiedRole.id), true);
   assert.equal(member.roles.cache.has(fixture.verifiedRole.id), false);
+});
+
+test('buttons on a stale verification panel are rejected privately', async () => {
+  const fixture = createFixture();
+  fixture.store.set('guild:' + fixture.guild.id + ':skaw_verification:config:v1', {
+    enabled: true,
+    verifiedRoleId: fixture.verifiedRole.id,
+    unverifiedRoleId: fixture.unverifiedRole.id,
+    verificationChannelId: '77777777777777777',
+    panelMessageId: '88888888888888888',
+  });
+  let replyPayload = null;
+  const interaction = {
+    inGuild: () => true,
+    guild: fixture.guild,
+    guildId: fixture.guild.id,
+    channelId: '77777777777777777',
+    message: { id: '99999999999999999' },
+    user: { id: '11111111111111111' },
+    async reply(payload) { replyPayload = payload; },
+    async showModal() { throw new Error('A stale panel must not open the registration modal.'); },
+  };
+
+  await handleVerificationButton(interaction, fixture.client, 'register');
+
+  assert.match(replyPayload.content, /sudah tidak aktif/);
+  assert.equal(replyPayload.flags, 64);
 });
 
 test('verification panel exposes unique persistent Register and Guide buttons', () => {

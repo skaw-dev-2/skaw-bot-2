@@ -7,6 +7,7 @@ import { logEvent, EVENT_TYPES } from '../services/loggingService.js';
 import { getServerCounters, updateCounter } from '../services/serverstatsService.js';
 import { setBirthday as dbSetBirthday } from '../utils/database.js';
 import { logger } from '../utils/logger.js';
+import { applyUnverifiedRoleOnJoin } from '../services/skawVerificationService.js';
 
 export default {
   name: Events.GuildMemberAdd,
@@ -15,7 +16,12 @@ export default {
   async execute(member) {
     try {
         const { guild, user } = member;
-        
+
+        // The dedicated SKAW registration flow owns access gating when enabled.
+        // It runs before legacy welcome auto-roles and legacy auto-verify.
+        const skawVerificationJoin = await applyUnverifiedRoleOnJoin(member.client, guild, member);
+        const skawVerificationActive = skawVerificationJoin.configured === true;
+
         const config = await getGuildConfig(member.client, guild.id);
         
         const welcomeConfig = await getWelcomeConfig(member.client, guild.id);
@@ -78,7 +84,7 @@ export default {
             }
         }
         
-        if (welcomeConfig?.roleIds && welcomeConfig.roleIds.length > 0) {
+        if (!skawVerificationActive && welcomeConfig?.roleIds && welcomeConfig.roleIds.length > 0) {
             const delay = welcomeConfig.autoRoleDelay || 0;
             const singleRoleId = welcomeConfig.roleIds[0];
             
@@ -100,7 +106,7 @@ export default {
             }
         }
         
-        if (config?.verification?.enabled || config?.verification?.autoVerify?.enabled) {
+        if (!skawVerificationActive && (config?.verification?.enabled || config?.verification?.autoVerify?.enabled)) {
             await handleVerification(member, guild, config.verification, member.client);
         }
 

@@ -234,6 +234,10 @@ export async function configureSkawVerification(client, guild, input) {
   const { botMember } = await validateSetupRoles(guild, nextConfig);
   const channel = guild.channels.cache.get(channelId) || await guild.channels.fetch(channelId).catch(() => null);
   assertPanelChannelPermissions(channel, botMember);
+  const unverifiedRole = guild.roles.cache.get(unverifiedRoleId);
+  if (!channel.permissionsFor(unverifiedRole)?.has(PermissionFlagsBits.ViewChannel)) {
+    throw new Error('Role Unverified harus memiliki izin View Channel pada channel verifikasi agar member baru dapat membuka panel Register.');
+  }
   if (nextConfig.logChannelId) {
     const logChannel = guild.channels.cache.get(nextConfig.logChannelId) ||
       await guild.channels.fetch(nextConfig.logChannelId).catch(() => null);

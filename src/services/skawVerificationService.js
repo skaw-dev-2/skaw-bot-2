@@ -195,19 +195,54 @@ export async function configureSkawVerification(client, guild, input) {
     throw new Error('Channel verifikasi, role Verified, dan role Unverified wajib ditentukan.');
   }
   const previousConfig = await getSkawVerificationConfig(client, guild.id);
+  const panelTitle = input.panelTitle === undefined
+    ? previousConfig.panelTitle
+    : String(input.panelTitle).trim().slice(0, 256);
+  const panelDescription = input.panelDescription === undefined
+    ? previousConfig.panelDescription
+    : String(input.panelDescription).trim().slice(0, 1000);
+  const guideText = input.guideText === undefined
+    ? previousConfig.guideText
+    : String(input.guideText).trim().slice(0, 4000);
+  let imageUrl = previousConfig.imageUrl;
+  if (input.imageUrl !== undefined) {
+    const candidate = String(input.imageUrl || '').trim();
+    if (!candidate) {
+      imageUrl = null;
+    } else {
+      let parsed;
+      try { parsed = new URL(candidate); } catch { throw new Error('Image URL tidak valid. Gunakan URL HTTPS langsung ke gambar.'); }
+      if (parsed.protocol !== 'https:') throw new Error('Image URL harus menggunakan HTTPS.');
+      imageUrl = candidate;
+    }
+  }
   const nextConfig = {
     ...previousConfig,
     enabled: true,
     verifiedRoleId,
     unverifiedRoleId,
     verificationChannelId: channelId,
-    logChannelId: input.logChannelId ? String(input.logChannelId) : null,
+    logChannelId: input.logChannelId === undefined
+      ? previousConfig.logChannelId
+      : (input.logChannelId ? String(input.logChannelId) : null),
+    panelTitle: panelTitle || DEFAULT_VERIFICATION_CONFIG.panelTitle,
+    panelDescription: panelDescription || DEFAULT_VERIFICATION_CONFIG.panelDescription,
+    guideText: guideText || DEFAULT_VERIFICATION_GUIDE,
+    imageUrl,
   };
   if (previousConfig.verificationChannelId !== channelId) nextConfig.panelMessageId = null;
   const { botMember } = await validateSetupRoles(guild, nextConfig);
   const channel = guild.channels.cache.get(channelId) || await guild.channels.fetch(channelId).catch(() => null);
   assertPanelChannelPermissions(channel, botMember);
-  if (channelId !== nextConfig.verificationChannelId) nextConfig.panelMessageId = null;
+  if (nextConfig.logChannelId) {
+    const logChannel = guild.channels.cache.get(nextConfig.logChannelId) ||
+      await guild.channels.fetch(nextConfig.logChannelId).catch(() => null);
+    if (!isTextChannel(logChannel) || !logChannel.permissionsFor(botMember)?.has([
+      PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks,
+    ])) {
+      throw new Error('Bot membutuhkan View Channel, Send Messages, dan Embed Links di Log Channel.');
+    }
+  }
   if (await client.db.set(CONFIG_KEY(guild.id), nextConfig) === false) {
     throw new Error('Tidak dapat menyimpan konfigurasi verifikasi ke PostgreSQL.');
   }

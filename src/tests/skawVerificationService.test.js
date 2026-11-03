@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { PermissionFlagsBits } from 'discord.js';
 import {
   buildICNickname,
+  applyUnverifiedRoleOnJoin,
   buildVerificationPanelPayload,
   normalizeICNameKey,
   registerSkawMember,
@@ -89,6 +90,19 @@ test('nickname uses underscore and enforces Discord length limit', () => {
 test('IC duplicate key comparison ignores case and Unicode normalization differences', () => {
   assert.equal(normalizeICNameKey('VICENZO', 'ALEJANDRO'), normalizeICNameKey('Vicenzo', 'Alejandro'));
   assert.equal(normalizeICNameKey('Jose\u0301', 'Diaz'), normalizeICNameKey('José', 'Diaz'));
+});
+
+test('new members receive the Unverified role when SKAW verification is enabled', async () => {
+  const fixture = createFixture();
+  const member = fixture.makeMember('11111111111111111');
+  member.roles.cache.delete(fixture.unverifiedRole.id);
+
+  const result = await applyUnverifiedRoleOnJoin(fixture.client, fixture.guild, member);
+
+  assert.equal(result.configured, true);
+  assert.equal(result.assigned, true);
+  assert.equal(member.roles.cache.has(fixture.unverifiedRole.id), true);
+  assert.equal(member.roles.cache.has(fixture.verifiedRole.id), false);
 });
 
 test('verification panel exposes unique persistent Register and Guide buttons', () => {

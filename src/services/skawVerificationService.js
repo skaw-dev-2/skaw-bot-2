@@ -457,6 +457,7 @@ export async function handleVerificationModal(interaction, client) {
   if (!interaction.guild || !interaction.guildId) {
     return interaction.reply({ content: 'Formulir ini hanya dapat digunakan di dalam server.', flags: MessageFlags.Ephemeral });
   }
+  const registrationStartedAt = Date.now();
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   try {
     const member = await interaction.guild.members.fetch(interaction.user.id);
@@ -465,6 +466,7 @@ export async function handleVerificationModal(interaction, client) {
       lastName: interaction.fields.getTextInputValue('last_name'),
     }, { source: 'self-service', actorId: interaction.user.id });
 
+    const durationSeconds = Math.max(0, Math.round((Date.now() - registrationStartedAt) / 1000));
     const embed = new EmbedBuilder()
       .setColor(result.duplicateWarning ? 0xF0B429 : 0x22C55E)
       .setAuthor({ name: 'SKAW GROUP · MEMBER VERIFICATION' })
@@ -474,6 +476,7 @@ export async function handleVerificationModal(interaction, client) {
         '\n\nNama IC\n' + result.record.icName +
         '\n\nDiscord Nickname\n' + result.record.nickname
       )
+      .addFields({ name: 'Registration Duration', value: durationSeconds + ' seconds', inline: true })
       .setFooter({ text: 'RIGHT SOLUTION, GREAT QUALITY' })
       .setTimestamp();
     if (result.duplicateWarning) {

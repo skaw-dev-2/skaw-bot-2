@@ -35,7 +35,11 @@ export default {
       .addRoleOption(option => option.setName('verified-role').setDescription('Role assigned after successful registration').setRequired(true))
       .addRoleOption(option => option.setName('unverified-role').setDescription('Role assigned to new members before registration').setRequired(true))
       .addChannelOption(option => option.setName('channel').setDescription('Channel where the registration panel will be published').addChannelTypes(ChannelType.GuildText).setRequired(true))
-      .addChannelOption(option => option.setName('log-channel').setDescription('Optional staff channel for registration logs').addChannelTypes(ChannelType.GuildText).setRequired(false)))
+      .addChannelOption(option => option.setName('log-channel').setDescription('Optional staff channel for registration logs').addChannelTypes(ChannelType.GuildText).setRequired(false))
+      .addStringOption(option => option.setName('panel-title').setDescription('Registration panel title').setMaxLength(256).setRequired(false))
+      .addStringOption(option => option.setName('panel-description').setDescription('Registration panel description').setMaxLength(1000).setRequired(false))
+      .addStringOption(option => option.setName('guide-text').setDescription('Registration instructions shown in the Guide button').setMaxLength(4000).setRequired(false))
+      .addStringOption(option => option.setName('image-url').setDescription('Optional HTTPS image URL for the panel').setMaxLength(400).setRequired(false)))
     .addSubcommand(sub => sub.setName('publish').setDescription('Publish or update the registration panel'))
     .addSubcommand(sub => sub.setName('status').setDescription('View the current verification configuration'))
     .addSubcommand(sub => sub
@@ -64,7 +68,11 @@ export default {
           verifiedRoleId: interaction.options.getRole('verified-role', true).id,
           unverifiedRoleId: interaction.options.getRole('unverified-role', true).id,
           channelId: interaction.options.getChannel('channel', true).id,
-          logChannelId: interaction.options.getChannel('log-channel')?.id || null,
+          logChannelId: interaction.options.getChannel('log-channel')?.id ?? undefined,
+          panelTitle: interaction.options.getString('panel-title') ?? undefined,
+          panelDescription: interaction.options.getString('panel-description') ?? undefined,
+          guideText: interaction.options.getString('guide-text') ?? undefined,
+          imageUrl: interaction.options.getString('image-url') ?? undefined,
         });
         return interaction.editReply({
           content: [

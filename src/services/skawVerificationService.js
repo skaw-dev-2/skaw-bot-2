@@ -314,6 +314,16 @@ export async function handleVerificationButton(interaction, client, action) {
   if (!config.enabled) {
     return interaction.reply({ content: 'Sistem verifikasi SKAW belum diaktifkan. Hubungi administrator.', flags: MessageFlags.Ephemeral });
   }
+  if (
+    !config.panelMessageId ||
+    String(interaction.message?.id || '') !== String(config.panelMessageId) ||
+    String(interaction.channelId || '') !== String(config.verificationChannelId || '')
+  ) {
+    return interaction.reply({
+      content: 'Panel verifikasi ini sudah tidak aktif. Silakan gunakan panel registrasi terbaru di channel verifikasi.',
+      flags: MessageFlags.Ephemeral,
+    });
+  }
   if (action === 'guide') {
     return interaction.reply({
       embeds: [buildVerificationGuideEmbed(config)],

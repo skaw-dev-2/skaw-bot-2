@@ -194,14 +194,16 @@ export async function configureSkawVerification(client, guild, input) {
   if (!verifiedRoleId || !unverifiedRoleId || !channelId) {
     throw new Error('Channel verifikasi, role Verified, dan role Unverified wajib ditentukan.');
   }
+  const previousConfig = await getSkawVerificationConfig(client, guild.id);
   const nextConfig = {
-    ...(await getSkawVerificationConfig(client, guild.id)),
+    ...previousConfig,
     enabled: true,
     verifiedRoleId,
     unverifiedRoleId,
     verificationChannelId: channelId,
     logChannelId: input.logChannelId ? String(input.logChannelId) : null,
   };
+  if (previousConfig.verificationChannelId !== channelId) nextConfig.panelMessageId = null;
   const { botMember } = await validateSetupRoles(guild, nextConfig);
   const channel = guild.channels.cache.get(channelId) || await guild.channels.fetch(channelId).catch(() => null);
   assertPanelChannelPermissions(channel, botMember);
@@ -473,10 +475,12 @@ export async function publishSkawVerificationPanel(client, guild) {
 }
 
 export async function applyUnverifiedRoleOnJoin(client, guild, member) {
+  let configured = false;
   try {
     requirePersistentDatabase(client);
     const config = await getSkawVerificationConfig(client, guild.id);
     if (!config.enabled) return { configured: false };
+    configured = true;
     if (member.roles.cache.has(String(config.verifiedRoleId))) return { configured: true, alreadyVerified: true };
     const unverifiedRole = guild.roles.cache.get(String(config.unverifiedRoleId)) ||
       await guild.roles.fetch(String(config.unverifiedRoleId)).catch(() => null);
@@ -489,9 +493,9 @@ export async function applyUnverifiedRoleOnJoin(client, guild, member) {
     return { configured: true, assigned: true, roleId: unverifiedRole.id };
   } catch (error) {
     logger.error('Could not assign SKAW Unverified role on member join', {
-      guildId: guild.id, userId: member.id, error: error?.message || error,
+      guildId: guild.id, userId: member.id, configured, error: error?.message || error,
     });
-    return { configured: false, error: error?.message || String(error) };
+    return { configured, assigned: false, error: error?.message || String(error) };
   }
 }
 

@@ -594,7 +594,7 @@ export async function handleVerificationModal(interaction, client) {
 export async function publishSkawVerificationPanel(client, guild) {
   requirePersistentDatabase(client);
   const config = await getSkawVerificationConfig(client, guild.id);
-  if (!config.enabled) throw new Error('Jalankan /verification setup terlebih dahulu.');
+  if (!config.enabled) throw new Error('Aktifkan sistem melalui /verification panel sebelum menerbitkan panel.');
   const { channel } = await validateSkawVerificationSetup(guild, config);
 
   let message = config.panelMessageId ? await channel.messages.fetch(config.panelMessageId).catch(() => null) : null;

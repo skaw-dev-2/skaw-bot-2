@@ -5,6 +5,7 @@ import {
   buildICNickname,
   applyUnverifiedRoleOnJoin,
   buildVerificationPanelPayload,
+  publishSkawVerificationPanel,
   handleVerificationButton,
   normalizeICNameKey,
   registerSkawMember,
@@ -277,3 +278,48 @@ test('failed persistent write rolls nickname and role changes back', async () =>
   assert.equal(member.roles.cache.has(fixture.verifiedRole.id), false);
   assert.equal(member.roles.cache.has(fixture.unverifiedRole.id), true);
 });
+
+test('publish recreates a deleted panel instead of retaining its stale message ID', async () => {
+  const fixture = createFixture();
+  const channelId = '77777777777777777';
+  const oldMessageId = '88888888888888888';
+  const newMessageId = '99999999999999998';
+  const configKey = 'guild:' + fixture.guild.id + ':skaw_verification:config:v1';
+  fixture.store.set(configKey, {
+    enabled: true,
+    verifiedRoleId: fixture.verifiedRole.id,
+    verifiedRoleIds: [fixture.verifiedRole.id],
+    unverifiedRoleId: fixture.unverifiedRole.id,
+    verificationChannelId: channelId,
+    panelMessageId: oldMessageId,
+    logChannelId: null,
+  });
+
+  let requestedFetch = null;
+  let sentPayload = null;
+  const channel = {
+    id: channelId,
+    isTextBased: () => true,
+    isDMBased: () => false,
+    permissionsFor: () => ({ has: () => true }),
+    messages: {
+      async fetch(options) {
+        requestedFetch = options;
+        throw Object.assign(new Error('Unknown Message'), { code: 10008 });
+      },
+    },
+    async send(payload) {
+      sentPayload = payload;
+      return { id: newMessageId };
+    },
+  };
+  fixture.guild.channels.cache.set(channelId, channel);
+
+  const result = await publishSkawVerificationPanel(fixture.client, fixture.guild);
+
+  assert.deepEqual(requestedFetch, { message: oldMessageId, force: true });
+  assert.ok(sentPayload);
+  assert.equal(result.message.id, newMessageId);
+  assert.equal(fixture.store.get(configKey).panelMessageId, newMessageId);
+});
+

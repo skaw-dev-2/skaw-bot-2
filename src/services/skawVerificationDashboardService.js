@@ -3,6 +3,7 @@ import {
   EmbedBuilder, MessageFlags, ModalBuilder, PermissionFlagsBits, RoleSelectMenuBuilder, TextInputBuilder,
   TextInputStyle, UserSelectMenuBuilder,
 } from 'discord.js';
+import { logger } from '../utils/logger.js';
 import {
   buildVerificationLogsEmbed, buildVerificationPanelPayload, getConfiguredVerifiedRoleIds,
   getSkawVerificationConfig, getSkawVerificationLogs, publishSkawVerificationPanel,
@@ -50,7 +51,7 @@ function buildOverviewEmbed(guild, config) {
     .setDescription('Manage the member registration system from this private control center.')
     .addFields(
       { name: 'System Status', value: config.enabled ? '🟢 Enabled' : '🟠 Disabled', inline: true },
-      { name: 'Panel Status', value: config.panelMessageId ? 'Published' : 'Not published', inline: true },
+      { name: 'Panel Status', value: config.panelStatusLabel || (config.panelMessageId ? 'Published' : 'Not published'), inline: true },
       { name: 'Verification Channel', value: config.verificationChannelId ? '<#' + config.verificationChannelId + '>' : 'Belum diatur', inline: true },
       { name: 'Unverified Role', value: config.unverifiedRoleId ? roleNames(guild, [config.unverifiedRoleId]) : 'Belum diatur', inline: true },
       { name: 'Reward Roles', value: roleNames(guild, getConfiguredVerifiedRoleIds(config)), inline: true },
@@ -205,8 +206,56 @@ function validateHttpsUrl(value, label) {
   return normalized;
 }
 
+export async function refreshVerificationPanelMessageStatus(client, guild, config) {
+  if (!config.panelMessageId) return { ...config, panelStatusLabel: 'Not published' };
+
+  const channelId = String(config.verificationChannelId || '');
+  if (!channelId) return { ...config, panelStatusLabel: 'Unable to verify' };
+
+  let channel = guild.channels.cache.get(channelId);
+  if (!channel) {
+    try {
+      channel = await guild.channels.fetch(channelId);
+    } catch (error) {
+      logger.warn('Could not resolve SKAW verification channel while refreshing panel status', {
+        guildId: guild.id, channelId, error,
+      });
+      return { ...config, panelStatusLabel: 'Unable to verify' };
+    }
+  }
+
+  if (!channel?.messages?.fetch) {
+    return { ...config, panelStatusLabel: 'Unable to verify' };
+  }
+
+  try {
+    await channel.messages.fetch({ message: String(config.panelMessageId), force: true });
+    return { ...config, panelStatusLabel: 'Published' };
+  } catch (error) {
+    if (Number(error?.code) === 10008) {
+      try {
+        await updateSkawVerificationConfig(client, guild.id, { panelMessageId: null });
+        return { ...config, panelMessageId: null, panelStatusLabel: 'Not published' };
+      } catch (saveError) {
+        logger.error('Deleted SKAW verification panel was detected, but its stale message ID could not be cleared', {
+          guildId: guild.id, channelId, panelMessageId: config.panelMessageId, error: saveError,
+        });
+        return { ...config, panelStatusLabel: 'Unable to verify' };
+      }
+    }
+
+    logger.warn('Could not verify whether the SKAW verification panel still exists', {
+      guildId: guild.id, channelId, panelMessageId: config.panelMessageId, error,
+    });
+    return { ...config, panelStatusLabel: 'Unable to verify' };
+  }
+}
+
 async function renderPage(interaction, client, page, selectedMemberId = null, content = null) {
-  const config = await getSkawVerificationConfig(client, interaction.guildId);
+  let config = await getSkawVerificationConfig(client, interaction.guildId);
+  if (page === 'overview') {
+    config = await refreshVerificationPanelMessageStatus(client, interaction.guild, config);
+  }
   const payload = buildVerificationDashboardPayload({
     guild: interaction.guild, ownerId: interaction.user.id, config, page, selectedMemberId, content,
   });
@@ -224,9 +273,8 @@ export async function openVerificationDashboard(interaction, client) {
   if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
     return interaction.reply({ content: 'Akses ditolak. Permission Manage Server diperlukan.', flags: MessageFlags.Ephemeral });
   }
-  const config = await getSkawVerificationConfig(client, interaction.guildId);
   return interaction.reply({
-    ...buildVerificationDashboardPayload({ guild: interaction.guild, ownerId: interaction.user.id, config }),
+    ...await renderPage(interaction, client, 'overview'),
     flags: MessageFlags.Ephemeral,
   });
 }
@@ -284,9 +332,12 @@ export async function handleSkawVerificationDashboardInteraction(interaction, cl
     }
     if (action === 'page_preview' || action === 'preview') return interaction.update(await renderPage(interaction, client, 'preview'));
     if (action === 'publish') {
+      // Acknowledge the component before database reads, channel validation, or message operations.
+      await interaction.deferUpdate();
       const result = await publishSkawVerificationPanel(client, interaction.guild);
-      return interaction.update(await renderPage(interaction, client, 'overview', null,
-        '✅ Verification panel published or updated in ' + result.channel.toString() + '.'));
+      const payload = await renderPage(interaction, client, 'overview', null,
+        '✅ Verification panel published or updated in ' + result.channel.toString() + '.');
+      return interaction.editReply(payload);
     }
     if (action.startsWith('manual_')) return interaction.showModal(buildManualRegistrationModal(ownerId, action.slice(7)));
     if (action.startsWith('reset_')) {
@@ -306,9 +357,39 @@ export async function handleSkawVerificationDashboardInteraction(interaction, cl
     }
     return interaction.reply({ content: 'Aksi dashboard tidak dikenal. Jalankan kembali /verification panel.', flags: MessageFlags.Ephemeral });
   } catch (error) {
-    const message = '❌ SKAW Verification: ' + String(error?.message || 'Permintaan tidak dapat diproses.').slice(0, 1500);
-    if (interaction.isModalSubmit?.()) return interaction.reply({ content: message, flags: MessageFlags.Ephemeral }).catch(() => null);
-    return interaction.update(await renderPage(interaction, client, 'overview', null, message)).catch(() => null);
+    logger.error('SKAW Verification dashboard interaction failed', {
+      action,
+      guildId: interaction.guildId,
+      userId: interaction.user?.id,
+      customId: interaction.customId,
+      error,
+    });
+    const nestedErrors = Array.isArray(error?.errors)
+      ? error.errors.map(item => item?.message || String(item)).filter(Boolean)
+      : [];
+    const errorDetails = [error?.message || 'Permintaan tidak dapat diproses.', ...nestedErrors];
+    const message = '❌ SKAW Verification: ' + [...new Set(errorDetails)].join(' | ').slice(0, 1500);
+    if (interaction.isModalSubmit?.()) {
+      return interaction.reply({ content: message, flags: MessageFlags.Ephemeral }).catch(() => null);
+    }
+
+    try {
+      const payload = await renderPage(interaction, client, 'overview', null, message);
+      if (interaction.deferred || interaction.replied) return interaction.editReply(payload);
+      return interaction.update(payload);
+    } catch (renderError) {
+      logger.error('Could not render SKAW Verification dashboard after an interaction failure', {
+        guildId: interaction.guildId, userId: interaction.user?.id, customId: interaction.customId,
+        error: renderError,
+      });
+      const fallback = {
+        content: message + '\nDashboard tidak dapat dimuat ulang. Jalankan kembali /verification panel.',
+        embeds: [],
+        components: [],
+      };
+      if (interaction.deferred || interaction.replied) return interaction.editReply(fallback).catch(() => null);
+      return interaction.update(fallback).catch(() => null);
+    }
   }
 }
 

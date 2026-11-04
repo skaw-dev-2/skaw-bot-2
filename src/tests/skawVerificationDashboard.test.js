@@ -43,6 +43,21 @@ test('dashboard navigation exposes every agreed management page and publish acti
   assert.ok(ids.includes('skaw_vf_admin:99999999999999999:publish'));
 });
 
+
+test('general settings keeps each channel select menu in its own action row', () => {
+  const payload = buildVerificationDashboardPayload({
+    guild: makeGuild(), ownerId: '99999999999999999', config, page: 'general',
+  });
+  const rows = payload.components.map(row => row.toJSON().components);
+  assert.equal(rows.length, 5);
+  for (const row of rows) {
+    const hasSelect = row.some(component => component.custom_id.endsWith(':select_verification_channel')
+      || component.custom_id.endsWith(':select_log_channel'));
+    if (hasSelect) assert.equal(row.length, 1);
+  }
+  assert.ok(rows.some(row => row.some(component => component.custom_id.endsWith(':toggle_system'))));
+});
+
 test('role management dashboard exposes separate Unverified and multi-role selectors', () => {
   const payload = buildVerificationDashboardPayload({
     guild: makeGuild(), ownerId: '99999999999999999', config, page: 'roles',

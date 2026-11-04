@@ -23,6 +23,7 @@ import { handleEmployeeLogsComponent } from '../services/employeeLogsInteraction
 import { handleAutoResponderInteraction } from '../services/autoResponderPanelService.js';
 import { handleRoleTemplateInteraction } from '../services/roleTemplatePanelService.js';
 import { handleMessageManagerInteraction, isMessageManagerInteraction } from '../commands/Utility/message.js';
+import { isSkawVerificationDashboardInteraction, handleSkawVerificationDashboardRoute } from '../services/skawVerificationDashboardService.js';
 
 const COMMAND_ERROR_SUBTYPES = {
   warn: 'warn_failed',
@@ -99,6 +100,13 @@ export default {
           || interaction.isStringSelectMenu?.() || interaction.isChannelSelectMenu?.() || interaction.isModalSubmit?.()
         )) {
           await handleEmployeeLogsComponent(interaction);
+          return;
+        }
+
+        // SKAW Verification Dashboard uses role, channel and user select menus as well as modals.
+        // Route it before generic component handlers so dashboard controls work after bot restarts.
+        if (isSkawVerificationDashboardInteraction(interaction)) {
+          await handleSkawVerificationDashboardRoute(interaction, client);
           return;
         }
 

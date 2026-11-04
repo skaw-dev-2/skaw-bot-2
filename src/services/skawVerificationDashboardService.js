@@ -115,9 +115,9 @@ export function buildVerificationDashboardPayload({ guild, ownerId, config, page
     const logChannel = new ChannelSelectMenuBuilder().setCustomId(componentId(ownerId, 'select_log_channel'))
       .setPlaceholder('Pilih channel log member (opsional)').setChannelTypes(ChannelType.GuildText).setMinValues(1).setMaxValues(1);
     if (config.logChannelId) logChannel.setDefaultChannels(config.logChannelId);
+    payload.components.push(new ActionRowBuilder().addComponents(logChannel));
     payload.components.push(new ActionRowBuilder().addComponents(
-      logChannel, button(ownerId, 'clear_log_channel', 'Clear Log', ButtonStyle.Danger)));
-    payload.components.push(new ActionRowBuilder().addComponents(
+      button(ownerId, 'clear_log_channel', 'Clear Log', ButtonStyle.Danger),
       button(ownerId, 'toggle_system', config.enabled ? 'Disable Verification' : 'Enable Verification',
         config.enabled ? ButtonStyle.Danger : ButtonStyle.Success)));
   }

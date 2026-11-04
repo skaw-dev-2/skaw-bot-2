@@ -219,7 +219,7 @@ export async function openVerificationDashboard(interaction, client) {
   if (!interaction.inGuild?.() || !interaction.guild) {
     return interaction.reply({ content: 'Dashboard Verification hanya dapat digunakan di dalam server.', flags: MessageFlags.Ephemeral });
   }
-  if (!interaction.memberPermissions?.has('ManageGuild')) {
+  if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
     return interaction.reply({ content: 'Akses ditolak. Permission Manage Server diperlukan.', flags: MessageFlags.Ephemeral });
   }
   const config = await getSkawVerificationConfig(client, interaction.guildId);
@@ -234,7 +234,7 @@ export async function handleSkawVerificationDashboardInteraction(interaction, cl
   if (!ownerId || ownerId !== String(interaction.user.id)) {
     return interaction.reply({ content: 'Dashboard ini hanya dapat digunakan oleh administrator yang membukanya.', flags: MessageFlags.Ephemeral });
   }
-  if (!interaction.guild || !interaction.guildId || !interaction.memberPermissions?.has('ManageGuild')) {
+  if (!interaction.guild || !interaction.guildId || !interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
     return interaction.reply({ content: 'Akses dashboard ditolak. Permission Manage Server diperlukan.', flags: MessageFlags.Ephemeral });
   }
   try {
@@ -313,7 +313,7 @@ export async function handleSkawVerificationDashboardInteraction(interaction, cl
 export async function handleSkawVerificationDashboardModal(interaction, client) {
   const [, ownerId, action] = String(interaction.customId || '').split(':');
   if (!ownerId || ownerId !== String(interaction.user.id) || !interaction.guild ||
-      !interaction.memberPermissions?.has('ManageGuild')) {
+      !interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
     return interaction.reply({ content: 'Akses modal ditolak.', flags: MessageFlags.Ephemeral });
   }
   try {

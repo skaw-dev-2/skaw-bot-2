@@ -202,12 +202,33 @@ async function validateSetupRoles(guild, config) {
   if (!verifiedRoleIds.length) throw new Error('Pilih minimal satu role yang diberikan setelah verifikasi.');
   const verifiedRoles = verifiedRoleIds.map(id => guild.roles.cache.get(String(id)));
   const unverifiedRole = guild.roles.cache.get(String(config.unverifiedRoleId));
-  verifiedRoles.forEach((role, index) => assertRoleAssignable(guild, botMember, role, 'Verified #' + (index + 1)));
+  verifiedRoles.forEach((role, index) => assertRoleAssignable(guild, botMember, role, 'Reward #' + (index + 1)));
   assertRoleAssignable(guild, botMember, unverifiedRole, 'Unverified');
   if (verifiedRoleIds.includes(String(unverifiedRole.id))) {
     throw new Error('Role Unverified tidak boleh menjadi salah satu reward role.');
   }
   return { botMember, verifiedRoles, verifiedRole: verifiedRoles[0], unverifiedRole };
+}
+
+export async function validateSkawVerificationSetup(guild, config) {
+  const roles = await validateSetupRoles(guild, config);
+  if (!config.verificationChannelId) throw new Error('Pilih channel verifikasi terlebih dahulu.');
+  const channel = guild.channels.cache.get(String(config.verificationChannelId)) ||
+    await guild.channels.fetch(String(config.verificationChannelId)).catch(() => null);
+  assertPanelChannelPermissions(channel, roles.botMember);
+  if (!channel.permissionsFor(roles.unverifiedRole)?.has(PermissionFlagsBits.ViewChannel)) {
+    throw new Error('Role Unverified harus dapat melihat channel verifikasi.');
+  }
+  if (config.logChannelId) {
+    const logChannel = guild.channels.cache.get(String(config.logChannelId)) ||
+      await guild.channels.fetch(String(config.logChannelId)).catch(() => null);
+    if (!isTextChannel(logChannel) || !logChannel.permissionsFor(roles.botMember)?.has([
+      PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks,
+    ])) {
+      throw new Error('Bot membutuhkan View Channel, Send Messages, dan Embed Links di Log Channel.');
+    }
+  }
+  return { ...roles, channel };
 }
 
 function assertPanelChannelPermissions(channel, botMember) {
@@ -564,10 +585,7 @@ export async function publishSkawVerificationPanel(client, guild) {
   requirePersistentDatabase(client);
   const config = await getSkawVerificationConfig(client, guild.id);
   if (!config.enabled) throw new Error('Jalankan /verification setup terlebih dahulu.');
-  const { botMember } = await validateSetupRoles(guild, config);
-  const channel = guild.channels.cache.get(config.verificationChannelId) ||
-    await guild.channels.fetch(config.verificationChannelId).catch(() => null);
-  assertPanelChannelPermissions(channel, botMember);
+  const { channel } = await validateSkawVerificationSetup(guild, config);
 
   let message = config.panelMessageId ? await channel.messages.fetch(config.panelMessageId).catch(() => null) : null;
   const payload = buildVerificationPanelPayload(config);

@@ -45,6 +45,45 @@ function roleNames(guild, ids) {
   return ids.map(id => guild.roles.cache.get(String(id))?.name || 'Missing role').join(', ') || 'Belum diatur';
 }
 
+function serializeErrorDetail(value, seen = new WeakSet(), depth = 0) {
+  if (value === null || value === undefined) return value ?? null;
+  if (typeof value !== 'object' && typeof value !== 'function') return value;
+  if (depth > 6) return '[Maximum error detail depth reached]';
+  if (seen.has(value)) return '[Circular]';
+  seen.add(value);
+
+  if (value instanceof Error) {
+    const details = {
+      name: value.name || value.constructor?.name || 'Error',
+      message: value.message || String(value),
+      stack: value.stack || null,
+    };
+    for (const key of Object.getOwnPropertyNames(value)) {
+      if (key === 'name' || key === 'message' || key === 'stack') continue;
+      try {
+        details[key] = serializeErrorDetail(value[key], seen, depth + 1);
+      } catch (serializationError) {
+        details[key] = '[Unable to serialize: ' + String(serializationError?.message || serializationError) + ']';
+      }
+    }
+    return details;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(item => serializeErrorDetail(item, seen, depth + 1));
+  }
+
+  const details = {};
+  for (const key of Object.getOwnPropertyNames(value)) {
+    try {
+      details[key] = serializeErrorDetail(value[key], seen, depth + 1);
+    } catch (serializationError) {
+      details[key] = '[Unable to serialize: ' + String(serializationError?.message || serializationError) + ']';
+    }
+  }
+  return Object.keys(details).length ? details : String(value);
+}
+
 function buildOverviewEmbed(guild, config) {
   return new EmbedBuilder().setColor(config.enabled ? 0x22C55E : 0xD97706)
     .setAuthor({ name: 'SKAW GROUP · ADMINISTRATION' }).setTitle('Verification Manager')
@@ -296,8 +335,12 @@ export async function handleSkawVerificationDashboardInteraction(interaction, cl
   if (!interaction.guild || !interaction.guildId || !interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
     return interaction.reply({ content: 'Akses dashboard ditolak. Permission Manage Server diperlukan.', flags: MessageFlags.Ephemeral });
   }
+  let failureStage = 'route';
   try {
-    if (action.startsWith('page_')) return interaction.update(await renderPage(interaction, client, action.slice(5)));
+    if (action.startsWith('page_')) {
+      failureStage = 'render page ' + action.slice(5);
+      return interaction.update(await renderPage(interaction, client, action.slice(5)));
+    }
     if (action === 'select_verification_channel') {
       await updateSkawVerificationConfig(client, interaction.guildId, { verificationChannelId: interaction.values[0] });
       return interaction.update(await renderPage(interaction, client, 'general', null, '✅ Verification channel updated.'));
@@ -327,10 +370,16 @@ export async function handleSkawVerificationDashboardInteraction(interaction, cl
     }
     if (action === 'select_member') return interaction.update(await renderPage(interaction, client, 'members', interaction.values[0]));
     if (action === 'toggle_system') {
+      failureStage = 'toggle:read configuration';
       const config = await getSkawVerificationConfig(client, interaction.guildId);
       const enabled = !config.enabled;
-      if (enabled) await validateSkawVerificationSetup(interaction.guild, config);
+      if (enabled) {
+        failureStage = 'toggle:validate roles and channel permissions';
+        await validateSkawVerificationSetup(interaction.guild, config);
+      }
+      failureStage = 'toggle:save configuration';
       await updateSkawVerificationConfig(client, interaction.guildId, { enabled });
+      failureStage = 'toggle:render dashboard';
       return interaction.update(await renderPage(interaction, client, 'general', null, enabled ? '✅ Verification system enabled.' : '⚠️ Verification system disabled.'));
     }
     if (action === 'edit_panel' || action === 'edit_footer' || action === 'edit_guide') {
@@ -342,10 +391,14 @@ export async function handleSkawVerificationDashboardInteraction(interaction, cl
     if (action === 'page_preview' || action === 'preview') return interaction.update(await renderPage(interaction, client, 'preview'));
     if (action === 'publish') {
       // Acknowledge the component before database reads, channel validation, or message operations.
+      failureStage = 'publish:acknowledge interaction';
       await interaction.deferUpdate();
+      failureStage = 'publish:validate configuration and send panel';
       const result = await publishSkawVerificationPanel(client, interaction.guild);
+      failureStage = 'publish:refresh dashboard';
       const payload = await renderPage(interaction, client, 'overview', null,
         '✅ Verification panel published or updated in ' + result.channel.toString() + '.');
+      failureStage = 'publish:edit dashboard response';
       return interaction.editReply(payload);
     }
     if (action.startsWith('manual_')) return interaction.showModal(buildManualRegistrationModal(ownerId, action.slice(7)));
@@ -368,10 +421,11 @@ export async function handleSkawVerificationDashboardInteraction(interaction, cl
   } catch (error) {
     logger.error('SKAW Verification dashboard interaction failed', {
       action,
+      failureStage,
       guildId: interaction.guildId,
       userId: interaction.user?.id,
       customId: interaction.customId,
-      error,
+      error: serializeErrorDetail(error),
     });
     const nestedErrors = Array.isArray(error?.errors)
       ? error.errors.map(item => item?.message || String(item)).filter(Boolean)

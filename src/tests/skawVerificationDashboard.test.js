@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildVerificationDashboardPayload } from '../services/skawVerificationDashboardService.js';
+import {
+  buildVerificationDashboardPayload,
+  refreshVerificationPanelMessageStatus,
+} from '../services/skawVerificationDashboardService.js';
 
 function makeGuild() {
   const roles = new Map([
@@ -93,3 +96,65 @@ test('panel designer preview is generated as a single public-style embed', () =>
   assert.equal(embed.image.url, 'https://example.com/banner.png');
   assert.equal(embed.footer.text, 'RIGHT SOLUTION, GREAT QUALITY');
 });
+
+test('overview status clears a deleted panel message from PostgreSQL', async () => {
+  const guildId = '44444444444444444';
+  const channelId = '44444444444444444';
+  const configKey = 'guild:' + guildId + ':skaw_verification:config:v1';
+  const store = new Map([[configKey, { ...config, verificationChannelId: channelId }]]);
+  const db = {
+    isDegraded: () => false,
+    async get(key, fallback = null) { return store.has(key) ? store.get(key) : fallback; },
+    async set(key, value) { store.set(key, value); return true; },
+  };
+  const unknownMessage = Object.assign(new Error('Unknown Message'), { code: 10008 });
+  let fetchOptions = null;
+  const channel = {
+    messages: {
+      async fetch(options) {
+        fetchOptions = options;
+        throw unknownMessage;
+      },
+    },
+  };
+  const guild = {
+    id: guildId,
+    channels: { cache: new Map([[channelId, channel]]) },
+  };
+
+  const refreshed = await refreshVerificationPanelMessageStatus({ db }, guild, {
+    ...config, verificationChannelId: channelId,
+  });
+
+  assert.deepEqual(fetchOptions, { message: config.panelMessageId, force: true });
+  assert.equal(refreshed.panelMessageId, null);
+  assert.equal(refreshed.panelStatusLabel, 'Not published');
+  assert.equal(store.get(configKey).panelMessageId, null);
+});
+
+test('overview keeps the stored panel ID when Discord cannot verify the message', async () => {
+  const guildId = '44444444444444444';
+  const channelId = '44444444444444444';
+  const configKey = 'guild:' + guildId + ':skaw_verification:config:v1';
+  const store = new Map([[configKey, { ...config, verificationChannelId: channelId }]]);
+  const db = {
+    isDegraded: () => false,
+    async get(key, fallback = null) { return store.has(key) ? store.get(key) : fallback; },
+    async set(key, value) { store.set(key, value); return true; },
+  };
+  const permissionError = Object.assign(new Error('Missing Access'), { code: 50001 });
+  const channel = { messages: { async fetch() { throw permissionError; } } };
+  const guild = {
+    id: guildId,
+    channels: { cache: new Map([[channelId, channel]]) },
+  };
+
+  const refreshed = await refreshVerificationPanelMessageStatus({ db }, guild, {
+    ...config, verificationChannelId: channelId,
+  });
+
+  assert.equal(refreshed.panelMessageId, config.panelMessageId);
+  assert.equal(refreshed.panelStatusLabel, 'Unable to verify');
+  assert.equal(store.get(configKey).panelMessageId, config.panelMessageId);
+});
+

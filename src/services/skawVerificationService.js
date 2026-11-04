@@ -336,12 +336,12 @@ export function buildVerificationPanelPayload(config) {
       '3. Submit formulir untuk menyelesaikan verifikasi.',
       '',
       'Pastikan data yang kamu masukkan benar. Nickname Discord akan diperbarui otomatis.',
-    ].join('\\n'))
+    ].join('\n'))
     .setFooter({
       text: config.footerText || DEFAULT_VERIFICATION_CONFIG.footerText,
       ...(config.footerIconUrl ? { iconURL: config.footerIconUrl } : {}),
     });
-  if (config.imageUrl && /^https:\/\/\\S+$/i.test(config.imageUrl)) embed.setImage(config.imageUrl);
+  if (config.imageUrl && /^https:\/\/\S+$/i.test(config.imageUrl)) embed.setImage(config.imageUrl);
   return {
     embeds: [embed],
     components: [

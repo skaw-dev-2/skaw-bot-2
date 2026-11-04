@@ -597,7 +597,23 @@ export async function publishSkawVerificationPanel(client, guild) {
   if (!config.enabled) throw new Error('Aktifkan sistem melalui /verification panel sebelum menerbitkan panel.');
   const { channel } = await validateSkawVerificationSetup(guild, config);
 
-  let message = config.panelMessageId ? await channel.messages.fetch(config.panelMessageId).catch(() => null) : null;
+  let message = null;
+  if (config.panelMessageId) {
+    try {
+      // Force a fresh API lookup; the default fetch can return a deleted message from cache.
+      message = await channel.messages.fetch({
+        message: String(config.panelMessageId),
+        force: true,
+      });
+    } catch (error) {
+      if (Number(error?.code) !== 10008) throw error;
+
+      // A deleted panel must not remain marked as published if the replacement send fails.
+      await updateSkawVerificationConfig(client, guild.id, { panelMessageId: null });
+      config.panelMessageId = null;
+    }
+  }
+
   const payload = buildVerificationPanelPayload(config);
   if (message) await message.edit(payload);
   else message = await channel.send(payload);

@@ -1,28 +1,5 @@
-import {
-  ChannelType,
-  MessageFlags,
-  PermissionFlagsBits,
-  SlashCommandBuilder,
-} from 'discord.js';
-import {
-  buildVerificationLogsEmbed,
-  buildVerificationStatusEmbed,
-  configureSkawVerification,
-  getSkawVerificationConfig,
-  getSkawVerificationLogs,
-  publishSkawVerificationPanel,
-  registerSkawMember,
-  resetSkawVerification,
-} from '../../services/skawVerificationService.js';
-
-function assertAdministrator(interaction) {
-  if (!interaction.inGuild?.() || !interaction.guild) {
-    throw new Error('Command ini hanya dapat digunakan di dalam server.');
-  }
-  if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
-    throw new Error('Akses ditolak. Permission Manage Server diperlukan.');
-  }
-}
+import { MessageFlags, PermissionFlagsBits, SlashCommandBuilder } from 'discord.js';
+import { openVerificationDashboard } from '../../services/skawVerificationDashboardService.js';
 
 export default {
   data: new SlashCommandBuilder()
@@ -30,116 +7,27 @@ export default {
     .setDescription('Manage SKAW Group member verification')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
     .addSubcommand(sub => sub
-      .setName('setup')
-      .setDescription('Configure the SKAW registration system')
-      .addRoleOption(option => option.setName('verified-role').setDescription('Role assigned after successful registration').setRequired(true))
-      .addRoleOption(option => option.setName('unverified-role').setDescription('Role assigned to new members before registration').setRequired(true))
-      .addChannelOption(option => option.setName('channel').setDescription('Channel where the registration panel will be published').addChannelTypes(ChannelType.GuildText).setRequired(true))
-      .addChannelOption(option => option.setName('log-channel').setDescription('Optional staff channel for registration logs').addChannelTypes(ChannelType.GuildText).setRequired(false))
-      .addStringOption(option => option.setName('panel-title').setDescription('Registration panel title').setMaxLength(256).setRequired(false))
-      .addStringOption(option => option.setName('panel-description').setDescription('Registration panel description').setMaxLength(1000).setRequired(false))
-      .addStringOption(option => option.setName('guide-text').setDescription('Registration instructions shown in the Guide button').setMaxLength(4000).setRequired(false))
-      .addStringOption(option => option.setName('image-url').setDescription('Optional HTTPS image URL for the panel').setMaxLength(400).setRequired(false)))
-    .addSubcommand(sub => sub.setName('publish').setDescription('Publish or update the registration panel'))
-    .addSubcommand(sub => sub.setName('status').setDescription('View the current verification configuration'))
-    .addSubcommand(sub => sub
-      .setName('logs')
-      .setDescription('View recent verification activity')
-      .addIntegerOption(option => option.setName('limit').setDescription('Number of recent activities to display').setMinValue(1).setMaxValue(15).setRequired(false)))
-    .addSubcommand(sub => sub
-      .setName('manual')
-      .setDescription('Register a member manually as an administrator')
-      .addUserOption(option => option.setName('member').setDescription('Member to register').setRequired(true))
-      .addStringOption(option => option.setName('first-name').setDescription('IC first name').setMaxLength(32).setRequired(true))
-      .addStringOption(option => option.setName('last-name').setDescription('IC last name').setMaxLength(32).setRequired(true)))
-    .addSubcommand(sub => sub
-      .setName('reset')
-      .setDescription('Reset a member verification and require registration again')
-      .addUserOption(option => option.setName('member').setDescription('Member to reset').setRequired(true))),
+      .setName('panel')
+      .setDescription('Open the SKAW Verification management dashboard')),
 
   async execute(interaction, _guildConfig, client) {
     try {
-      assertAdministrator(interaction);
-      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-      const subcommand = interaction.options.getSubcommand();
-
-      if (subcommand === 'setup') {
-        const config = await configureSkawVerification(client, interaction.guild, {
-          verifiedRoleId: interaction.options.getRole('verified-role', true).id,
-          unverifiedRoleId: interaction.options.getRole('unverified-role', true).id,
-          channelId: interaction.options.getChannel('channel', true).id,
-          logChannelId: interaction.options.getChannel('log-channel')?.id ?? undefined,
-          panelTitle: interaction.options.getString('panel-title') ?? undefined,
-          panelDescription: interaction.options.getString('panel-description') ?? undefined,
-          guideText: interaction.options.getString('guide-text') ?? undefined,
-          imageUrl: interaction.options.getString('image-url') ?? undefined,
-        });
-        return interaction.editReply({
-          content: [
-            '✅ SKAW Verification berhasil dikonfigurasi.',
-            'Verification Channel: <#' + config.verificationChannelId + '>',
-            'Verified Role: <@&' + config.verifiedRoleId + '>',
-            'Unverified Role: <@&' + config.unverifiedRoleId + '>',
-            config.logChannelId ? 'Log Channel: <#' + config.logChannelId + '>' : 'Log Channel: tidak diatur',
-            '',
-            'Pastikan role Unverified dapat melihat channel verifikasi, tetapi tidak dapat melihat kategori/channel anggota umum. Berikan akses channel anggota kepada role Verified.',
-            'Member yang sudah berada di server sebelum fitur ini diaktifkan tidak diubah otomatis.',
-            '',
-            'Langkah berikutnya: jalankan /verification publish untuk menerbitkan panel registrasi.',
-          ].join('\n'),
-          allowedMentions: { parse: [] },
+      if (!interaction.inGuild?.() || !interaction.guild) {
+        return interaction.reply({
+          content: 'Dashboard Verification hanya dapat digunakan di dalam server.',
+          flags: MessageFlags.Ephemeral,
         });
       }
-
-      if (subcommand === 'publish') {
-        const result = await publishSkawVerificationPanel(client, interaction.guild);
-        return interaction.editReply({
-          content: '✅ Panel registrasi SKAW berhasil diterbitkan atau diperbarui di ' + result.channel.toString() + '.',
-          allowedMentions: { parse: [] },
+      if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+        return interaction.reply({
+          content: 'Akses ditolak. Permission Manage Server diperlukan.',
+          flags: MessageFlags.Ephemeral,
         });
       }
-
-      if (subcommand === 'status') {
-        const config = await getSkawVerificationConfig(client, interaction.guildId);
-        return interaction.editReply({ embeds: [buildVerificationStatusEmbed(interaction.guild, config)], allowedMentions: { parse: [] } });
-      }
-
-      if (subcommand === 'logs') {
-        const limit = interaction.options.getInteger('limit') || 10;
-        const logs = await getSkawVerificationLogs(client, interaction.guildId, limit);
-        return interaction.editReply({ embeds: [buildVerificationLogsEmbed(logs)], allowedMentions: { parse: [] } });
-      }
-
-      if (subcommand === 'manual') {
-        const user = interaction.options.getUser('member', true);
-        const member = await interaction.guild.members.fetch(user.id);
-        const result = await registerSkawMember(client, interaction.guild, member, {
-          firstName: interaction.options.getString('first-name', true),
-          lastName: interaction.options.getString('last-name', true),
-        }, { source: 'manual', actorId: interaction.user.id });
-        return interaction.editReply({
-          content: '✅ Registrasi manual berhasil untuk <@' + user.id + '>.\nNama IC: **' +
-            result.record.icName + '**\nNickname: **' + result.record.nickname + '**' +
-            (result.duplicateWarning ? '\n⚠️ Nama IC terdeteksi duplikat, tetapi registrasi tetap diterima.' : ''),
-          allowedMentions: { parse: [] },
-        });
-      }
-
-      if (subcommand === 'reset') {
-        const user = interaction.options.getUser('member', true);
-        const member = await interaction.guild.members.fetch(user.id);
-        await resetSkawVerification(client, interaction.guild, member, interaction.user.id);
-        return interaction.editReply({
-          content: '✅ Status verifikasi <@' + user.id + '> telah direset. Role Unverified diberikan dan registrasi ulang diperlukan.',
-          allowedMentions: { parse: [] },
-        });
-      }
-
-      throw new Error('Subcommand verification tidak dikenal.');
+      return openVerificationDashboard(interaction, client);
     } catch (error) {
       const payload = {
-        content: '❌ SKAW Verification: ' + String(error?.message || 'Permintaan tidak dapat diproses.').slice(0, 1700),
-        embeds: [],
+        content: '❌ SKAW Verification: ' + String(error?.message || 'Dashboard tidak dapat dibuka.').slice(0, 1500),
         allowedMentions: { parse: [] },
       };
       if (interaction.deferred || interaction.replied) return interaction.editReply(payload).catch(() => null);

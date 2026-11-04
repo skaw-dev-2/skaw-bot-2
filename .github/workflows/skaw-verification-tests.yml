@@ -4,17 +4,21 @@ on:
   push:
     branches:
       - feature/skaw-verification-system
+      - feature/skaw-verification-v2-dashboard
   pull_request:
     branches:
       - main
     paths:
       - 'src/services/skawVerificationService.js'
+      - 'src/services/skawVerificationDashboardService.js'
+      - 'src/events/interactionCreate.js'
       - 'src/commands/Utility/verification.js'
       - 'src/interactions/buttons/skawVerification.js'
       - 'src/interactions/modals/skawVerification.js'
       - 'src/events/guildMemberAdd.js'
       - 'src/tests/skawVerificationService.test.js'
       - 'src/tests/skawVerificationCommand.test.js'
+      - 'src/tests/skawVerificationDashboard.test.js'
       - 'package.json'
       - 'package-lock.json'
       - '.github/workflows/skaw-verification-tests.yml'

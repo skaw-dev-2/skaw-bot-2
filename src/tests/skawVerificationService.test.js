@@ -8,6 +8,9 @@ import {
   handleVerificationButton,
   normalizeICNameKey,
   registerSkawMember,
+  resetSkawVerification,
+  syncSkawVerificationMemberRoles,
+  updateSkawVerificationConfig,
   validateICNamePart,
 } from '../services/skawVerificationService.js';
 
@@ -202,6 +205,62 @@ test('re-registration updates the IC name without duplicating the old name index
   assert.equal(data.members[member.id].registrationCount, 2);
   assert.equal(data.nameIndex[normalizeICNameKey('Vicenzo', 'Alejandro')], undefined);
   assert.deepEqual(data.nameIndex[normalizeICNameKey('Marco', 'Rossi')], [member.id]);
+});
+
+
+test('registration grants every configured reward role and records only managed additions', async () => {
+  const fixture = createFixture();
+  const communityRole = { id: '77777777777777777', name: 'SKAW Community', position: 3, managed: false, editable: true };
+  fixture.guild.roles.cache.set(communityRole.id, communityRole);
+  fixture.store.set('guild:' + fixture.guild.id + ':skaw_verification:config:v1', {
+    enabled: true,
+    verifiedRoleId: fixture.verifiedRole.id,
+    verifiedRoleIds: [fixture.verifiedRole.id, communityRole.id],
+    unverifiedRoleId: fixture.unverifiedRole.id,
+  });
+  const member = fixture.makeMember('33333333333333333');
+
+  const result = await registerSkawMember(fixture.client, fixture.guild, member, {
+    firstName: 'Marco', lastName: 'Rossi',
+  });
+
+  assert.equal(member.roles.cache.has(fixture.verifiedRole.id), true);
+  assert.equal(member.roles.cache.has(communityRole.id), true);
+  assert.equal(member.roles.cache.has(fixture.unverifiedRole.id), false);
+  assert.deepEqual(result.record.assignedRoleIds, [fixture.verifiedRole.id, communityRole.id]);
+
+  await resetSkawVerification(fixture.client, fixture.guild, member, '99999999999999999');
+  assert.equal(member.roles.cache.has(fixture.verifiedRole.id), false);
+  assert.equal(member.roles.cache.has(communityRole.id), false);
+  assert.equal(member.roles.cache.has(fixture.unverifiedRole.id), true);
+});
+
+test('existing verified members keep old roles until an administrator explicitly synchronizes them', async () => {
+  const fixture = createFixture();
+  const communityRole = { id: '77777777777777777', name: 'SKAW Community', position: 3, managed: false, editable: true };
+  fixture.guild.roles.cache.set(communityRole.id, communityRole);
+  const member = fixture.makeMember('44444444444444444');
+  member.roles.cache.set(fixture.verifiedRole.id, fixture.verifiedRole);
+  fixture.store.set('guild:' + fixture.guild.id + ':skaw_verification:data:v1', {
+    version: 1,
+    members: {
+      [member.id]: { userId: member.id, status: 'verified', icName: 'Marco Rossi' },
+    },
+    nameIndex: {},
+    logs: [],
+  });
+
+  await updateSkawVerificationConfig(fixture.client, fixture.guild.id, {
+    verifiedRoleIds: [communityRole.id],
+  });
+  assert.equal(member.roles.cache.has(fixture.verifiedRole.id), true);
+  assert.equal(member.roles.cache.has(communityRole.id), false);
+
+  const syncResult = await syncSkawVerificationMemberRoles(fixture.client, fixture.guild, member);
+  assert.deepEqual(syncResult.addedRoleIds, [communityRole.id]);
+  assert.deepEqual(syncResult.removedRoleIds, [fixture.verifiedRole.id]);
+  assert.equal(member.roles.cache.has(fixture.verifiedRole.id), false);
+  assert.equal(member.roles.cache.has(communityRole.id), true);
 });
 
 test('failed persistent write rolls nickname and role changes back', async () => {

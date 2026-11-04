@@ -26,12 +26,16 @@ export const DEFAULT_VERIFICATION_CONFIG = Object.freeze({
   verificationChannelId: null,
   panelMessageId: null,
   verifiedRoleId: null,
+  verifiedRoleIds: [],
   unverifiedRoleId: null,
   logChannelId: null,
   panelTitle: 'SKAW Group — Member Verification',
   panelDescription: 'Welcome to **SKAW Group**. Complete the registration below to verify your membership and access the community.',
   guideText: DEFAULT_VERIFICATION_GUIDE,
   imageUrl: null,
+  footerText: 'RIGHT SOLUTION, GREAT QUALITY · SKAW VERIFICATION',
+  footerIconUrl: null,
+  embedColor: '#1A9EF3',
   nicknameFormat: '{first}_{last}',
 });
 
@@ -80,7 +84,42 @@ async function writeStore(client, guildId, store) {
 export async function getSkawVerificationConfig(client, guildId) {
   requirePersistentDatabase(client);
   const raw = await client.db.get(CONFIG_KEY(guildId), null);
-  return { ...DEFAULT_VERIFICATION_CONFIG, ...(raw && typeof raw === 'object' ? raw : {}) };
+  const config = { ...DEFAULT_VERIFICATION_CONFIG, ...(raw && typeof raw === 'object' ? raw : {}) };
+  config.verifiedRoleIds = Array.isArray(config.verifiedRoleIds) && config.verifiedRoleIds.length
+    ? [...new Set(config.verifiedRoleIds.map(String))]
+    : (config.verifiedRoleId ? [String(config.verifiedRoleId)] : []);
+  if (!config.verifiedRoleId && config.verifiedRoleIds[0]) config.verifiedRoleId = config.verifiedRoleIds[0];
+  return config;
+}
+
+export function getConfiguredVerifiedRoleIds(config = {}) {
+  const ids = Array.isArray(config.verifiedRoleIds) && config.verifiedRoleIds.length
+    ? config.verifiedRoleIds
+    : (config.verifiedRoleId ? [config.verifiedRoleId] : []);
+  return [...new Set(ids.map(String).filter(Boolean))];
+}
+
+export async function updateSkawVerificationConfig(client, guildId, patch) {
+  requirePersistentDatabase(client);
+  const current = await getSkawVerificationConfig(client, guildId);
+  const next = { ...current, ...patch };
+  if (Object.prototype.hasOwnProperty.call(patch, 'verifiedRoleIds')) {
+    const previousPrimaryRoleId = current.verifiedRoleId || current.verifiedRoleIds?.[0] || null;
+    next.verifiedRoleIds = getConfiguredVerifiedRoleIds({ verifiedRoleIds: patch.verifiedRoleIds });
+    next.verifiedRoleId = next.verifiedRoleIds[0] || null;
+    if (!current.legacyVerifiedRoleId && previousPrimaryRoleId &&
+        !next.verifiedRoleIds.includes(String(previousPrimaryRoleId))) {
+      next.legacyVerifiedRoleId = String(previousPrimaryRoleId);
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, 'verificationChannelId') &&
+      String(patch.verificationChannelId || '') !== String(current.verificationChannelId || '')) {
+    next.panelMessageId = null;
+  }
+  if (await client.db.set(CONFIG_KEY(guildId), next) === false) {
+    throw new Error('Tidak dapat menyimpan konfigurasi verifikasi ke PostgreSQL.');
+  }
+  return next;
 }
 
 function cleanNamePart(value, label) {
@@ -164,12 +203,37 @@ async function validateSetupRoles(guild, config) {
   if (!botMember.permissions.has(PermissionFlagsBits.ManageNicknames)) {
     throw new Error('Bot membutuhkan permission Manage Nicknames untuk mengatur nama IC otomatis.');
   }
-  const verifiedRole = guild.roles.cache.get(String(config.verifiedRoleId));
+  const verifiedRoleIds = getConfiguredVerifiedRoleIds(config);
+  if (!verifiedRoleIds.length) throw new Error('Pilih minimal satu role yang diberikan setelah verifikasi.');
+  const verifiedRoles = verifiedRoleIds.map(id => guild.roles.cache.get(String(id)));
   const unverifiedRole = guild.roles.cache.get(String(config.unverifiedRoleId));
-  assertRoleAssignable(guild, botMember, verifiedRole, 'Verified');
+  verifiedRoles.forEach((role, index) => assertRoleAssignable(guild, botMember, role, 'Reward #' + (index + 1)));
   assertRoleAssignable(guild, botMember, unverifiedRole, 'Unverified');
-  if (verifiedRole.id === unverifiedRole.id) throw new Error('Role Verified dan Unverified harus berbeda.');
-  return { botMember, verifiedRole, unverifiedRole };
+  if (verifiedRoleIds.includes(String(unverifiedRole.id))) {
+    throw new Error('Role Unverified tidak boleh menjadi salah satu reward role.');
+  }
+  return { botMember, verifiedRoles, verifiedRole: verifiedRoles[0], unverifiedRole };
+}
+
+export async function validateSkawVerificationSetup(guild, config) {
+  const roles = await validateSetupRoles(guild, config);
+  if (!config.verificationChannelId) throw new Error('Pilih channel verifikasi terlebih dahulu.');
+  const channel = guild.channels.cache.get(String(config.verificationChannelId)) ||
+    await guild.channels.fetch(String(config.verificationChannelId)).catch(() => null);
+  assertPanelChannelPermissions(channel, roles.botMember);
+  if (!channel.permissionsFor(roles.unverifiedRole)?.has(PermissionFlagsBits.ViewChannel)) {
+    throw new Error('Role Unverified harus dapat melihat channel verifikasi.');
+  }
+  if (config.logChannelId) {
+    const logChannel = guild.channels.cache.get(String(config.logChannelId)) ||
+      await guild.channels.fetch(String(config.logChannelId)).catch(() => null);
+    if (!isTextChannel(logChannel) || !logChannel.permissionsFor(roles.botMember)?.has([
+      PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks,
+    ])) {
+      throw new Error('Bot membutuhkan View Channel, Send Messages, dan Embed Links di Log Channel.');
+    }
+  }
+  return { ...roles, channel };
 }
 
 function assertPanelChannelPermissions(channel, botMember) {
@@ -188,11 +252,15 @@ function assertPanelChannelPermissions(channel, botMember) {
 
 export async function configureSkawVerification(client, guild, input) {
   requirePersistentDatabase(client);
-  const verifiedRoleId = String(input.verifiedRoleId || '');
+  const verifiedRoleIds = getConfiguredVerifiedRoleIds({
+    verifiedRoleIds: input.verifiedRoleIds,
+    verifiedRoleId: input.verifiedRoleId,
+  });
+  const verifiedRoleId = verifiedRoleIds[0] || '';
   const unverifiedRoleId = String(input.unverifiedRoleId || '');
   const channelId = String(input.channelId || '');
-  if (!verifiedRoleId || !unverifiedRoleId || !channelId) {
-    throw new Error('Channel verifikasi, role Verified, dan role Unverified wajib ditentukan.');
+  if (!verifiedRoleIds.length || !unverifiedRoleId || !channelId) {
+    throw new Error('Channel verifikasi, minimal satu reward role, dan role Unverified wajib ditentukan.');
   }
   const previousConfig = await getSkawVerificationConfig(client, guild.id);
   const panelTitle = input.panelTitle === undefined
@@ -220,6 +288,7 @@ export async function configureSkawVerification(client, guild, input) {
     ...previousConfig,
     enabled: true,
     verifiedRoleId,
+    verifiedRoleIds,
     unverifiedRoleId,
     verificationChannelId: channelId,
     logChannelId: input.logChannelId === undefined
@@ -229,6 +298,9 @@ export async function configureSkawVerification(client, guild, input) {
     panelDescription: panelDescription || DEFAULT_VERIFICATION_CONFIG.panelDescription,
     guideText: guideText || DEFAULT_VERIFICATION_GUIDE,
     imageUrl,
+    footerText: input.footerText === undefined ? previousConfig.footerText : String(input.footerText || '').trim().slice(0, 2048),
+    footerIconUrl: input.footerIconUrl === undefined ? previousConfig.footerIconUrl : String(input.footerIconUrl || '').trim() || null,
+    embedColor: input.embedColor === undefined ? previousConfig.embedColor : String(input.embedColor || '#1A9EF3').trim(),
   };
   if (previousConfig.verificationChannelId !== channelId) nextConfig.panelMessageId = null;
   const { botMember } = await validateSetupRoles(guild, nextConfig);
@@ -254,8 +326,10 @@ export async function configureSkawVerification(client, guild, input) {
 }
 
 export function buildVerificationPanelPayload(config) {
+  const rawColor = String(config.embedColor || '#1A9EF3').replace(/^#/, '');
+  const parsedColor = /^[0-9a-f]{6}$/i.test(rawColor) ? Number.parseInt(rawColor, 16) : BLUE;
   const embed = new EmbedBuilder()
-    .setColor(BLUE)
+    .setColor(parsedColor)
     .setAuthor({ name: 'SKAW GROUP · COMMUNITY' })
     .setTitle(config.panelTitle || DEFAULT_VERIFICATION_CONFIG.panelTitle)
     .setDescription([
@@ -268,8 +342,11 @@ export function buildVerificationPanelPayload(config) {
       '',
       'Pastikan data yang kamu masukkan benar. Nickname Discord akan diperbarui otomatis.',
     ].join('\n'))
-    .setFooter({ text: 'RIGHT SOLUTION, GREAT QUALITY · SKAW VERIFICATION' });
-  if (config.imageUrl && /^https?:\/\/\S+$/i.test(config.imageUrl)) embed.setImage(config.imageUrl);
+    .setFooter({
+      text: config.footerText || DEFAULT_VERIFICATION_CONFIG.footerText,
+      ...(config.footerIconUrl ? { iconURL: config.footerIconUrl } : {}),
+    });
+  if (config.imageUrl && /^https:\/\/\S+$/i.test(config.imageUrl)) embed.setImage(config.imageUrl);
   return {
     embeds: [embed],
     components: [
@@ -383,7 +460,7 @@ export async function registerSkawMember(client, guild, member, input, options =
   if (!config.enabled) throw new Error('Sistem verifikasi SKAW belum diaktifkan.');
 
   return withGuildQueue(guild.id, async () => {
-    const { botMember, verifiedRole, unverifiedRole } = await validateSetupRoles(guild, config);
+    const { botMember, verifiedRoles, unverifiedRole } = await validateSetupRoles(guild, config);
     assertMemberCanBeNicknamed(guild, botMember, member);
     const store = await readStore(client, guild.id);
     const userId = String(member.id);
@@ -393,10 +470,9 @@ export async function registerSkawMember(client, guild, member, input, options =
       : [];
     const duplicateWarning = duplicateUserIds.length > 0;
     const previousNickname = member.nickname ?? null;
-    const hadVerifiedRole = member.roles.cache.has(verifiedRole.id);
+    const addedVerifiedRoleIds = [];
     const hadUnverifiedRole = member.roles.cache.has(unverifiedRole.id);
     let nicknameChanged = false;
-    let verifiedAdded = false;
     let unverifiedRemoved = false;
 
     try {
@@ -404,9 +480,11 @@ export async function registerSkawMember(client, guild, member, input, options =
         await member.setNickname(nickname, 'SKAW Verification: IC name registration');
         nicknameChanged = true;
       }
-      if (!hadVerifiedRole) {
-        await member.roles.add(verifiedRole.id, 'SKAW Verification: registration completed');
-        verifiedAdded = true;
+      for (const role of verifiedRoles) {
+        if (!member.roles.cache.has(role.id)) {
+          await member.roles.add(role.id, 'SKAW Verification: registration completed');
+          addedVerifiedRoleIds.push(role.id);
+        }
       }
       if (hadUnverifiedRole) {
         await member.roles.remove(unverifiedRole.id, 'SKAW Verification: registration completed');
@@ -425,6 +503,12 @@ export async function registerSkawMember(client, guild, member, input, options =
         source: options.source || 'self-service',
         updatedBy: options.actorId ? String(options.actorId) : userId,
         duplicateWarning, duplicateUserIds,
+        assignedRoleIds: [...new Set([
+          ...(Array.isArray(previousRecord?.assignedRoleIds)
+            ? previousRecord.assignedRoleIds
+            : (previousRecord?.status === 'verified' ? [config.legacyVerifiedRoleId || config.verifiedRoleId].filter(Boolean) : [])),
+          ...addedVerifiedRoleIds,
+        ])],
         createdAt: previousRecord?.createdAt || timestamp,
         updatedAt: timestamp,
       };
@@ -447,7 +531,9 @@ export async function registerSkawMember(client, guild, member, input, options =
     } catch (error) {
       const rollbackErrors = [];
       if (unverifiedRemoved) await member.roles.add(unverifiedRole.id, 'SKAW Verification rollback').catch(e => rollbackErrors.push(e));
-      if (verifiedAdded) await member.roles.remove(verifiedRole.id, 'SKAW Verification rollback').catch(e => rollbackErrors.push(e));
+      for (const roleId of addedVerifiedRoleIds.reverse()) {
+        await member.roles.remove(roleId, 'SKAW Verification rollback').catch(e => rollbackErrors.push(e));
+      }
       if (nicknameChanged) await member.setNickname(previousNickname, 'SKAW Verification rollback').catch(e => rollbackErrors.push(e));
       if (rollbackErrors.length) {
         logger.error('SKAW Verification rollback was incomplete', {
@@ -508,11 +594,8 @@ export async function handleVerificationModal(interaction, client) {
 export async function publishSkawVerificationPanel(client, guild) {
   requirePersistentDatabase(client);
   const config = await getSkawVerificationConfig(client, guild.id);
-  if (!config.enabled) throw new Error('Jalankan /verification setup terlebih dahulu.');
-  const { botMember } = await validateSetupRoles(guild, config);
-  const channel = guild.channels.cache.get(config.verificationChannelId) ||
-    await guild.channels.fetch(config.verificationChannelId).catch(() => null);
-  assertPanelChannelPermissions(channel, botMember);
+  if (!config.enabled) throw new Error('Aktifkan sistem melalui /verification panel sebelum menerbitkan panel.');
+  const { channel } = await validateSkawVerificationSetup(guild, config);
 
   let message = config.panelMessageId ? await channel.messages.fetch(config.panelMessageId).catch(() => null) : null;
   const payload = buildVerificationPanelPayload(config);
@@ -533,7 +616,11 @@ export async function applyUnverifiedRoleOnJoin(client, guild, member) {
     const config = await getSkawVerificationConfig(client, guild.id);
     if (!config.enabled) return { configured: false };
     configured = true;
-    if (member.roles.cache.has(String(config.verifiedRoleId))) return { configured: true, alreadyVerified: true };
+    const store = await readStore(client, guild.id);
+    const existingRecord = store.members[String(member.id)] || null;
+    if (existingRecord?.status === 'verified') {
+      return { configured: true, alreadyVerified: true };
+    }
     const unverifiedRole = guild.roles.cache.get(String(config.unverifiedRoleId)) ||
       await guild.roles.fetch(String(config.unverifiedRoleId)).catch(() => null);
     const botMember = await getBotMember(guild);
@@ -556,35 +643,95 @@ export async function resetSkawVerification(client, guild, member, actorId) {
   const config = await getSkawVerificationConfig(client, guild.id);
   if (!config.enabled) throw new Error('Sistem verifikasi SKAW belum diaktifkan.');
   return withGuildQueue(guild.id, async () => {
-    const { verifiedRole, unverifiedRole } = await validateSetupRoles(guild, config);
-    const hadVerifiedRole = member.roles.cache.has(verifiedRole.id);
+    const { verifiedRoles, unverifiedRole } = await validateSetupRoles(guild, config);
+    const store = await readStore(client, guild.id);
+    const userId = String(member.id);
+    const previous = store.members[userId] || null;
+    const managedRoleIds = Array.isArray(previous?.assignedRoleIds)
+      ? previous.assignedRoleIds.map(String)
+      : (previous ? [String(config.legacyVerifiedRoleId || config.verifiedRoleId || '')].filter(Boolean) : []);
+    const removedRoleIds = [];
     const hadUnverifiedRole = member.roles.cache.has(unverifiedRole.id);
     let unverifiedAdded = false;
-    let verifiedRemoved = false;
     try {
       if (!hadUnverifiedRole) {
         await member.roles.add(unverifiedRole.id, 'SKAW Verification reset by ' + actorId);
         unverifiedAdded = true;
       }
-      if (hadVerifiedRole) {
-        await member.roles.remove(verifiedRole.id, 'SKAW Verification reset by ' + actorId);
-        verifiedRemoved = true;
+      for (const roleId of managedRoleIds) {
+        if (member.roles.cache.has(roleId)) {
+          await member.roles.remove(roleId, 'SKAW Verification reset by ' + actorId);
+          removedRoleIds.push(roleId);
+        }
       }
-      const store = await readStore(client, guild.id);
-      const userId = String(member.id);
-      const previous = store.members[userId] || null;
       if (previous) {
-        store.members[userId] = { ...previous, status: 'pending', resetAt: new Date().toISOString(), resetBy: String(actorId) };
+        store.members[userId] = {
+          ...previous,
+          status: 'pending',
+          assignedRoleIds: [],
+          resetAt: new Date().toISOString(),
+          resetBy: String(actorId),
+        };
       }
       addLog(store, makeLog('verification_reset', member, {
         actorId: String(actorId), icName: previous?.icName || null, timestamp: new Date().toISOString(),
       }));
       await writeStore(client, guild.id, store);
-      return { userId, previous, verifiedRole, unverifiedRole };
+      return { userId, previous, verifiedRoles, unverifiedRole };
     } catch (error) {
-      if (verifiedRemoved) await member.roles.add(verifiedRole.id, 'SKAW Verification reset rollback').catch(() => {});
+      for (const roleId of removedRoleIds.reverse()) {
+        await member.roles.add(roleId, 'SKAW Verification reset rollback').catch(() => {});
+      }
       if (unverifiedAdded) await member.roles.remove(unverifiedRole.id, 'SKAW Verification reset rollback').catch(() => {});
       throw new Error('Reset verifikasi gagal. Perubahan role yang sempat diterapkan telah dipulihkan bila memungkinkan. ' + (error?.message || 'Unknown error'));
+    }
+  });
+}
+
+export async function syncSkawVerificationMemberRoles(client, guild, member) {
+  requirePersistentDatabase(client);
+  const config = await getSkawVerificationConfig(client, guild.id);
+  if (!config.enabled) throw new Error('Sistem verifikasi SKAW belum diaktifkan.');
+  return withGuildQueue(guild.id, async () => {
+    const { verifiedRoles, unverifiedRole } = await validateSetupRoles(guild, config);
+    const store = await readStore(client, guild.id);
+    const userId = String(member.id);
+    const previous = store.members[userId];
+    if (!previous || previous.status !== 'verified') {
+      throw new Error('Member belum memiliki data registrasi aktif. Gunakan Manual Registration terlebih dahulu.');
+    }
+    const desiredIds = verifiedRoles.map(role => role.id);
+    const previouslyManagedIds = Array.isArray(previous.assignedRoleIds)
+      ? previous.assignedRoleIds.map(String)
+      : [String(config.legacyVerifiedRoleId || config.verifiedRoleId || '')].filter(Boolean);
+    const addIds = desiredIds.filter(id => !member.roles.cache.has(id));
+    const removeIds = previouslyManagedIds.filter(id => !desiredIds.includes(id) && member.roles.cache.has(id));
+    const added = [];
+    const removed = [];
+    try {
+      for (const id of addIds) {
+        await member.roles.add(id, 'SKAW Verification: synchronize configured reward roles');
+        added.push(id);
+      }
+      for (const id of removeIds) {
+        await member.roles.remove(id, 'SKAW Verification: synchronize configured reward roles');
+        removed.push(id);
+      }
+      if (member.roles.cache.has(unverifiedRole.id)) {
+        await member.roles.remove(unverifiedRole.id, 'SKAW Verification: member role synchronization');
+        removed.push(unverifiedRole.id);
+      }
+      store.members[userId] = {
+        ...previous,
+        assignedRoleIds: [...new Set([...previouslyManagedIds.filter(id => desiredIds.includes(id)), ...added])],
+        rolesSyncedAt: new Date().toISOString(),
+      };
+      await writeStore(client, guild.id, store);
+      return { addedRoleIds: added, removedRoleIds: removeIds };
+    } catch (error) {
+      for (const id of removed.reverse()) await member.roles.add(id, 'SKAW Verification role sync rollback').catch(() => {});
+      for (const id of added.reverse()) await member.roles.remove(id, 'SKAW Verification role sync rollback').catch(() => {});
+      throw new Error('Sinkronisasi role gagal dan pemulihan telah dicoba. ' + (error?.message || 'Unknown error'));
     }
   });
 }
@@ -616,7 +763,7 @@ export function buildVerificationStatusEmbed(guild, config) {
     .setTitle('SKAW Verification · System Status')
     .addFields(
       { name: 'Status', value: config.enabled ? 'Enabled' : 'Disabled', inline: true },
-      { name: 'Verified Role', value: roleName(config.verifiedRoleId), inline: true },
+      { name: 'Reward Roles', value: getConfiguredVerifiedRoleIds(config).map(roleName).join(', ') || 'Belum diatur', inline: true },
       { name: 'Unverified Role', value: roleName(config.unverifiedRoleId), inline: true },
       { name: 'Verification Channel', value: config.verificationChannelId ? '<#' + config.verificationChannelId + '>' : 'Belum diatur', inline: true },
       { name: 'Log Channel', value: config.logChannelId ? '<#' + config.logChannelId + '>' : 'Belum diatur', inline: true },

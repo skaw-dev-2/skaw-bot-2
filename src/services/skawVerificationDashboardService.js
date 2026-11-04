@@ -273,10 +273,19 @@ export async function openVerificationDashboard(interaction, client) {
   if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
     return interaction.reply({ content: 'Akses ditolak. Permission Manage Server diperlukan.', flags: MessageFlags.Ephemeral });
   }
-  return interaction.reply({
-    ...await renderPage(interaction, client, 'overview'),
-    flags: MessageFlags.Ephemeral,
-  });
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  try {
+    return interaction.editReply(await renderPage(interaction, client, 'overview'));
+  } catch (error) {
+    logger.error('Could not open SKAW Verification dashboard', {
+      guildId: interaction.guildId, userId: interaction.user?.id, error,
+    });
+    return interaction.editReply({
+      content: '❌ SKAW Verification dashboard gagal dimuat. Periksa koneksi database dan log bot, lalu coba kembali.',
+      embeds: [],
+      components: [],
+    });
+  }
 }
 
 export async function handleSkawVerificationDashboardInteraction(interaction, client) {

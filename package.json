@@ -23,7 +23,7 @@
     "test:role-templates": "node --test src/tests/roleTemplateService.test.js",
     "test:message-manager": "node --test src/tests/messageManagerService.test.js src/tests/messageManagerCommand.test.js",
     "test:role-access": "node --test src/tests/roleAccessManagerService.test.js",
-    "test:skaw-verification": "node --test src/tests/skawVerificationService.test.js src/tests/skawVerificationCommand.test.js"
+    "test:skaw-verification": "node --test src/tests/skawVerificationService.test.js src/tests/skawVerificationCommand.test.js src/tests/skawVerificationDashboard.test.js"
   },
   "dependencies": {
     "@discordjs/rest": "^2.6.1",

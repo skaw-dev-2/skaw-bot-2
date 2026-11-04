@@ -104,8 +104,13 @@ export async function updateSkawVerificationConfig(client, guildId, patch) {
   const current = await getSkawVerificationConfig(client, guildId);
   const next = { ...current, ...patch };
   if (Object.prototype.hasOwnProperty.call(patch, 'verifiedRoleIds')) {
+    const previousPrimaryRoleId = current.verifiedRoleId || current.verifiedRoleIds?.[0] || null;
     next.verifiedRoleIds = getConfiguredVerifiedRoleIds({ verifiedRoleIds: patch.verifiedRoleIds });
     next.verifiedRoleId = next.verifiedRoleIds[0] || null;
+    if (!current.legacyVerifiedRoleId && previousPrimaryRoleId &&
+        !next.verifiedRoleIds.includes(String(previousPrimaryRoleId))) {
+      next.legacyVerifiedRoleId = String(previousPrimaryRoleId);
+    }
   }
   if (Object.prototype.hasOwnProperty.call(patch, 'verificationChannelId') &&
       String(patch.verificationChannelId || '') !== String(current.verificationChannelId || '')) {
@@ -498,7 +503,12 @@ export async function registerSkawMember(client, guild, member, input, options =
         source: options.source || 'self-service',
         updatedBy: options.actorId ? String(options.actorId) : userId,
         duplicateWarning, duplicateUserIds,
-        assignedRoleIds: [...new Set([...(previousRecord?.assignedRoleIds || []), ...addedVerifiedRoleIds])],
+        assignedRoleIds: [...new Set([
+          ...(Array.isArray(previousRecord?.assignedRoleIds)
+            ? previousRecord.assignedRoleIds
+            : (previousRecord?.status === 'verified' ? [config.legacyVerifiedRoleId || config.verifiedRoleId].filter(Boolean) : [])),
+          ...addedVerifiedRoleIds,
+        ])],
         createdAt: previousRecord?.createdAt || timestamp,
         updatedAt: timestamp,
       };
@@ -606,7 +616,9 @@ export async function applyUnverifiedRoleOnJoin(client, guild, member) {
     const config = await getSkawVerificationConfig(client, guild.id);
     if (!config.enabled) return { configured: false };
     configured = true;
-    if (getConfiguredVerifiedRoleIds(config).some(roleId => member.roles.cache.has(roleId))) {
+    const store = await readStore(client, guild.id);
+    const existingRecord = store.members[String(member.id)] || null;
+    if (existingRecord?.status === 'verified') {
       return { configured: true, alreadyVerified: true };
     }
     const unverifiedRole = guild.roles.cache.get(String(config.unverifiedRoleId)) ||
@@ -637,7 +649,7 @@ export async function resetSkawVerification(client, guild, member, actorId) {
     const previous = store.members[userId] || null;
     const managedRoleIds = Array.isArray(previous?.assignedRoleIds)
       ? previous.assignedRoleIds.map(String)
-      : (previous ? [String(config.verifiedRoleId || '')].filter(Boolean) : []);
+      : (previous ? [String(config.legacyVerifiedRoleId || config.verifiedRoleId || '')].filter(Boolean) : []);
     const removedRoleIds = [];
     const hadUnverifiedRole = member.roles.cache.has(unverifiedRole.id);
     let unverifiedAdded = false;
@@ -691,7 +703,7 @@ export async function syncSkawVerificationMemberRoles(client, guild, member) {
     const desiredIds = verifiedRoles.map(role => role.id);
     const previouslyManagedIds = Array.isArray(previous.assignedRoleIds)
       ? previous.assignedRoleIds.map(String)
-      : [String(config.verifiedRoleId || '')].filter(Boolean);
+      : [String(config.legacyVerifiedRoleId || config.verifiedRoleId || '')].filter(Boolean);
     const addIds = desiredIds.filter(id => !member.roles.cache.has(id));
     const removeIds = previouslyManagedIds.filter(id => !desiredIds.includes(id) && member.roles.cache.has(id));
     const added = [];

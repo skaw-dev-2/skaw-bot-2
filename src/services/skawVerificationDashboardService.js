@@ -157,6 +157,7 @@ function buildPanelModal(ownerId, config) {
     .setValue(String(config.panelDescription || '').slice(0, 1000));
   const banner = new TextInputBuilder().setCustomId('banner_url').setLabel('Banner HTTPS URL (empty removes)')
     .setStyle(TextInputStyle.Short).setMaxLength(400).setRequired(false).setPlaceholder('https://example.com/skaw-banner.png');
+  if (config.imageUrl) banner.setValue(String(config.imageUrl).slice(0, 400));
   return new ModalBuilder().setCustomId(componentId(ownerId, 'modal_panel')).setTitle('Panel Designer')
     .addComponents(new ActionRowBuilder().addComponents(title),
       new ActionRowBuilder().addComponents(description), new ActionRowBuilder().addComponents(banner));
@@ -168,6 +169,7 @@ function buildFooterModal(ownerId, config) {
     .setValue(String(config.footerText || 'RIGHT SOLUTION, GREAT QUALITY · SKAW VERIFICATION').slice(0, 2048));
   const icon = new TextInputBuilder().setCustomId('footer_icon_url').setLabel('Footer Icon HTTPS URL (empty removes)')
     .setStyle(TextInputStyle.Short).setMaxLength(400).setRequired(false).setPlaceholder('https://example.com/skaw-icon.png');
+  if (config.footerIconUrl) icon.setValue(String(config.footerIconUrl).slice(0, 400));
   const color = new TextInputBuilder().setCustomId('embed_color').setLabel('Embed Color HEX')
     .setStyle(TextInputStyle.Short).setMaxLength(7).setRequired(true)
     .setValue(String(config.embedColor || '#1A9EF3').slice(0, 7));
@@ -324,7 +326,7 @@ export async function handleSkawVerificationDashboardModal(interaction, client) 
         panelDescription: interaction.fields.getTextInputValue('panel_description').trim().slice(0, 1000),
         imageUrl: bannerUrl,
       });
-      return interaction.reply({ content: '✅ Panel content and banner saved. Reopen /verification panel to refresh the dashboard.', flags: MessageFlags.Ephemeral });
+      return interaction.reply({ content: '✅ Panel content and banner saved. Click Overview or another dashboard section to refresh the view.', flags: MessageFlags.Ephemeral });
     }
     if (action === 'modal_footer') {
       const footerIconUrl = validateHttpsUrl(interaction.fields.getTextInputValue('footer_icon_url'), 'Footer icon URL');
@@ -335,13 +337,13 @@ export async function handleSkawVerificationDashboardModal(interaction, client) 
         footerIconUrl,
         embedColor: embedColor.startsWith('#') ? embedColor.toUpperCase() : '#' + embedColor.toUpperCase(),
       });
-      return interaction.reply({ content: '✅ Footer and embed color saved. Reopen /verification panel to refresh the dashboard.', flags: MessageFlags.Ephemeral });
+      return interaction.reply({ content: '✅ Footer and embed color saved. Click Overview or another dashboard section to refresh the view.', flags: MessageFlags.Ephemeral });
     }
     if (action === 'modal_guide') {
       await updateSkawVerificationConfig(client, interaction.guildId, {
         guideText: interaction.fields.getTextInputValue('guide_text').trim().slice(0, 4000),
       });
-      return interaction.reply({ content: '✅ Registration guide saved. Reopen /verification panel to refresh the dashboard.', flags: MessageFlags.Ephemeral });
+      return interaction.reply({ content: '✅ Registration guide saved. Click Overview or another dashboard section to refresh the view.', flags: MessageFlags.Ephemeral });
     }
     if (action.startsWith('modal_manual_')) {
       const memberId = action.slice('modal_manual_'.length);

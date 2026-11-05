@@ -7,6 +7,7 @@ import {
   normalizeRecruitmentStatus,
   escapeRecruitmentHtml,
   buildRecruitmentTranscriptHtml,
+  fetchRecruitmentTranscriptMessages,
 } from '../services/skawRecruitmentService.js';
 
 test('profile keys are stable URL/channel-safe slugs', () => {
@@ -63,4 +64,44 @@ test('transcript builder also supports raw PostgreSQL snake_case rows', () => {
   assert.match(html, /SKAW-REC-000008/);
   assert.match(html, /Applicant Two/);
   assert.match(html, /Builder/);
+});
+
+test('transcript pagination fetches older pages and reports capped history', async () => {
+  const message = (id, time) => ({
+    id,
+    createdTimestamp: time,
+    createdAt: new Date(time),
+    author: { tag: id },
+    content: id,
+    attachments: new Map(),
+    embeds: [],
+  });
+  const calls = [];
+  const channel = {
+    messages: {
+      async fetch({ limit, before }) {
+        calls.push({ limit, before });
+        if (!before) return new Map([
+          ['3', message('3', 3000)],
+          ['2', message('2', 2000)],
+        ]);
+        return new Map([['1', message('1', 1000)]]);
+      },
+    },
+  };
+  const result = await fetchRecruitmentTranscriptMessages(channel, 2);
+  assert.equal(result.messageCount, 2);
+  assert.equal(result.truncated, true);
+  assert.deepEqual(result.messages.map(item => item.id), ['2', '3']);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].before, '2');
+});
+
+test('transcript HTML visibly marks a capped export', () => {
+  const html = buildRecruitmentTranscriptHtml({
+    applicationId: 'SKAW-REC-000009',
+    applicantTag: 'Applicant Three',
+    profileSnapshot: { name: 'Trucker' },
+  }, [], { truncated: true });
+  assert.match(html, /Transcript dibatasi hingga 0 pesan terbaru/);
 });

@@ -73,7 +73,38 @@ export function escapeRecruitmentHtml(value) {
     .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
-export function buildRecruitmentTranscriptHtml(application, messages = []) {
+export async function fetchRecruitmentTranscriptMessages(channel, maxMessages = 1000) {
+  if (!channel?.messages?.fetch) throw new Error('Channel message history is not available for transcript generation.');
+  const limit = Math.max(1, Math.min(5000, Number(maxMessages) || 1000));
+  const collected = [];
+  let before = null;
+  let truncated = false;
+
+  while (collected.length < limit) {
+    const pageLimit = Math.min(100, limit - collected.length);
+    const batch = await channel.messages.fetch({
+      limit: pageLimit,
+      ...(before ? { before } : {}),
+    });
+    const page = [...batch.values()];
+    if (!page.length) break;
+    collected.push(...page);
+    const oldest = page.reduce((candidate, message) =>
+      !candidate || message.createdTimestamp < candidate.createdTimestamp ? message : candidate, null);
+    before = oldest?.id || null;
+    if (page.length < pageLimit) break;
+  }
+
+  if (collected.length >= limit && before) {
+    const olderMessages = await channel.messages.fetch({ limit: 1, before });
+    truncated = olderMessages.size > 0;
+  }
+
+  collected.sort((left, right) => left.createdTimestamp - right.createdTimestamp);
+  return { messages: collected, truncated, messageCount: collected.length };
+}
+
+export function buildRecruitmentTranscriptHtml(application, messages = [], options = {}) {
   const applicationId = application.applicationId || application.application_id;
   const applicantTag = application.applicantTag || application.applicant_tag;
   const profileSnapshot = application.profileSnapshot || application.profile_snapshot || {};
@@ -102,6 +133,7 @@ export function buildRecruitmentTranscriptHtml(application, messages = []) {
     escapeRecruitmentHtml(applicationId) + '</p><p><b>Applicant:</b> ' +
     escapeRecruitmentHtml(applicantTag) + '</p><p><b>Profile:</b> ' +
     escapeRecruitmentHtml(profileSnapshot?.name || 'Unknown') + '</p>' +
+    (options.truncated ? '<p class="notice">Transcript dibatasi hingga ' + messages.length + ' pesan terbaru karena batas pengarsipan.</p>' : '') +
     rows + '</main></body></html>';
 }
 
@@ -765,9 +797,9 @@ async function archiveTicket(client, guild, application, actor) {
   const channel = guild.channels.cache.get(String(application.channelId)) ||
     await guild.channels.fetch(String(application.channelId)).catch(() => null);
   if (!isTextChannel(channel)) throw new Error('Ticket channel tidak ditemukan; archive tidak dapat dibuat.');
-  const fetched = await channel.messages.fetch({ limit: 100 });
-  const messages = [...fetched.values()].sort((a, b) => a.createdTimestamp - b.createdTimestamp);
-  const html = buildRecruitmentTranscriptHtml(application, messages);
+  const transcript = await fetchRecruitmentTranscriptMessages(channel, 1000);
+  const messages = transcript.messages;
+  const html = buildRecruitmentTranscriptHtml(application, messages, { truncated: transcript.truncated });
   await pool.query(
     'UPDATE skaw_recruitment_applications SET transcript_html=$3, ticket_status=\'archived\', archived_at=CURRENT_TIMESTAMP, closed_at=COALESCE(closed_at,CURRENT_TIMESTAMP), updated_at=CURRENT_TIMESTAMP, last_activity_at=CURRENT_TIMESTAMP WHERE guild_id=$1 AND application_id=$2',
     [String(guild.id), application.applicationId, html],
@@ -798,8 +830,8 @@ async function archiveTicket(client, guild, application, actor) {
       transcriptSent = true;
     }
   }
-  await recordRecruitmentEvent(pool, guild.id, application.id, application.applicationId, 'ticket_archived', actor.id, { transcriptStored: true, transcriptSent });
-  return { transcriptSent, channel };
+  await recordRecruitmentEvent(pool, guild.id, application.id, application.applicationId, 'ticket_archived', actor.id, { transcriptStored: true, transcriptSent, messageCount: transcript.messageCount, truncated: transcript.truncated });
+  return { transcriptSent, channel, messageCount: transcript.messageCount, truncated: transcript.truncated };
 }
 
 async function listApplications(pool, guildId, limit = 20) {

@@ -368,18 +368,22 @@ export function buildVerificationGuideEmbed(config = DEFAULT_VERIFICATION_CONFIG
     .setFooter({ text: 'SKAW VERIFICATION · Nama IC harus sesuai karakter kamu.' });
 }
 
-function buildRegistrationModal(existingRecord = null) {
+function buildRegistrationModal({ guildId, channelId, panelMessageId }) {
   const firstInput = new TextInputBuilder()
     .setCustomId('first_name').setLabel('Nama Depan IC').setPlaceholder('Contoh: Vicenzo')
     .setStyle(TextInputStyle.Short).setMinLength(1).setMaxLength(32).setRequired(true);
   const lastInput = new TextInputBuilder()
     .setCustomId('last_name').setLabel('Nama Belakang IC').setPlaceholder('Contoh: Alejandro')
     .setStyle(TextInputStyle.Short).setMinLength(1).setMaxLength(32).setRequired(true);
-  if (existingRecord?.firstName) firstInput.setValue(String(existingRecord.firstName).slice(0, 32));
-  if (existingRecord?.lastName) lastInput.setValue(String(existingRecord.lastName).slice(0, 32));
+  // Carry the originating panel context into the modal so it can be validated after the modal is submitted.
   return new ModalBuilder()
-    .setCustomId('skaw_vf_registration')
-    .setTitle(existingRecord?.status === 'verified' ? 'Perbarui Nama IC' : 'Formulir Registrasi')
+    .setCustomId([
+      'skaw_vf_registration',
+      String(guildId || ''),
+      String(channelId || ''),
+      String(panelMessageId || ''),
+    ].join(':'))
+    .setTitle('Formulir Registrasi / Perbarui Nama IC')
     .addComponents(new ActionRowBuilder().addComponents(firstInput), new ActionRowBuilder().addComponents(lastInput));
 }
 
@@ -387,31 +391,51 @@ export async function handleVerificationButton(interaction, client, action) {
   if (!interaction.inGuild?.() || !interaction.guild) {
     return interaction.reply({ content: 'Verifikasi hanya dapat digunakan di dalam server.', flags: MessageFlags.Ephemeral });
   }
-  const config = await getSkawVerificationConfig(client, interaction.guildId);
-  if (!config.enabled) {
-    return interaction.reply({ content: 'Sistem verifikasi SKAW belum diaktifkan. Hubungi administrator.', flags: MessageFlags.Ephemeral });
+
+  if (action === 'register') {
+    // Discord requires a modal to be the initial response. Do not wait for PostgreSQL here.
+    // The originating panel IDs are checked after the member submits the form.
+    return interaction.showModal(buildRegistrationModal({
+      guildId: interaction.guildId,
+      channelId: interaction.channelId,
+      panelMessageId: interaction.message?.id,
+    }));
   }
-  if (
-    !config.panelMessageId ||
-    String(interaction.message?.id || '') !== String(config.panelMessageId) ||
-    String(interaction.channelId || '') !== String(config.verificationChannelId || '')
-  ) {
-    return interaction.reply({
-      content: 'Panel verifikasi ini sudah tidak aktif. Silakan gunakan panel registrasi terbaru di channel verifikasi.',
-      flags: MessageFlags.Ephemeral,
-    });
-  }
+
   if (action === 'guide') {
-    return interaction.reply({
-      embeds: [buildVerificationGuideEmbed(config)],
-      flags: MessageFlags.Ephemeral,
-      allowedMentions: { parse: [] },
-    });
+    // Acknowledge first so slow PostgreSQL reads cannot cause an interaction timeout.
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    try {
+      const config = await getSkawVerificationConfig(client, interaction.guildId);
+      if (!config.enabled) {
+        return interaction.editReply({ content: 'Sistem verifikasi SKAW belum diaktifkan. Hubungi administrator.' });
+      }
+      if (
+        !config.panelMessageId ||
+        String(interaction.message?.id || '') !== String(config.panelMessageId) ||
+        String(interaction.channelId || '') !== String(config.verificationChannelId || '')
+      ) {
+        return interaction.editReply({
+          content: 'Panel verifikasi ini sudah tidak aktif. Silakan gunakan panel registrasi terbaru di channel verifikasi.',
+        });
+      }
+      return interaction.editReply({
+        embeds: [buildVerificationGuideEmbed(config)],
+        allowedMentions: { parse: [] },
+      });
+    } catch (error) {
+      logger.error('SKAW Verification guide button failed', {
+        guildId: interaction.guildId, userId: interaction.user?.id,
+        channelId: interaction.channelId, messageId: interaction.message?.id, error,
+      });
+      return interaction.editReply({
+        content: '❌ Panduan verifikasi belum dapat dimuat. Silakan coba kembali beberapa saat lagi.',
+        embeds: [],
+      });
+    }
   }
-  if (action !== 'register') return;
-  const store = await readStore(client, interaction.guildId);
-  const existing = store.members[String(interaction.user.id)] || null;
-  return interaction.showModal(buildRegistrationModal(existing));
+
+  return;
 }
 
 function assertMemberCanBeNicknamed(guild, botMember, member) {
@@ -549,13 +573,30 @@ export async function registerSkawMember(client, guild, member, input, options =
   });
 }
 
-export async function handleVerificationModal(interaction, client) {
+export async function handleVerificationModal(interaction, client, args = []) {
   if (!interaction.guild || !interaction.guildId) {
     return interaction.reply({ content: 'Formulir ini hanya dapat digunakan di dalam server.', flags: MessageFlags.Ephemeral });
   }
   const registrationStartedAt = Date.now();
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   try {
+    const [originGuildId, originChannelId, originPanelMessageId] = args.map(String);
+    const config = await getSkawVerificationConfig(client, interaction.guildId);
+    if (!config.enabled) {
+      return interaction.editReply({ content: 'Sistem verifikasi SKAW belum diaktifkan. Hubungi administrator.' });
+    }
+    if (
+      originGuildId !== String(interaction.guildId) ||
+      !originChannelId ||
+      !originPanelMessageId ||
+      originChannelId !== String(config.verificationChannelId || '') ||
+      originPanelMessageId !== String(config.panelMessageId || '')
+    ) {
+      return interaction.editReply({
+        content: 'Panel verifikasi ini sudah tidak aktif. Silakan gunakan panel registrasi terbaru di channel verifikasi.',
+      });
+    }
+
     const member = await interaction.guild.members.fetch(interaction.user.id);
     const result = await registerSkawMember(client, interaction.guild, member, {
       firstName: interaction.fields.getTextInputValue('first_name'),

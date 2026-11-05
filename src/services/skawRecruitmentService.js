@@ -62,6 +62,20 @@ export function formatRecruitmentSequence(value, width = 6) {
   return String(number).padStart(width, '0');
 }
 
+export function findDuplicateRecruitmentComponentCustomIds(rows = []) {
+  const seen = new Set();
+  const duplicates = new Set();
+  for (const row of rows) {
+    for (const component of row?.components || []) {
+      const customId = component?.data?.custom_id ?? component?.toJSON?.()?.custom_id;
+      if (typeof customId !== 'string' || !customId) continue;
+      if (seen.has(customId)) duplicates.add(customId);
+      else seen.add(customId);
+    }
+  }
+  return [...duplicates];
+}
+
 export function normalizeRecruitmentStatus(value) {
   const status = String(value || '').trim().toLowerCase();
   if (!APPLICATION_STATUSES.includes(status)) throw new Error('Application status tidak dikenal.');
@@ -994,10 +1008,10 @@ async function buildDashboardPayload(client, guild, ownerId, page = 'overview', 
         { name: 'Configuration Version', value: String(settings.version), inline: true },
       )
       .setFooter({ text: 'Applications are unlimited; no per-user cooldown or pending-application lock.' });
+    // Navigation already contains Profiles and Applications. Keep only the
+    // publish shortcut here so the dashboard never sends duplicate custom IDs.
     components.push(new ActionRowBuilder().addComponents(
       dashButton(ownerId, 'publish', 'Publish / Update Panel', ButtonStyle.Success),
-      dashButton(ownerId, 'page_profiles', 'Manage Profiles'),
-      dashButton(ownerId, 'page_apps', 'Review Applications'),
     ));
   } else if (page === 'profiles') {
     embed = new EmbedBuilder().setColor(BLUE).setTitle('Recruitment Profiles')
@@ -1010,9 +1024,9 @@ async function buildDashboardPayload(client, guild, ownerId, page = 'overview', 
     if (options.length) components.push(new ActionRowBuilder().addComponents(
       new StringSelectMenuBuilder().setCustomId(createDashId(ownerId, 'profile_select'))
         .setPlaceholder('Select a profile to manage').addOptions(options)));
+    // Overview navigation is already present in the top navigation row.
     components.push(new ActionRowBuilder().addComponents(
       dashButton(ownerId, 'create_profile', 'Create Profile', ButtonStyle.Success),
-      dashButton(ownerId, 'page_overview', 'Back to Overview'),
     ));
   } else if (page === 'profile_detail' && selectedProfileId) {
     const profile = await getRecruitmentProfile(client, guild.id, selectedProfileId);
@@ -1117,6 +1131,10 @@ async function buildDashboardPayload(client, guild, ownerId, page = 'overview', 
   }
 
   if (notice) embed.addFields({ name: 'Information', value: String(notice).slice(0, 1000) });
+  const duplicateCustomIds = findDuplicateRecruitmentComponentCustomIds(components);
+  if (duplicateCustomIds.length) {
+    throw new Error('Recruitment dashboard generated duplicate component custom IDs: ' + duplicateCustomIds.join(', '));
+  }
   return { embeds: [embed], components, allowedMentions: { parse: [] } };
 }
 

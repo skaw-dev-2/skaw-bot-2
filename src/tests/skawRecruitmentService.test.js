@@ -8,7 +8,9 @@ import {
   escapeRecruitmentHtml,
   buildRecruitmentTranscriptHtml,
   fetchRecruitmentTranscriptMessages,
+  findDuplicateRecruitmentComponentCustomIds,
 } from '../services/skawRecruitmentService.js';
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
 
 test('profile keys are stable URL/channel-safe slugs', () => {
   assert.equal(slugifyRecruitmentProfile('Business Partnership & Retail'), 'business-partnership-retail');
@@ -104,4 +106,29 @@ test('transcript HTML visibly marks a capped export', () => {
     profileSnapshot: { name: 'Trucker' },
   }, [], { truncated: true });
   assert.match(html, /Transcript dibatasi hingga 0 pesan terbaru/);
+});
+
+test('dashboard component custom IDs are unique across every action row', () => {
+  const button = id => new ButtonBuilder()
+    .setCustomId(id)
+    .setLabel(id)
+    .setStyle(ButtonStyle.Secondary);
+  const rows = [
+    new ActionRowBuilder().addComponents(button('page_overview'), button('page_profiles')),
+    new ActionRowBuilder().addComponents(button('publish')),
+    new ActionRowBuilder().addComponents(button('create_profile')),
+  ];
+  assert.deepEqual(findDuplicateRecruitmentComponentCustomIds(rows), []);
+});
+
+test('dashboard component custom ID validation detects duplicates across rows', () => {
+  const button = id => new ButtonBuilder()
+    .setCustomId(id)
+    .setLabel(id)
+    .setStyle(ButtonStyle.Secondary);
+  const rows = [
+    new ActionRowBuilder().addComponents(button('page_profiles')),
+    new ActionRowBuilder().addComponents(button('page_profiles')),
+  ];
+  assert.deepEqual(findDuplicateRecruitmentComponentCustomIds(rows), ['page_profiles']);
 });

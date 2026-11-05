@@ -5,6 +5,7 @@ import {
   buildICNickname,
   applyUnverifiedRoleOnJoin,
   buildVerificationPanelPayload,
+  getSkawVerificationConfig,
   publishSkawVerificationPanel,
   handleVerificationButton,
   handleVerificationModal,
@@ -205,6 +206,26 @@ test('verification panel exposes unique persistent Register and Guide buttons', 
   assert.equal(payload.components.length, 1);
   const components = payload.components[0].toJSON().components;
   assert.deepEqual(components.map(item => item.custom_id), ['skaw_vf_register', 'skaw_vf_guide']);
+});
+
+test('verification panel uses the concise Register and Guide copy by default', () => {
+  const payload = buildVerificationPanelPayload({});
+  assert.equal(payload.embeds[0].data.description, "Welcome to **SKAW Group**.\n\nYour journey with SKAW starts here. Complete the verification process to unlock access to our community.\n\nPress **Register** to continue or **Panduan** to learn more.");
+});
+
+test('legacy default panel description is upgraded while custom descriptions are preserved', async () => {
+  const fixture = createFixture();
+  const configKey = 'guild:' + fixture.guild.id + ':skaw_verification:config:v1';
+  fixture.store.set(configKey, {
+    panelDescription: "Welcome to **SKAW Group**. Complete the registration below to verify your membership and access the community.",
+  });
+
+  const config = await getSkawVerificationConfig(fixture.client, fixture.guild.id);
+  assert.equal(config.panelDescription, "Welcome to **SKAW Group**.\n\nYour journey with SKAW starts here. Complete the verification process to unlock access to our community.\n\nPress **Register** to continue or **Panduan** to learn more.");
+
+  fixture.store.set(configKey, { panelDescription: 'Custom SKAW announcement.' });
+  const customConfig = await getSkawVerificationConfig(fixture.client, fixture.guild.id);
+  assert.equal(customConfig.panelDescription, 'Custom SKAW announcement.');
 });
 
 test('registration assigns Verified, removes Unverified, updates nickname, and records history', async () => {

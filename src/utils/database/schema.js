@@ -7,10 +7,12 @@
  */
 
 import { pgConfig } from '../../config/database/postgres.js';
+import { RECRUITMENT_TABLE_STATEMENTS, RECRUITMENT_INDEX_STATEMENTS } from './recruitmentSchema.js';
 
 const t = pgConfig.tables;
 
 export const tableStatements = [
+    ...RECRUITMENT_TABLE_STATEMENTS,
     `CREATE TABLE IF NOT EXISTS ${t.guilds} (
         id VARCHAR(20) PRIMARY KEY,
         config JSONB DEFAULT '{}',
@@ -176,6 +178,7 @@ export const tableStatements = [
 ];
 
 export const indexStatements = [
+    ...RECRUITMENT_INDEX_STATEMENTS,
     `CREATE INDEX IF NOT EXISTS idx_guild_users_guild_id ON ${t.guild_users}(guild_id)`,
     `CREATE INDEX IF NOT EXISTS idx_guild_users_user_id ON ${t.guild_users}(user_id)`,
     `CREATE INDEX IF NOT EXISTS idx_birthdays_guild_id ON ${t.birthdays}(guild_id)`,

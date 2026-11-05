@@ -24,6 +24,7 @@ import { handleAutoResponderInteraction } from '../services/autoResponderPanelSe
 import { handleRoleTemplateInteraction } from '../services/roleTemplatePanelService.js';
 import { handleMessageManagerInteraction, isMessageManagerInteraction } from '../commands/Utility/message.js';
 import { isSkawVerificationDashboardInteraction, handleSkawVerificationDashboardRoute } from '../services/skawVerificationDashboardService.js';
+import { isSkawRecruitmentInteraction, handleSkawRecruitmentInteraction } from '../services/skawRecruitmentService.js';
 
 const COMMAND_ERROR_SUBTYPES = {
   warn: 'warn_failed',
@@ -62,6 +63,12 @@ export default {
       try {
         InteractionHelper.patchInteractionResponses(interaction);
         ResponseCoordinator.attach(interaction);
+
+        // SKAW Recruitment persistent custom-ID routing.
+        if (isSkawRecruitmentInteraction(interaction)) {
+          await handleSkawRecruitmentInteraction(interaction, client);
+          return;
+        }
 
         // Message Manager buttons, role selectors and modal forms must be routed
         // before generic component handlers, including after bot restarts.

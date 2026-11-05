@@ -5,6 +5,7 @@ import { reconcileReactionRoleMessages } from "../services/reactionRoleService.j
 import { reconcileTicketPanels, reconcileVerificationPanels, reconcileReactionRolePanelHealth } from "../services/panelHealthService.js";
 import { reconcileLevelRoles } from "../services/leveling/levelRoleSyncService.js";
 import { initRiffyAfterReady } from "../services/music/riffySetup.js";
+import { initializeSkawRecruitment } from "../services/skawRecruitmentService.js";
 
 export default {
   name: Events.ClientReady,
@@ -41,6 +42,9 @@ export default {
       startupLog(
         `Reaction role panel health: scanned ${reactionRolePanelSummary.scannedPanels} panels, healthy ${reactionRolePanelSummary.healthyPanels}, deleted ${reactionRolePanelSummary.deletedPanels}, missing channel ${reactionRolePanelSummary.missingChannels}, recovered ${reactionRolePanelSummary.recoveredIds}, errors ${reactionRolePanelSummary.errors}`
       );
+
+      const recruitmentSummary = await initializeSkawRecruitment(client);
+      startupLog(`SKAW Recruitment: initialized ${recruitmentSummary.guilds} guild(s), recovered ${recruitmentSummary.recovered} pending ticket(s)`);
 
       const levelRoleSummary = await reconcileLevelRoles(client);
       startupLog(

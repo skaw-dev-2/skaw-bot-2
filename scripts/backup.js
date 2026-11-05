@@ -149,7 +149,7 @@ async function run() {
       manifestPath,
       sizeBytes: finalStats.size,
       sha256: encrypted.sha256,
-      requiredTableCount: 17,
+      requiredTableCount: 23,
     });
     process.stdout.write(outputPath + '\n' + manifestPath + '\n');
   } catch (error) {

@@ -11,6 +11,8 @@ const REQUIRED_TABLES = Object.freeze([
   'guilds', 'users', 'guild_users', 'birthdays', 'giveaways', 'ticket_data', 'afk_status',
   'welcome_configs', 'leveling_configs', 'user_levels', 'economy', 'verification_audit',
   'invite_tracking', 'application_roles', 'temp_data', 'cache_data', 'schema_migrations',
+  'skaw_recruitment_settings', 'skaw_recruitment_profiles', 'skaw_recruitment_counters',
+  'skaw_recruitment_applications', 'skaw_recruitment_events', 'skaw_recruitment_versions',
 ]);
 
 const FEATURE_KEYS = Object.freeze([

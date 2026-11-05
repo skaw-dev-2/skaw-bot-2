@@ -1,0 +1,45 @@
+name: SKAW Recruitment Tests
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'src/services/skawRecruitmentService.js'
+      - 'src/utils/database/recruitmentSchema.js'
+      - 'src/utils/database/schema.js'
+      - 'src/tests/skawRecruitmentService.test.js'
+      - 'src/commands/Utility/recruitment.js'
+      - 'src/events/interactionCreate.js'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/recruitment-tests.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'src/services/skawRecruitmentService.js'
+      - 'src/utils/database/recruitmentSchema.js'
+      - 'src/utils/database/schema.js'
+      - 'src/tests/skawRecruitmentService.test.js'
+      - 'src/commands/Utility/recruitment.js'
+      - 'src/events/interactionCreate.js'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/recruitment-tests.yml'
+
+jobs:
+  recruitment-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Run SKAW Recruitment tests
+        run: npm run test:recruitment

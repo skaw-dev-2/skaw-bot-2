@@ -79,7 +79,7 @@ function makeAssignmentRuntime({ actorPosition = 5, rolePosition = 2, workshopPo
     memberPermissions: { has: () => true },
     options: {
       getString: () => 'mechanic',
-      getUser: () => ({ id: TARGET_ID, tag: 'Kings#0001' }),
+      getUser: name => name === 'user' ? ({ id: TARGET_ID, tag: 'Kings#0001' }) : null,
       getRole: () => workshopRoleSelected ? workshopRole : null,
     },
     async reply(payload) { replyCalls.push(payload); },
@@ -87,6 +87,17 @@ function makeAssignmentRuntime({ actorPosition = 5, rolePosition = 2, workshopPo
   };
   return { client, interaction, target, replyCalls, roleCache, store };
 }
+
+test('/role command exposes the set subcommand with separate optional workshop option', () => {
+  const data = roleCommand.data.toJSON();
+  assert.equal(data.name, 'role');
+  assert.deepEqual(data.options.map(option => option.name), ['set']);
+  const options = data.options[0].options;
+  assert.deepEqual(options.map(option => option.name), ['template', 'user', 'workshop']);
+  assert.equal(options.find(option => option.name === 'template').required, true);
+  assert.equal(options.find(option => option.name === 'user').required, true);
+  assert.equal(options.find(option => option.name === 'workshop').required, false);
+});
 
 test('role template names normalize whitespace and role IDs are validated', () => {
   const config = normalizeRoleTemplateConfig({ templates: [{
@@ -142,7 +153,7 @@ test('assignment plan only adds missing roles and never schedules removal', () =
   assert.equal(Object.hasOwn(plan, 'toRemove'), false);
 });
 
-test('/role rejects higher-ranked roles before making any changes', async () => {
+test('/role set rejects higher-ranked roles before making any changes', async () => {
   const runtime = makeAssignmentRuntime({ actorPosition: 1, rolePosition: 10 });
   await roleCommand.execute(runtime.interaction, null, runtime.client);
   assert.deepEqual(runtime.target.roles.added, []);
@@ -150,7 +161,7 @@ test('/role rejects higher-ranked roles before making any changes', async () => 
   assert.match(runtime.replyCalls[0].content, /No roles were changed/);
 });
 
-test('/role adds an optional workshop placement separately from template roles', async () => {
+test('/role set adds an optional workshop placement separately from template roles', async () => {
   const runtime = makeAssignmentRuntime({
     actorPosition: 20, rolePosition: 2, workshopPosition: 3,
     workshopRoleSelected: true, existingRoleIds: [ROLE_A],
@@ -163,7 +174,7 @@ test('/role adds an optional workshop placement separately from template roles',
   assert.match(runtime.replyCalls[0].content, /No existing roles were removed/);
 });
 
-test('/role rank protection includes the selected workshop placement role', async () => {
+test('/role set rank protection includes the selected workshop placement role', async () => {
   const runtime = makeAssignmentRuntime({
     actorPosition: 5, rolePosition: 2, workshopPosition: 10, workshopRoleSelected: true,
   });

@@ -538,20 +538,29 @@ function ticketEmbed(application) {
   return embed;
 }
 
-function ticketControlRow(application) {
+function ticketControlRows(application) {
   const id = application.applicationId;
   const buttons = [];
   if (application.ticketStatus === 'closed') {
-    buttons.push(new ButtonBuilder().setCustomId('skaw_rec_app|' + id + '|reopen').setLabel('Reopen').setStyle(ButtonStyle.Success));
+    buttons.push(new ButtonBuilder().setCustomId('skaw_rec_app|' + id + '|toggle').setLabel('Close / Reopen').setStyle(ButtonStyle.Success));
   } else if (application.ticketStatus === 'open' || application.ticketStatus === 'creating') {
     buttons.push(new ButtonBuilder().setCustomId('skaw_rec_app|' + id + '|submit').setLabel('Submit for Review').setStyle(ButtonStyle.Primary));
     buttons.push(new ButtonBuilder().setCustomId('skaw_rec_app|' + id + '|claim').setLabel('Claim / Unclaim').setStyle(ButtonStyle.Secondary));
-    buttons.push(new ButtonBuilder().setCustomId('skaw_rec_app|' + id + '|close').setLabel('Close').setStyle(ButtonStyle.Secondary));
+    buttons.push(new ButtonBuilder().setCustomId('skaw_rec_app|' + id + '|toggle').setLabel('Close / Reopen').setStyle(ButtonStyle.Secondary));
   }
   if (application.ticketStatus !== 'archived') {
+    buttons.push(new ButtonBuilder().setCustomId('skaw_rec_app|' + id + '|status').setLabel('Update Status').setStyle(ButtonStyle.Primary));
     buttons.push(new ButtonBuilder().setCustomId('skaw_rec_app|' + id + '|archive').setLabel('Archive').setStyle(ButtonStyle.Danger));
   }
-  return new ActionRowBuilder().addComponents(buttons.slice(0, 5));
+  const rows = [];
+  if (buttons.length) rows.push(new ActionRowBuilder().addComponents(buttons.slice(0, 5)));
+  if (application.ticketStatus !== 'archived') {
+    rows.push(new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('skaw_rec_app|' + id + '|note')
+        .setLabel('Internal Note').setStyle(ButtonStyle.Secondary),
+    ));
+  }
+  return rows;
 }
 
 export async function createRecruitmentApplication(client, guild, profileKey, interaction) {
@@ -593,7 +602,7 @@ export async function createRecruitmentApplication(client, guild, profileKey, in
     try {
       await channel.send({
         embeds: [ticketEmbed(storedApplication)],
-        components: [ticketControlRow(storedApplication)],
+        components: ticketControlRows(storedApplication),
         allowedMentions: { parse: [] },
       });
     } catch (error) {
@@ -1396,6 +1405,16 @@ async function handleTicketAction(interaction, client) {
   if (!interaction.guild || !applicationId) {
     return interaction.reply({ content: 'Recruitment ticket tidak valid.', flags: MessageFlags.Ephemeral });
   }
+  if (action === 'note') {
+    const application = await getRecruitmentApplication(client, interaction.guildId, applicationId);
+    if (!application || !await canReviewApplication(interaction, application)) {
+      return interaction.reply({ content: 'Akses reviewer ditolak.', flags: MessageFlags.Ephemeral });
+    }
+    if (application.ticketStatus === 'archived') {
+      return interaction.reply({ content: 'Ticket sudah diarsipkan. Internal note baru tidak dapat ditambahkan.', flags: MessageFlags.Ephemeral });
+    }
+    return interaction.showModal(buildNotesModal(interaction.user.id, application));
+  }
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   try {
     const application = await getRecruitmentApplication(client, interaction.guildId, applicationId);
@@ -1416,27 +1435,41 @@ async function handleTicketAction(interaction, client) {
           content: '📥 Application **' + updated.applicationId + '** telah dikirim untuk review. ' + mention,
           allowedMentions: { roles: reviewerRoleIds },
         });
-        await channel.send({ components: [ticketControlRow(updated)], allowedMentions: { parse: [] } }).catch(() => {});
+        await channel.send({ components: ticketControlRows(updated), allowedMentions: { parse: [] } }).catch(() => {});
       }
       return interaction.editReply({ content: 'Aplikasi berhasil dikirim ke tim reviewer.' });
     }
 
     if (!await canReviewApplication(interaction, application)) throw new Error('Akses ditolak. Kamu bukan reviewer untuk profil aplikasi ini.');
+    if (application.ticketStatus === 'archived') {
+      throw new Error('Ticket sudah diarsipkan. Riwayat aplikasi tetap tersimpan, tetapi kontrol ticket sudah dikunci.');
+    }
     if (action === 'claim') {
       const updated = await claimApplication(client, interaction.guild, application, interaction.user);
       return interaction.editReply({ content: updated.claimedBy ? 'Application berhasil di-claim oleh kamu.' : 'Claim berhasil dilepas.' });
     }
-    if (action === 'close') {
-      await setTicketStatus(client, interaction.guild, application, 'closed', interaction.user.id);
-      return interaction.editReply({ content: 'Ticket ditutup. Application status tidak berubah.' });
+    if (action === 'status') {
+      const menu = new StringSelectMenuBuilder()
+        .setCustomId('skaw_rec_status|' + application.applicationId)
+        .setPlaceholder('Select the next application status')
+        .addOptions(APPLICATION_STATUSES.map(status => ({
+          label: STATUS_LABELS[status],
+          value: status,
+          default: status === application.applicationStatus,
+        })));
+      return interaction.editReply({
+        content: 'Pilih status aplikasi. Perubahan ini tidak akan menutup ticket.',
+        components: [new ActionRowBuilder().addComponents(menu)],
+      });
     }
-    if (action === 'reopen') {
-      if (application.ticketStatus === 'archived') throw new Error('Ticket yang sudah diarsipkan tidak dapat dibuka kembali.');
-      await setTicketStatus(client, interaction.guild, application, 'open', interaction.user.id);
-      return interaction.editReply({ content: 'Ticket dibuka kembali.' });
-    }
-    if (action === 'note') {
-      return interaction.editReply({ content: 'Gunakan dashboard /recruitment panel untuk menambahkan internal note yang hanya tersimpan untuk reviewer.' });
+    if (action === 'toggle' || action === 'close' || action === 'reopen') {
+      const targetStatus = application.ticketStatus === 'closed' ? 'open' : 'closed';
+      await setTicketStatus(client, interaction.guild, application, targetStatus, interaction.user.id);
+      return interaction.editReply({
+        content: targetStatus === 'closed'
+          ? 'Ticket ditutup. Application status tidak berubah.'
+          : 'Ticket dibuka kembali. Application status tidak berubah.',
+      });
     }
     if (action === 'archive') {
       const result = await archiveTicket(client, interaction.guild, application, interaction.user);
@@ -1446,6 +1479,28 @@ async function handleTicketAction(interaction, client) {
   } catch (error) {
     logger.warn('SKAW Recruitment ticket action rejected', { applicationId, action, userId: interaction.user.id, error: error.message });
     return interaction.editReply({ content: '❌ ' + String(error.message || error).slice(0, 1200) });
+  }
+}
+
+async function handleTicketStatusSelection(interaction, client) {
+  const applicationId = String(interaction.customId || '').split('|')[1];
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  try {
+    const application = await getRecruitmentApplication(client, interaction.guildId, applicationId);
+    if (!application || !await canReviewApplication(interaction, application)) {
+      throw new Error('Akses reviewer ditolak untuk profil aplikasi ini.');
+    }
+    if (application.ticketStatus === 'archived') {
+      throw new Error('Ticket sudah diarsipkan dan tidak menerima perubahan status.');
+    }
+    const nextStatus = normalizeRecruitmentStatus(interaction.values?.[0]);
+    await updateApplicationStatus(client, interaction.guild, application, nextStatus, interaction.user);
+    return interaction.editReply({
+      content: 'Application **' + application.applicationId + '** diperbarui menjadi **' + STATUS_LABELS[nextStatus] + '**. Ticket tetap ' + application.ticketStatus + '.',
+      components: [],
+    });
+  } catch (error) {
+    return interaction.editReply({ content: '❌ ' + String(error.message || error).slice(0, 1200), components: [] });
   }
 }
 
@@ -1480,6 +1535,9 @@ export async function handleSkawRecruitmentInteraction(interaction, client) {
     }
     if (customId.startsWith('skaw_rec_app|') && interaction.isButton?.()) {
       return handleTicketAction(interaction, client);
+    }
+    if (customId.startsWith('skaw_rec_status|') && interaction.isStringSelectMenu?.()) {
+      return handleTicketStatusSelection(interaction, client);
     }
     if (customId.startsWith('skaw_rec_note|') && interaction.isModalSubmit?.()) {
       return handleInternalNoteModal(interaction, client);
@@ -1525,7 +1583,7 @@ export async function reconcileRecruitmentApplications(client, guild) {
         const recoveredApplication = { ...application, channelId: String(channel.id), ticketStatus: 'open' };
         await channel.send({
           embeds: [ticketEmbed(recoveredApplication)],
-          components: [ticketControlRow(recoveredApplication)],
+          components: ticketControlRows(recoveredApplication),
           allowedMentions: { parse: [] },
         }).catch(async error => {
           await recordRecruitmentEvent(pool, guild.id, application.id, application.applicationId, 'ticket_recovery_message_failed', client.user?.id, { message: String(error.message || error) }).catch(() => {});

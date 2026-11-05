@@ -28,7 +28,7 @@ A PostgreSQL upsert counter assigns one increasing sequence per guild across eve
 
 Application status and ticket status are stored separately. Application statuses: \`awaiting_submission\`, \`submitted\`, \`under_review\`, \`interview\`, \`partnership_discussion\`, \`revision_required\`, \`accepted\`, \`rejected\`, and \`withdrawn\`. Ticket status: \`creating\`, \`creation_failed\`, \`open\`, \`closed\`, and \`archived\`. Closing a ticket does not reject an application.
 
-Reviewers may claim/unclaim applications, change application status, close/reopen tickets, write internal notes and archive tickets. Internal notes are stored in the Recruitment event table, not posted to the applicant-visible channel. Archiving generates HTML transcript data in PostgreSQL and optionally sends the transcript to the configured archive channel; the channel is retained rather than deleted.
+Profile-scoped reviewers may claim/unclaim applications, change application status from the ticket controls, close/reopen tickets, write private internal notes from the ticket and archive tickets. Internal notes are stored in the Recruitment event table, not posted to the applicant-visible channel. Archiving generates HTML transcript data in PostgreSQL and optionally sends the transcript to the configured archive channel; the channel is retained rather than deleted.
 
 ## PostgreSQL, migration and backups
 

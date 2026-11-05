@@ -2,7 +2,7 @@ import { handleVerificationModal } from '../../services/skawVerificationService.
 
 export default {
   name: 'skaw_vf_registration',
-  async execute(interaction, client) {
-    return handleVerificationModal(interaction, client);
+  async execute(interaction, client, args = []) {
+    return handleVerificationModal(interaction, client, args);
   },
 };

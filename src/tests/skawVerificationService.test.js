@@ -7,6 +7,7 @@ import {
   buildVerificationPanelPayload,
   publishSkawVerificationPanel,
   handleVerificationButton,
+  handleVerificationModal,
   normalizeICNameKey,
   registerSkawMember,
   resetSkawVerification,
@@ -110,7 +111,62 @@ test('new members receive the Unverified role when SKAW verification is enabled'
   assert.equal(member.roles.cache.has(fixture.verifiedRole.id), false);
 });
 
-test('buttons on a stale verification panel are rejected privately', async () => {
+test('Register button opens its modal before any PostgreSQL read', async () => {
+  const fixture = createFixture();
+  fixture.client.db.get = async () => { throw new Error('Register button must not wait for PostgreSQL.'); };
+  let modalPayload = null;
+  const interaction = {
+    inGuild: () => true,
+    guild: fixture.guild,
+    guildId: fixture.guild.id,
+    channelId: '77777777777777777',
+    message: { id: '88888888888888888' },
+    user: { id: '11111111111111111' },
+    async showModal(payload) { modalPayload = payload; },
+  };
+
+  await handleVerificationButton(interaction, fixture.client, 'register');
+
+  const modal = modalPayload.toJSON();
+  assert.equal(modal.custom_id, 'skaw_vf_registration:' + fixture.guild.id + ':77777777777777777:88888888888888888');
+  assert.equal(modal.title, 'Formulir Registrasi / Perbarui Nama IC');
+});
+
+test('Guide button defers before reading PostgreSQL and returns the guide', async () => {
+  const fixture = createFixture();
+  fixture.store.set('guild:' + fixture.guild.id + ':skaw_verification:config:v1', {
+    enabled: true,
+    verifiedRoleId: fixture.verifiedRole.id,
+    unverifiedRoleId: fixture.unverifiedRole.id,
+    verificationChannelId: '77777777777777777',
+    panelMessageId: '88888888888888888',
+    guideText: 'Panduan pengujian.',
+  });
+  let deferred = false;
+  let replyPayload = null;
+  const dbGet = fixture.client.db.get.bind(fixture.client.db);
+  fixture.client.db.get = async (...args) => {
+    assert.equal(deferred, true, 'Guide must be acknowledged before database access.');
+    return dbGet(...args);
+  };
+  const interaction = {
+    inGuild: () => true,
+    guild: fixture.guild,
+    guildId: fixture.guild.id,
+    channelId: '77777777777777777',
+    message: { id: '88888888888888888' },
+    user: { id: '11111111111111111' },
+    async deferReply(payload) { deferred = true; assert.equal(payload.flags, 64); },
+    async editReply(payload) { replyPayload = payload; },
+  };
+
+  await handleVerificationButton(interaction, fixture.client, 'guide');
+
+  assert.equal(deferred, true);
+  assert.equal(replyPayload.embeds[0].data.description, 'Panduan pengujian.');
+});
+
+test('registration modal rejects stale panel context after acknowledging', async () => {
   const fixture = createFixture();
   fixture.store.set('guild:' + fixture.guild.id + ':skaw_verification:config:v1', {
     enabled: true,
@@ -119,22 +175,24 @@ test('buttons on a stale verification panel are rejected privately', async () =>
     verificationChannelId: '77777777777777777',
     panelMessageId: '88888888888888888',
   });
+  let deferred = false;
   let replyPayload = null;
+  fixture.guild.members.fetch = async () => { throw new Error('Stale modal must not fetch the member.'); };
   const interaction = {
-    inGuild: () => true,
     guild: fixture.guild,
     guildId: fixture.guild.id,
-    channelId: '77777777777777777',
-    message: { id: '99999999999999999' },
     user: { id: '11111111111111111' },
-    async reply(payload) { replyPayload = payload; },
-    async showModal() { throw new Error('A stale panel must not open the registration modal.'); },
+    fields: { getTextInputValue: () => 'Vicenzo' },
+    async deferReply(payload) { deferred = true; assert.equal(payload.flags, 64); },
+    async editReply(payload) { replyPayload = payload; },
   };
 
-  await handleVerificationButton(interaction, fixture.client, 'register');
+  await handleVerificationModal(interaction, fixture.client, [
+    fixture.guild.id, '77777777777777777', '99999999999999999',
+  ]);
 
+  assert.equal(deferred, true);
   assert.match(replyPayload.content, /sudah tidak aktif/);
-  assert.equal(replyPayload.flags, 64);
 });
 
 test('verification panel exposes unique persistent Register and Guide buttons', () => {

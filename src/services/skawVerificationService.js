@@ -21,6 +21,9 @@ export const DEFAULT_VERIFICATION_GUIDE = [
   'Kamu dapat mengirim ulang formulir untuk memperbarui nama IC.',
 ].join('\n');
 
+const DEFAULT_PANEL_DESCRIPTION = "Welcome to **SKAW Group**.\n\nYour journey with SKAW starts here. Complete the verification process to unlock access to our community.\n\nPress **Register** to continue or **Panduan** to learn more.";
+const LEGACY_DEFAULT_PANEL_DESCRIPTION = "Welcome to **SKAW Group**. Complete the registration below to verify your membership and access the community.";
+
 export const DEFAULT_VERIFICATION_CONFIG = Object.freeze({
   enabled: false,
   verificationChannelId: null,
@@ -30,7 +33,7 @@ export const DEFAULT_VERIFICATION_CONFIG = Object.freeze({
   unverifiedRoleId: null,
   logChannelId: null,
   panelTitle: 'SKAW Group — Member Verification',
-  panelDescription: 'Welcome to **SKAW Group**. Complete the registration below to verify your membership and access the community.',
+  panelDescription: DEFAULT_PANEL_DESCRIPTION,
   guideText: DEFAULT_VERIFICATION_GUIDE,
   imageUrl: null,
   footerText: 'RIGHT SOLUTION, GREAT QUALITY · SKAW VERIFICATION',
@@ -85,6 +88,10 @@ export async function getSkawVerificationConfig(client, guildId) {
   requirePersistentDatabase(client);
   const raw = await client.db.get(CONFIG_KEY(guildId), null);
   const config = { ...DEFAULT_VERIFICATION_CONFIG, ...(raw && typeof raw === 'object' ? raw : {}) };
+  // Upgrade only the former built-in copy; preserve any custom description set by an admin.
+  if (config.panelDescription === LEGACY_DEFAULT_PANEL_DESCRIPTION) {
+    config.panelDescription = DEFAULT_PANEL_DESCRIPTION;
+  }
   config.verifiedRoleIds = Array.isArray(config.verifiedRoleIds) && config.verifiedRoleIds.length
     ? [...new Set(config.verifiedRoleIds.map(String))]
     : (config.verifiedRoleId ? [String(config.verifiedRoleId)] : []);
@@ -332,16 +339,7 @@ export function buildVerificationPanelPayload(config) {
     .setColor(parsedColor)
     .setAuthor({ name: 'SKAW GROUP · COMMUNITY' })
     .setTitle(config.panelTitle || DEFAULT_VERIFICATION_CONFIG.panelTitle)
-    .setDescription([
-      config.panelDescription || DEFAULT_VERIFICATION_CONFIG.panelDescription,
-      '',
-      '**Registration Steps**',
-      '1. Tekan tombol Register.',
-      '2. Isi nama depan dan nama belakang karakter IC.',
-      '3. Submit formulir untuk menyelesaikan verifikasi.',
-      '',
-      'Pastikan data yang kamu masukkan benar. Nickname Discord akan diperbarui otomatis.',
-    ].join('\n'))
+    .setDescription(config.panelDescription || DEFAULT_VERIFICATION_CONFIG.panelDescription)
     .setFooter({
       text: config.footerText || DEFAULT_VERIFICATION_CONFIG.footerText,
       ...(config.footerIconUrl ? { iconURL: config.footerIconUrl } : {}),

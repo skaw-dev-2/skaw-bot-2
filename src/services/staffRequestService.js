@@ -17,57 +17,55 @@ const REQUEST_TYPES = Object.freeze({
   resignation: { code: 'RES', label: 'Resignation', title: 'RESIGNATION FORM', color: 0x2563eb },
 });
 const REQUEST_STATUSES = new Set(['pending', 'approved', 'rejected', 'delivery_failed']);
-const MONTH_NAMES_ID = Object.freeze([
-  'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
-  'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember',
-]);
 const MONTH_SHORT_NAMES_ID = Object.freeze([
   'Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun',
   'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des',
 ]);
 
-function getJakartaYearMonth(date = new Date()) {
+function getJakartaCalendarDate(date = new Date()) {
   const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit',
+    timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit',
   }).formatToParts(date);
   return {
     year: Number(parts.find(part => part.type === 'year')?.value),
     month: Number(parts.find(part => part.type === 'month')?.value),
+    day: Number(parts.find(part => part.type === 'day')?.value),
   };
 }
 
-export function buildAbsenceMonthOptions(now = new Date()) {
-  const current = getJakartaYearMonth(now);
+export function buildAbsenceDateOptions(now = new Date()) {
+  const current = getJakartaCalendarDate(now);
   return Array.from({ length: 25 }, (_, index) => {
-    const date = new Date(Date.UTC(current.year, current.month - 1 + index, 1));
+    const date = new Date(Date.UTC(current.year, current.month - 1, current.day + index, 12));
     const year = date.getUTCFullYear();
     const month = date.getUTCMonth() + 1;
+    const day = date.getUTCDate();
     return {
-      label: MONTH_NAMES_ID[month - 1] + ' ' + year,
-      value: year + '-' + String(month).padStart(2, '0'),
+      label: new Intl.DateTimeFormat('id-ID', {
+        weekday: 'long', day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC',
+      }).format(date),
+      value: year + '-' + String(month).padStart(2, '0') + '-' + String(day).padStart(2, '0'),
     };
   });
 }
 
-function parseAbsenceDate(monthYear, day, label) {
-  const match = String(monthYear || '').match(/^(\d{4})-(\d{2})$/);
-  const dayNumber = Number(day);
-  if (!match || !Number.isInteger(dayNumber) || dayNumber < 1 || dayNumber > 31) {
-    throw new Error(label + ' wajib dipilih dengan benar.');
-  }
+function parseAbsenceDate(value, label) {
+  const match = String(value || '').match(/^(\\d{4})-(\\d{2})-(\\d{2})$/);
+  if (!match) throw new Error(label + ' wajib dipilih dengan benar.');
   const year = Number(match[1]);
   const month = Number(match[2]);
-  if (month < 1 || month > 12) throw new Error(label + ' memiliki bulan yang tidak valid.');
-  const date = new Date(Date.UTC(year, month - 1, dayNumber, 12));
-  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== dayNumber) {
-    throw new Error(label + ' tidak valid untuk bulan yang dipilih. Silakan pilih tanggal yang sesuai.');
+  const day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day, 12));
+  if (month < 1 || month > 12 || date.getUTCFullYear() !== year
+      || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) {
+    throw new Error(label + ' tidak valid. Silakan pilih tanggal dari daftar.');
   }
   return date;
 }
 
-export function buildAbsenceDateRange(startMonth, startDay, endMonth, endDay) {
-  const start = parseAbsenceDate(startMonth, startDay, 'Tanggal mulai');
-  const end = parseAbsenceDate(endMonth, endDay, 'Tanggal selesai');
+export function buildAbsenceDateRange(startValue, endValue) {
+  const start = parseAbsenceDate(startValue, 'Tanggal mulai');
+  const end = parseAbsenceDate(endValue, 'Tanggal selesai');
   if (start.getTime() > end.getTime()) {
     throw new Error('Tanggal mulai tidak boleh setelah tanggal selesai.');
   }
@@ -485,40 +483,24 @@ function buildRequestModal(userId, type) {
     .setTitle(template.label + ' Request');
 
   if (type === 'absence') {
-    const monthOptions = buildAbsenceMonthOptions();
-    const dayOptions = Array.from({ length: 31 }, (_, index) => {
-      const day = index + 1;
-      const value = String(day).padStart(2, '0');
-      return { label: value, value };
-    });
-    const monthSelect = customId => new StringSelectMenuBuilder()
+    const dateOptions = buildAbsenceDateOptions();
+    const dateSelect = (customId, placeholder) => new StringSelectMenuBuilder()
       .setCustomId(customId)
-      .setPlaceholder('Pilih bulan dan tahun')
+      .setPlaceholder(placeholder)
       .setMinValues(1)
       .setMaxValues(1)
       .setRequired(true)
-      .addOptions(monthOptions);
-    const daySelect = customId => new StringSelectMenuBuilder()
-      .setCustomId(customId)
-      .setPlaceholder('Pilih tanggal')
-      .setMinValues(1)
-      .setMaxValues(1)
-      .setRequired(true)
-      .addOptions(dayOptions);
+      .addOptions(dateOptions);
 
     modal.addLabelComponents(
       new LabelBuilder()
-        .setLabel('Tanggal Mulai — Bulan & Tahun')
-        .setStringSelectMenuComponent(monthSelect('start_month')),
+        .setLabel('Tanggal Mulai')
+        .setDescription('Pilih tanggal mulai Absence.')
+        .setStringSelectMenuComponent(dateSelect('start_date', 'Pilih tanggal mulai')),
       new LabelBuilder()
-        .setLabel('Tanggal Mulai — Tanggal')
-        .setStringSelectMenuComponent(daySelect('start_day')),
-      new LabelBuilder()
-        .setLabel('Tanggal Selesai — Bulan & Tahun')
-        .setStringSelectMenuComponent(monthSelect('end_month')),
-      new LabelBuilder()
-        .setLabel('Tanggal Selesai — Tanggal')
-        .setStringSelectMenuComponent(daySelect('end_day')),
+        .setLabel('Tanggal Selesai')
+        .setDescription('Pilih tanggal terakhir Absence.')
+        .setStringSelectMenuComponent(dateSelect('end_date', 'Pilih tanggal selesai')),
       new LabelBuilder()
         .setLabel('Reason')
         .setTextInputComponent(
@@ -722,10 +704,8 @@ async function handleRequestForm(interaction, client) {
     const input = {
       dateRange: type === 'absence'
         ? buildAbsenceDateRange(
-          interaction.fields.getStringSelectValues('start_month')[0],
-          interaction.fields.getStringSelectValues('start_day')[0],
-          interaction.fields.getStringSelectValues('end_month')[0],
-          interaction.fields.getStringSelectValues('end_day')[0],
+          interaction.fields.getStringSelectValues('start_date')[0],
+          interaction.fields.getStringSelectValues('end_date')[0],
         )
         : null,
       reason: interaction.fields.getTextInputValue('reason'),

@@ -16,11 +16,20 @@ export const tableStatements = [
     `CREATE TABLE IF NOT EXISTS skaw_staff_request_settings (
         guild_id VARCHAR(20) PRIMARY KEY,
         request_channel_id VARCHAR(20),
+        absence_channel_id VARCHAR(20),
+        resignation_channel_id VARCHAR(20),
         management_role_ids JSONB NOT NULL DEFAULT '["1414623053471547474"]'::jsonb,
         updated_by VARCHAR(20),
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )`,
+    `ALTER TABLE skaw_staff_request_settings ADD COLUMN IF NOT EXISTS absence_channel_id VARCHAR(20)`,
+    `ALTER TABLE skaw_staff_request_settings ADD COLUMN IF NOT EXISTS resignation_channel_id VARCHAR(20)`,
+    `UPDATE skaw_staff_request_settings
+       SET absence_channel_id = COALESCE(absence_channel_id, request_channel_id),
+           resignation_channel_id = COALESCE(resignation_channel_id, request_channel_id)
+       WHERE request_channel_id IS NOT NULL
+         AND (absence_channel_id IS NULL OR resignation_channel_id IS NULL)`,
 
     `CREATE TABLE IF NOT EXISTS skaw_staff_requests (
         id BIGSERIAL PRIMARY KEY,

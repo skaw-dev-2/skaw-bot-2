@@ -334,8 +334,12 @@ export function buildStaffRequestEmbed(request) {
 }
 
 export function buildStaffRequestDecisionRows(request) {
+  const template = REQUEST_TYPES[request.type];
+  if (!template) throw new Error('Jenis pengajuan tidak dikenal.');
+
+  let decisionRow;
   if (request.status === 'pending') {
-    return [new ActionRowBuilder().addComponents(
+    decisionRow = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId('skaw_sr_decide|' + request.requestId + '|approve')
         .setLabel('Approve')
@@ -346,16 +350,27 @@ export function buildStaffRequestDecisionRows(request) {
         .setLabel('Reject')
         .setEmoji('✖️')
         .setStyle(ButtonStyle.Danger),
-    )];
+    );
+  } else {
+    const label = request.status === 'approved' ? 'Approved' : request.status === 'rejected' ? 'Rejected' : 'Unavailable';
+    decisionRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('skaw_sr_decision_complete|' + request.requestId)
+        .setLabel(label)
+        .setStyle(request.status === 'approved' ? ButtonStyle.Success : ButtonStyle.Danger)
+        .setDisabled(true),
+    );
   }
-  const label = request.status === 'approved' ? 'Approved' : request.status === 'rejected' ? 'Rejected' : 'Unavailable';
-  return [new ActionRowBuilder().addComponents(
+
+  const submitRow = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
-      .setCustomId('skaw_sr_decision_complete|' + request.requestId)
-      .setLabel(label)
-      .setStyle(request.status === 'approved' ? ButtonStyle.Success : ButtonStyle.Danger)
-      .setDisabled(true),
-  )];
+      .setCustomId('skaw_sr_submit|' + request.requestId)
+      .setLabel(template.label === 'Absence' ? 'Submit Absence' : 'Submit Resignation')
+      .setEmoji('📝')
+      .setStyle(ButtonStyle.Primary),
+  );
+
+  return [decisionRow, submitRow];
 }
 
 export function buildStaffRequestDecisionStatement(requestId, guildId, status, reviewerId, reason = '') {
@@ -629,6 +644,41 @@ async function handleSetupComponent(interaction, client) {
   return null;
 }
 
+async function handleSubmitButton(interaction, client) {
+  const [, requestId] = String(interaction.customId || '').split('|');
+  if (!interaction.guild || !requestId) {
+    return interaction.reply({ content: 'Staff Request submit button tidak valid.', flags: MessageFlags.Ephemeral });
+  }
+
+  const request = await getStaffRequestById(client, interaction.guildId, requestId);
+  if (!request) {
+    return interaction.reply({ content: 'Pengajuan tidak ditemukan atau sudah tidak tersedia.', flags: MessageFlags.Ephemeral });
+  }
+
+  if (
+    String(interaction.message?.id || '') !== String(request.messageId || '')
+    || String(interaction.channelId || '') !== String(request.channelId || '')
+    || String(interaction.message?.author?.id || '') !== String(client.user?.id || '')
+  ) {
+    return interaction.reply({
+      content: 'Tombol ini tidak terhubung dengan pesan pengajuan SKAW yang valid.',
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+
+  const member = interaction.member?.roles?.cache
+    ? interaction.member
+    : await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
+  if (!member?.roles?.cache?.has(STAFF_REQUEST_BASE_ROLE_ID)) {
+    return interaction.reply({
+      content: 'Fitur ini hanya dapat digunakan oleh anggota dengan role Company Staff | SKAW.',
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+
+  return interaction.showModal(buildRequestModal(interaction.user.id, request.type));
+}
+
 async function handleDecisionButton(interaction, client) {
   const [, requestId, action] = String(interaction.customId || '').split('|');
   if (!interaction.guild || !requestId || !['approve', 'reject'].includes(action)) {
@@ -712,6 +762,9 @@ export async function handleStaffRequestInteraction(interaction, client) {
     if ((interaction.isChannelSelectMenu?.() || interaction.isRoleSelectMenu?.() || interaction.isButton?.())
         && id.startsWith('skaw_sr_setup_')) {
       return handleSetupComponent(interaction, client);
+    }
+    if (interaction.isButton?.() && id.startsWith('skaw_sr_submit|')) {
+      return handleSubmitButton(interaction, client);
     }
     if (interaction.isButton?.() && id.startsWith('skaw_sr_decide|')) {
       return handleDecisionButton(interaction, client);

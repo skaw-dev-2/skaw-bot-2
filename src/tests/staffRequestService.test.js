@@ -100,7 +100,7 @@ test('absence embed includes the applicant Discord username beside the display n
   }).toJSON();
 
   assert.match(embed.description, /ABSENCE FORM/);
-  assert.match(embed.description, /Christopher Marquez \(@Castillo_DePablo\)/);
+  assert.ok(embed.description.includes('Christopher Marquez (@Castillo' + String.fromCharCode(92) + '_DePablo)'));
   assert.match(embed.description, /<@&1414623229288513586>/);
   assert.match(embed.description, /03 Nov 2026 - 13 Nov 2026/);
   assert.match(embed.description, /Banyak kerjaan OC/);
@@ -123,7 +123,7 @@ test('resignation embed includes optional note only when provided', () => {
   }).toJSON();
 
   assert.match(withNote.description, /RESIGNATION FORM/);
-  assert.match(withNote.description, /Joaquin Quessham \(@joaquin_quessham\)/);
+  assert.ok(withNote.description.includes('Joaquin Quessham (@joaquin' + String.fromCharCode(92) + '_quessham)'));
   assert.match(withNote.description, /Sudah fokus RL/);
   assert.match(withNote.description, /Terima kasih sudah menerima saya/);
   assert.match(withNote.fields.find(field => field.name === 'Approval Status').value, /Approved/);

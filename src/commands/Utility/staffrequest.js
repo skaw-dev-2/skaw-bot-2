@@ -1,7 +1,7 @@
 import { MessageFlags, SlashCommandBuilder } from 'discord.js';
 import {
   buildAbsenceDatePickerPayload,
-  buildRequestModal,
+  openStaffRequestModal,
   canSubmitStaffRequest,
   getStaffRequestSettings,
   openStaffRequestSetup,
@@ -53,7 +53,7 @@ export default {
         });
       }
       if (subcommand === 'resign') {
-        return interaction.showModal(buildRequestModal(interaction.user.id, 'resignation'));
+        return openStaffRequestModal(interaction, client, 'resignation');
       }
 
       return interaction.reply({

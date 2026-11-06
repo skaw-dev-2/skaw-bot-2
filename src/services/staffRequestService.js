@@ -44,6 +44,12 @@ function parseRoleIds(value) {
   return [];
 }
 
+export function canSubmitStaffRequest(memberRoleIds = [], managementRoleIds = []) {
+  const owned = new Set([...memberRoleIds].map(String));
+  return owned.has(STAFF_REQUEST_BASE_ROLE_ID)
+    || managementRoleIds.some(roleId => owned.has(String(roleId)));
+}
+
 function formatRequestId(type) {
   const template = REQUEST_TYPES[type];
   if (!template) throw new Error('Jenis pengajuan tidak dikenal.');
@@ -75,8 +81,11 @@ function mapStaffRequest(row) {
   };
 }
 
-export function resolveDivisionRoleFromIds(memberRoleIds = [], registryRoles = []) {
+export function resolveDivisionRoleFromIds(memberRoleIds = [], registryRoles = [], managementRoleIds = []) {
   const owned = new Set([...memberRoleIds].map(String));
+  if (managementRoleIds.some(roleId => owned.has(String(roleId)))) {
+    return { id: null, name: 'Management', management: true };
+  }
   const matches = new Map();
 
   for (const [id, metadata] of Object.entries(SKAW_EMPLOYEE_ROLE_CATALOG)) {
@@ -122,9 +131,13 @@ export function resolveDivisionRoleFromIds(memberRoleIds = [], registryRoles = [
   return divisions[0];
 }
 
-async function getMemberDivision(client, guild, member) {
+async function getMemberDivision(client, guild, member, managementRoleIds = []) {
+  const memberRoleIds = [...member.roles.cache.keys()];
+  if (managementRoleIds.some(roleId => member.roles.cache.has(String(roleId)))) {
+    return { id: null, name: 'Management' };
+  }
   const registry = await getEmployeeRoleRegistry(client, guild.id);
-  const division = resolveDivisionRoleFromIds([...member.roles.cache.keys()], registry.roles);
+  const division = resolveDivisionRoleFromIds(memberRoleIds, registry.roles, managementRoleIds);
   if (!division) {
     throw new Error('Division Role SKAW belum ditemukan pada akun kamu. Hubungi Management untuk memperbarui role divisi.');
   }
@@ -142,27 +155,35 @@ export async function getStaffRequestSettings(client, guildId) {
     [String(guildId), JSON.stringify(DEFAULT_STAFF_REQUEST_MANAGEMENT_ROLE_IDS)],
   );
   const result = await pool.query(
-    'SELECT guild_id, request_channel_id, management_role_ids, updated_by, updated_at FROM skaw_staff_request_settings WHERE guild_id=$1 LIMIT 1',
+    'SELECT guild_id, request_channel_id, absence_channel_id, resignation_channel_id, management_role_ids, updated_by, updated_at FROM skaw_staff_request_settings WHERE guild_id=$1 LIMIT 1',
     [String(guildId)],
   );
   const row = result.rows[0];
+  const legacyChannelId = row?.request_channel_id ? String(row.request_channel_id) : null;
   const roleIds = parseRoleIds(row?.management_role_ids);
   return {
     guildId: String(guildId),
-    channelId: row?.request_channel_id ? String(row.request_channel_id) : null,
+    absenceChannelId: row?.absence_channel_id ? String(row.absence_channel_id) : legacyChannelId,
+    resignationChannelId: row?.resignation_channel_id ? String(row.resignation_channel_id) : legacyChannelId,
     managementRoleIds: roleIds.length ? roleIds : [...DEFAULT_STAFF_REQUEST_MANAGEMENT_ROLE_IDS],
     updatedBy: row?.updated_by ? String(row.updated_by) : null,
     updatedAt: row?.updated_at || null,
   };
 }
 
-export async function setStaffRequestChannel(client, guildId, channelId, actorId) {
+export async function setStaffRequestChannel(client, guildId, requestType, channelId, actorId) {
+  const columnByType = {
+    absence: 'absence_channel_id',
+    resignation: 'resignation_channel_id',
+  };
+  const column = columnByType[String(requestType)];
+  if (!column) throw new Error('Jenis Staff Request untuk channel tidak valid.');
   const id = String(channelId || '');
   if (!SNOWFLAKE_RE.test(id)) throw new Error('Request channel ID tidak valid.');
   const pool = getPool(client);
   await getStaffRequestSettings(client, guildId);
   await pool.query(
-    'UPDATE skaw_staff_request_settings SET request_channel_id=$2, updated_by=$3, updated_at=CURRENT_TIMESTAMP WHERE guild_id=$1',
+    'UPDATE skaw_staff_request_settings SET ' + column + '=$2, updated_by=$3, updated_at=CURRENT_TIMESTAMP WHERE guild_id=$1',
     [String(guildId), id, String(actorId)],
   );
   return getStaffRequestSettings(client, guildId);
@@ -188,27 +209,38 @@ export function buildStaffRequestSetupPayload(settings, notice = null) {
     .setColor(0x1a9ef3)
     .setTitle('SKAW GROUP · STAFF REQUEST SETTINGS')
     .setDescription([
-      'Configure the destination channel and Management roles for employee absence and resignation requests.',
+      'Configure separate Absence and Resignation channels plus Management approval roles.',
       '',
-      '**Request Channel**',
-      settings.channelId ? '<#' + settings.channelId + '>' : 'Not configured',
+      '**Absence Channel**',
+      settings.absenceChannelId ? '<#' + settings.absenceChannelId + '>' : 'Not configured',
+      '',
+      '**Resignation Channel**',
+      settings.resignationChannelId ? '<#' + settings.resignationChannelId + '>' : 'Not configured',
       '',
       '**Management Approval Roles**',
       settings.managementRoleIds.length ? settings.managementRoleIds.map(id => '<@&' + id + '>').join(', ') : 'Not configured',
       '',
-      '-# Only members with the Company Staff role can submit requests.',
+      '-# Company Staff and configured Management roles can submit Absence and Resignation requests.',
       '-# Only configured Management roles and server administrators can approve or reject.',
     ].join('\n'))
     .setFooter({ text: 'SKAW GROUP · PEOPLE OPERATIONS' });
   if (notice) embed.addFields({ name: 'Update', value: String(notice).slice(0, 900) });
 
-  const channelSelect = new ChannelSelectMenuBuilder()
-    .setCustomId('skaw_sr_setup_channel')
-    .setPlaceholder('Select absence & resignation request channel')
+  const absenceChannelSelect = new ChannelSelectMenuBuilder()
+    .setCustomId('skaw_sr_setup_absence_channel')
+    .setPlaceholder('Select Absence request channel')
     .setChannelTypes(ChannelType.GuildText)
     .setMinValues(1)
     .setMaxValues(1);
-  if (settings.channelId) channelSelect.setDefaultChannels(settings.channelId);
+  if (settings.absenceChannelId) absenceChannelSelect.setDefaultChannels(settings.absenceChannelId);
+
+  const resignationChannelSelect = new ChannelSelectMenuBuilder()
+    .setCustomId('skaw_sr_setup_resignation_channel')
+    .setPlaceholder('Select Resignation request channel')
+    .setChannelTypes(ChannelType.GuildText)
+    .setMinValues(1)
+    .setMaxValues(1);
+  if (settings.resignationChannelId) resignationChannelSelect.setDefaultChannels(settings.resignationChannelId);
 
   const roleSelect = new RoleSelectMenuBuilder()
     .setCustomId('skaw_sr_setup_roles')
@@ -220,7 +252,8 @@ export function buildStaffRequestSetupPayload(settings, notice = null) {
   return {
     embeds: [embed],
     components: [
-      new ActionRowBuilder().addComponents(channelSelect),
+      new ActionRowBuilder().addComponents(absenceChannelSelect),
+      new ActionRowBuilder().addComponents(resignationChannelSelect),
       new ActionRowBuilder().addComponents(roleSelect),
       new ActionRowBuilder().addComponents(
         new ButtonBuilder()
@@ -456,14 +489,20 @@ async function submitStaffRequest(client, guild, interaction, type, input) {
   if (!member?.roles?.cache?.has(STAFF_REQUEST_BASE_ROLE_ID)) {
     throw new Error('Fitur ini hanya dapat digunakan oleh anggota dengan role Company Staff | SKAW.');
   }
-  const division = await getMemberDivision(client, guild, member);
   const settings = await getStaffRequestSettings(client, guild.id);
-  if (!settings.channelId) {
-    throw new Error('Staff Request belum dikonfigurasi. Hubungi Management untuk mengatur request channel.');
+  if (!canSubmitStaffRequest([...member.roles.cache.keys()], settings.managementRoleIds)) {
+    throw new Error('Fitur ini hanya dapat digunakan oleh anggota Company Staff atau Management SKAW.');
+  }
+  const division = await getMemberDivision(client, guild, member, settings.managementRoleIds);
+  const channelId = type === 'absence' ? settings.absenceChannelId : settings.resignationChannelId;
+  if (!channelId) {
+    throw new Error(
+      'Channel ' + REQUEST_TYPES[type].label + ' belum dikonfigurasi. Hubungi Management untuk mengatur channel Staff Request.',
+    );
   }
 
-  const channel = guild.channels.cache.get(settings.channelId)
-    || await guild.channels.fetch(settings.channelId).catch(() => null);
+  const channel = guild.channels.cache.get(channelId)
+    || await guild.channels.fetch(channelId).catch(() => null);
   if (!channel?.isTextBased?.() || channel.isDMBased?.()) {
     throw new Error('Staff Request channel tidak ditemukan atau bukan text channel. Hubungi Management.');
   }
@@ -615,11 +654,27 @@ async function handleSetupComponent(interaction, client) {
     return interaction.reply({ content: 'Akses ditolak. Permission Manage Server diperlukan.', flags: MessageFlags.Ephemeral });
   }
   const id = String(interaction.customId || '');
-  if (interaction.isChannelSelectMenu?.() && id === 'skaw_sr_setup_channel') {
+  if (interaction.isChannelSelectMenu?.() && (
+    id === 'skaw_sr_setup_absence_channel'
+    || id === 'skaw_sr_setup_resignation_channel'
+    || id === 'skaw_sr_setup_channel'
+  )) {
     await interaction.deferUpdate();
-    const settings = await setStaffRequestChannel(client, interaction.guildId, interaction.values[0], interaction.user.id);
+    let settings;
+    if (id === 'skaw_sr_setup_channel') {
+      settings = await setStaffRequestChannel(client, interaction.guildId, 'absence', interaction.values[0], interaction.user.id);
+      settings = await setStaffRequestChannel(client, interaction.guildId, 'resignation', interaction.values[0], interaction.user.id);
+    } else {
+      const requestType = id === 'skaw_sr_setup_absence_channel' ? 'absence' : 'resignation';
+      settings = await setStaffRequestChannel(client, interaction.guildId, requestType, interaction.values[0], interaction.user.id);
+    }
     return interaction.editReply({
-      ...buildStaffRequestSetupPayload(settings, 'Request channel berhasil diperbarui.'),
+      ...buildStaffRequestSetupPayload(
+        settings,
+        id === 'skaw_sr_setup_channel'
+          ? 'Legacy request channel berhasil diterapkan ke Absence dan Resignation.'
+          : (id === 'skaw_sr_setup_absence_channel' ? 'Absence channel' : 'Resignation channel') + ' berhasil diperbarui.',
+      ),
       allowedMentions: { parse: [] },
     });
   }
@@ -669,9 +724,10 @@ async function handleSubmitButton(interaction, client) {
   const member = interaction.member?.roles?.cache
     ? interaction.member
     : await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
-  if (!member?.roles?.cache?.has(STAFF_REQUEST_BASE_ROLE_ID)) {
+  const settings = await getStaffRequestSettings(client, interaction.guildId);
+  if (!member?.roles?.cache || !canSubmitStaffRequest([...member.roles.cache.keys()], settings.managementRoleIds)) {
     return interaction.reply({
-      content: 'Fitur ini hanya dapat digunakan oleh anggota dengan role Company Staff | SKAW.',
+      content: 'Fitur ini hanya dapat digunakan oleh anggota Company Staff atau Management SKAW.',
       flags: MessageFlags.Ephemeral,
     });
   }

@@ -50,7 +50,7 @@ export function buildAbsenceMonthOptions(now = new Date()) {
 }
 
 function parseAbsenceDate(monthYear, day, label) {
-  const match = String(monthYear || '').match(/^(\\d{4})-(\\d{2})$/);
+  const match = String(monthYear || '').match(/^(\d{4})-(\d{2})$/);
   const dayNumber = Number(day);
   if (!match || !Number.isInteger(dayNumber) || dayNumber < 1 || dayNumber > 31) {
     throw new Error(label + ' wajib dipilih dengan benar.');

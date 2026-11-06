@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import {
   ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelSelectMenuBuilder, ChannelType,
-  EmbedBuilder, escapeMarkdown, MessageFlags, ModalBuilder, PermissionFlagsBits, RoleSelectMenuBuilder,
-  TextInputBuilder, TextInputStyle,
+  EmbedBuilder, escapeMarkdown, LabelBuilder, MessageFlags, ModalBuilder, PermissionFlagsBits,
+  RoleSelectMenuBuilder, StringSelectMenuBuilder, TextInputBuilder, TextInputStyle,
 } from 'discord.js';
 import { SKAW_EMPLOYEE_ROLE_CATALOG } from './employeeLogsAutoRoleService.js';
 import { getEmployeeRoleRegistry, BASE_EMPLOYEE_ROLE } from './employeeRoleRegistryService.js';
@@ -17,6 +17,65 @@ const REQUEST_TYPES = Object.freeze({
   resignation: { code: 'RES', label: 'Resignation', title: 'RESIGNATION FORM', color: 0x2563eb },
 });
 const REQUEST_STATUSES = new Set(['pending', 'approved', 'rejected', 'delivery_failed']);
+const MONTH_NAMES_ID = Object.freeze([
+  'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
+  'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember',
+]);
+const MONTH_SHORT_NAMES_ID = Object.freeze([
+  'Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun',
+  'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des',
+]);
+
+function getJakartaYearMonth(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit',
+  }).formatToParts(date);
+  return {
+    year: Number(parts.find(part => part.type === 'year')?.value),
+    month: Number(parts.find(part => part.type === 'month')?.value),
+  };
+}
+
+export function buildAbsenceMonthOptions(now = new Date()) {
+  const current = getJakartaYearMonth(now);
+  return Array.from({ length: 25 }, (_, index) => {
+    const date = new Date(Date.UTC(current.year, current.month - 1 + index, 1));
+    const year = date.getUTCFullYear();
+    const month = date.getUTCMonth() + 1;
+    return {
+      label: MONTH_NAMES_ID[month - 1] + ' ' + year,
+      value: year + '-' + String(month).padStart(2, '0'),
+    };
+  });
+}
+
+function parseAbsenceDate(monthYear, day, label) {
+  const match = String(monthYear || '').match(/^(\\d{4})-(\\d{2})$/);
+  const dayNumber = Number(day);
+  if (!match || !Number.isInteger(dayNumber) || dayNumber < 1 || dayNumber > 31) {
+    throw new Error(label + ' wajib dipilih dengan benar.');
+  }
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  if (month < 1 || month > 12) throw new Error(label + ' memiliki bulan yang tidak valid.');
+  const date = new Date(Date.UTC(year, month - 1, dayNumber, 12));
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== dayNumber) {
+    throw new Error(label + ' tidak valid untuk bulan yang dipilih. Silakan pilih tanggal yang sesuai.');
+  }
+  return date;
+}
+
+export function buildAbsenceDateRange(startMonth, startDay, endMonth, endDay) {
+  const start = parseAbsenceDate(startMonth, startDay, 'Tanggal mulai');
+  const end = parseAbsenceDate(endMonth, endDay, 'Tanggal selesai');
+  if (start.getTime() > end.getTime()) {
+    throw new Error('Tanggal mulai tidak boleh setelah tanggal selesai.');
+  }
+  const format = date => String(date.getUTCDate()).padStart(2, '0')
+    + ' ' + MONTH_SHORT_NAMES_ID[date.getUTCMonth()]
+    + ' ' + date.getUTCFullYear();
+  return format(start) + ' - ' + format(end);
+}
 
 function getPool(client) {
   const status = client?.db?.getStatus?.();
@@ -65,6 +124,7 @@ function mapStaffRequest(row) {
     type: row.request_type,
     applicantId: String(row.applicant_id),
     applicantName: row.applicant_name,
+    applicantUsername: row.applicant_username || null,
     divisionRoleId: row.division_role_id ? String(row.division_role_id) : null,
     divisionName: row.division_name || null,
     dateRange: row.date_range || null,
@@ -298,6 +358,9 @@ export function buildStaffRequestEmbed(request) {
   if (!REQUEST_STATUSES.has(request.status || 'pending')) throw new Error('Status pengajuan tidak dikenal.');
 
   const cleanName = escapeMarkdown(cleanText(request.applicantName, 'Name', { maxLength: 100 }));
+  const cleanUsername = request.applicantUsername
+    ? escapeMarkdown(cleanText(request.applicantUsername, 'Discord username', { maxLength: 100 }))
+    : null;
   const cleanReason = escapeMarkdown(cleanText(request.reason, 'Reason', { maxLength: 900 }));
   const cleanDivision = request.divisionRoleId
     ? '<@&' + String(request.divisionRoleId) + '>'
@@ -309,7 +372,7 @@ export function buildStaffRequestEmbed(request) {
   const lines = [
     '__**' + template.title + '**__',
     '',
-    '> **Name :** ' + cleanName,
+    '> **Name :** ' + cleanName + (cleanUsername ? ' (@' + cleanUsername + ')' : ''),
     '> **Division :** ' + cleanDivision,
   ];
   if (request.type === 'absence') {
@@ -422,25 +485,50 @@ function buildRequestModal(userId, type) {
     .setTitle(template.label + ' Request');
 
   if (type === 'absence') {
-    modal.addComponents(
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId('date_range')
-          .setLabel('Date / Durasi Absence')
-          .setPlaceholder('Contoh: 3 Nov - 13 Nov 2026')
-          .setStyle(TextInputStyle.Short)
-          .setRequired(true)
-          .setMaxLength(100),
-      ),
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId('reason')
-          .setLabel('Reason')
-          .setPlaceholder('Jelaskan alasan absence kamu.')
-          .setStyle(TextInputStyle.Paragraph)
-          .setRequired(true)
-          .setMaxLength(900),
-      ),
+    const monthOptions = buildAbsenceMonthOptions();
+    const dayOptions = Array.from({ length: 31 }, (_, index) => {
+      const day = index + 1;
+      const value = String(day).padStart(2, '0');
+      return { label: value, value };
+    });
+    const monthSelect = customId => new StringSelectMenuBuilder()
+      .setCustomId(customId)
+      .setPlaceholder('Pilih bulan dan tahun')
+      .setMinValues(1)
+      .setMaxValues(1)
+      .setRequired(true)
+      .addOptions(monthOptions);
+    const daySelect = customId => new StringSelectMenuBuilder()
+      .setCustomId(customId)
+      .setPlaceholder('Pilih tanggal')
+      .setMinValues(1)
+      .setMaxValues(1)
+      .setRequired(true)
+      .addOptions(dayOptions);
+
+    modal.addLabelComponents(
+      new LabelBuilder()
+        .setLabel('Tanggal Mulai — Bulan & Tahun')
+        .setStringSelectMenuComponent(monthSelect('start_month')),
+      new LabelBuilder()
+        .setLabel('Tanggal Mulai — Tanggal')
+        .setStringSelectMenuComponent(daySelect('start_day')),
+      new LabelBuilder()
+        .setLabel('Tanggal Selesai — Bulan & Tahun')
+        .setStringSelectMenuComponent(monthSelect('end_month')),
+      new LabelBuilder()
+        .setLabel('Tanggal Selesai — Tanggal')
+        .setStringSelectMenuComponent(daySelect('end_day')),
+      new LabelBuilder()
+        .setLabel('Reason')
+        .setTextInputComponent(
+          new TextInputBuilder()
+            .setCustomId('reason')
+            .setPlaceholder('Jelaskan alasan absence kamu.')
+            .setStyle(TextInputStyle.Paragraph)
+            .setRequired(true)
+            .setMaxLength(900),
+        ),
     );
   } else {
     modal.addComponents(
@@ -528,11 +616,12 @@ async function submitStaffRequest(client, guild, interaction, type, input) {
 
   const requestId = formatRequestId(type);
   const applicantName = cleanText(member.displayName || interaction.user.username, 'Name', { maxLength: 100 });
+  const applicantUsername = cleanText(interaction.user.username || interaction.user.id, 'Discord username', { maxLength: 100 });
   let inserted;
   try {
     inserted = await pool.query(
-      "INSERT INTO skaw_staff_requests (request_id, guild_id, request_type, applicant_id, applicant_name, division_role_id, division_name, date_range, reason, note, status, channel_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending',$11) RETURNING *",
-      [requestId, String(guild.id), type, String(interaction.user.id), applicantName,
+      "INSERT INTO skaw_staff_requests (request_id, guild_id, request_type, applicant_id, applicant_name, applicant_username, division_role_id, division_name, date_range, reason, note, status, channel_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pending',$12) RETURNING *",
+      [requestId, String(guild.id), type, String(interaction.user.id), applicantName, applicantUsername,
         division.id, division.name, dateRange, reason, note, String(channel.id)],
     );
   } catch (error) {
@@ -631,7 +720,14 @@ async function handleRequestForm(interaction, client) {
   try {
     if (!Object.hasOwn(REQUEST_TYPES, type)) throw new Error('Jenis pengajuan tidak dikenal.');
     const input = {
-      dateRange: type === 'absence' ? interaction.fields.getTextInputValue('date_range') : null,
+      dateRange: type === 'absence'
+        ? buildAbsenceDateRange(
+          interaction.fields.getStringSelectValues('start_month')[0],
+          interaction.fields.getStringSelectValues('start_day')[0],
+          interaction.fields.getStringSelectValues('end_month')[0],
+          interaction.fields.getStringSelectValues('end_day')[0],
+        )
+        : null,
       reason: interaction.fields.getTextInputValue('reason'),
       note: type === 'resignation' ? interaction.fields.getTextInputValue('note') : '',
     };

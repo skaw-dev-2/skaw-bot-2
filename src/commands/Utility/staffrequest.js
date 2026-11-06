@@ -1,8 +1,9 @@
 import { MessageFlags, SlashCommandBuilder } from 'discord.js';
 import {
   buildRequestModal,
+  canSubmitStaffRequest,
+  getStaffRequestSettings,
   openStaffRequestSetup,
-  STAFF_REQUEST_BASE_ROLE_ID,
 } from '../../services/staffRequestService.js';
 
 export default {
@@ -17,7 +18,7 @@ export default {
       .setDescription('Submit a resignation request for Management approval.'))
     .addSubcommand(subcommand => subcommand
       .setName('setup')
-      .setDescription('Configure the Staff Request destination and Management approvers.')),
+      .setDescription('Configure separate Absence and Resignation channels and Management approvers.')),
 
   async execute(interaction, _guildConfig, client) {
     try {
@@ -36,9 +37,10 @@ export default {
       const member = interaction.member?.roles?.cache
         ? interaction.member
         : await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
-      if (!member?.roles?.cache?.has(STAFF_REQUEST_BASE_ROLE_ID)) {
+      const settings = await getStaffRequestSettings(client, interaction.guildId);
+      if (!member?.roles?.cache || !canSubmitStaffRequest([...member.roles.cache.keys()], settings.managementRoleIds)) {
         return interaction.reply({
-          content: 'Fitur ini hanya dapat digunakan oleh anggota dengan role Company Staff | SKAW.',
+          content: 'Fitur ini hanya dapat digunakan oleh anggota Company Staff atau Management SKAW.',
           flags: MessageFlags.Ephemeral,
         });
       }

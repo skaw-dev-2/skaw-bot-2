@@ -38,6 +38,7 @@ export const tableStatements = [
         request_type VARCHAR(20) NOT NULL CHECK (request_type IN ('absence', 'resignation')),
         applicant_id VARCHAR(20) NOT NULL,
         applicant_name VARCHAR(100) NOT NULL,
+        applicant_username VARCHAR(100),
         division_role_id VARCHAR(20),
         division_name VARCHAR(100),
         date_range VARCHAR(100),
@@ -52,6 +53,7 @@ export const tableStatements = [
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )`,
+    `ALTER TABLE skaw_staff_requests ADD COLUMN IF NOT EXISTS applicant_username VARCHAR(100)`,
 
     `CREATE TABLE IF NOT EXISTS ${t.guilds} (
         id VARCHAR(20) PRIMARY KEY,

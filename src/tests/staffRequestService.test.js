@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  buildAbsenceDateRange,
+  buildAbsenceDateOptions,
   buildRequestModal,
   buildStaffRequestDecisionRows,
   buildStaffRequestDecisionStatement,
@@ -84,22 +86,23 @@ test('members with multiple active division roles are asked to contact Managemen
   ), /lebih dari satu Division Role/i);
 });
 
-test('absence embed follows the requested form and contains approval status', () => {
+test('absence embed includes the applicant Discord username beside the display name', () => {
   const embed = buildStaffRequestEmbed({
     requestId: 'SKAW-ABS-1234567890',
     type: 'absence',
     status: 'pending',
     applicantName: 'Christopher Marquez',
+    applicantUsername: 'Castillo_DePablo',
     divisionRoleId: '1414623229288513586',
-    dateRange: '3 Nov - 13 Nov 2026',
+    dateRange: '03 Nov 2026 - 13 Nov 2026',
     reason: 'Banyak kerjaan OC',
     managementRoleIds: ['1414623053471547474'],
   }).toJSON();
 
   assert.match(embed.description, /ABSENCE FORM/);
-  assert.match(embed.description, /Christopher Marquez/);
+  assert.ok(embed.description.includes('Christopher Marquez (@Castillo' + String.fromCharCode(92) + '_DePablo)'));
   assert.match(embed.description, /<@&1414623229288513586>/);
-  assert.match(embed.description, /3 Nov - 13 Nov 2026/);
+  assert.match(embed.description, /03 Nov 2026 - 13 Nov 2026/);
   assert.match(embed.description, /Banyak kerjaan OC/);
   assert.match(embed.description, /Permission to/);
   assert.match(embed.description, /Signed,/);
@@ -112,6 +115,7 @@ test('resignation embed includes optional note only when provided', () => {
     type: 'resignation',
     status: 'approved',
     applicantName: 'Joaquin Quessham',
+    applicantUsername: 'joaquin_quessham',
     divisionRoleId: '1414623229288513586',
     reason: 'Sudah fokus RL',
     note: 'Terima kasih sudah menerima saya.',
@@ -119,6 +123,7 @@ test('resignation embed includes optional note only when provided', () => {
   }).toJSON();
 
   assert.match(withNote.description, /RESIGNATION FORM/);
+  assert.ok(withNote.description.includes('Joaquin Quessham (@joaquin' + String.fromCharCode(92) + '_quessham)'));
   assert.match(withNote.description, /Sudah fokus RL/);
   assert.match(withNote.description, /Terima kasih sudah menerima saya/);
   assert.match(withNote.fields.find(field => field.name === 'Approval Status').value, /Approved/);
@@ -205,12 +210,32 @@ test('approval decisions are atomic and update only pending requests', () => {
   assert.throws(() => buildStaffRequestDecisionStatement('x', 'y', 'pending', 'z'), /Decision status/i);
 });
 
-test('absence and resignation modals contain the expected inputs', () => {
+test('absence form uses selectable dates for start and end and validates the range', () => {
   const absence = buildRequestModal('1414500416724406316', 'absence').toJSON();
-  assert.equal(absence.components.length, 2);
-  assert.equal(absence.components[0].components[0].custom_id, 'date_range');
-  assert.equal(absence.components[1].components[0].custom_id, 'reason');
+  assert.equal(absence.components.length, 3);
+  const fields = absence.components.map(component => component.component);
+  assert.deepEqual(fields.map(component => component.custom_id), ['start_date', 'end_date', 'reason']);
+  assert.deepEqual(fields.slice(0, 2).map(component => component.type), [3, 3]);
+  assert.equal(fields[0].options.length, 25);
+  assert.equal(fields[1].options.length, 25);
+  assert.equal(fields[2].type, 4);
 
+  assert.equal(
+    buildAbsenceDateRange('2026-11-06', '2026-11-13'),
+    '06 Nov 2026 - 13 Nov 2026',
+  );
+  assert.throws(() => buildAbsenceDateRange('2026-02-30', '2026-03-02'), /tidak valid/i);
+  assert.throws(() => buildAbsenceDateRange('2026-11-14', '2026-11-13'), /tidak boleh setelah/i);
+});
+
+test('absence date options roll forward from the current Jakarta date for 25 days', () => {
+  const options = buildAbsenceDateOptions(new Date('2026-11-06T00:00:00.000Z'));
+  assert.equal(options.length, 25);
+  assert.equal(options[0].value, '2026-11-06');
+  assert.equal(options[24].value, '2026-11-30');
+});
+
+test('resignation modal keeps its reason and optional note inputs', () => {
   const resignation = buildRequestModal('1414500416724406316', 'resignation').toJSON();
   assert.equal(resignation.components.length, 2);
   assert.equal(resignation.components[0].components[0].custom_id, 'reason');

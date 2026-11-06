@@ -5,6 +5,7 @@ import {
   normalizeRecruitmentPrefix,
   formatRecruitmentSequence,
   normalizeRecruitmentStatus,
+  buildApplicationStatusUpdateStatement,
   escapeRecruitmentHtml,
   buildRecruitmentTranscriptHtml,
   fetchRecruitmentTranscriptMessages,
@@ -131,4 +132,33 @@ test('dashboard component custom ID validation detects duplicates across rows', 
     new ActionRowBuilder().addComponents(button('page_profiles')),
   ];
   assert.deepEqual(findDuplicateRecruitmentComponentCustomIds(rows), ['page_profiles']);
+});
+
+
+test('application status update SQL uses independent, explicitly typed parameters', () => {
+  const submitted = buildApplicationStatusUpdateStatement(
+    '1414500416724406315',
+    'SKAW-REC-000001',
+    'submitted',
+  );
+  assert.ok(submitted.text.includes('application_status=$3::varchar(40)'));
+  assert.ok(submitted.text.includes('CASE WHEN $4::boolean'));
+  assert.deepEqual(submitted.values, [
+    '1414500416724406315',
+    'SKAW-REC-000001',
+    'submitted',
+    true,
+  ]);
+
+  const underReview = buildApplicationStatusUpdateStatement(
+    '1414500416724406315',
+    'SKAW-REC-000001',
+    'under_review',
+  );
+  assert.deepEqual(underReview.values, [
+    '1414500416724406315',
+    'SKAW-REC-000001',
+    'under_review',
+    false,
+  ]);
 });

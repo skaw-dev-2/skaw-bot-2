@@ -82,6 +82,17 @@ export function normalizeRecruitmentStatus(value) {
   return status;
 }
 
+export function buildApplicationStatusUpdateStatement(guildId, applicationId, status) {
+  const normalized = normalizeRecruitmentStatus(status);
+  return {
+    text: 'UPDATE skaw_recruitment_applications SET application_status=$3::varchar(40), ' +
+      'submitted_at=CASE WHEN $4::boolean THEN COALESCE(submitted_at,CURRENT_TIMESTAMP) ELSE submitted_at END, ' +
+      'updated_at=CURRENT_TIMESTAMP, last_activity_at=CURRENT_TIMESTAMP ' +
+      'WHERE guild_id=$1 AND application_id=$2 RETURNING *',
+    values: [String(guildId), String(applicationId), normalized, normalized === 'submitted'],
+  };
+}
+
 export function escapeRecruitmentHtml(value) {
   return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;')
     .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
@@ -744,10 +755,8 @@ async function setTicketStatus(client, guild, application, status, actorId) {
 async function updateApplicationStatus(client, guild, application, status, actor, reason = '') {
   const pool = await getPool(client);
   const normalized = normalizeRecruitmentStatus(status);
-  const result = await pool.query(
-    'UPDATE skaw_recruitment_applications SET application_status=$3, submitted_at=CASE WHEN $3=\'submitted\' THEN COALESCE(submitted_at,CURRENT_TIMESTAMP) ELSE submitted_at END, updated_at=CURRENT_TIMESTAMP, last_activity_at=CURRENT_TIMESTAMP WHERE guild_id=$1 AND application_id=$2 RETURNING *',
-    [String(guild.id), application.applicationId, normalized],
-  );
+  const statement = buildApplicationStatusUpdateStatement(guild.id, application.applicationId, normalized);
+  const result = await pool.query(statement.text, statement.values);
   if (!result.rows[0]) throw new Error('Application tidak ditemukan.');
   const updated = mapApplication(result.rows[0]);
   await recordRecruitmentEvent(pool, guild.id, updated.id, updated.applicationId, 'application_status_changed', actor.id, {

@@ -338,7 +338,9 @@ export async function getStaffRequestDivisionOptions(client, guild, managementRo
   if (!guild?.roles) throw new Error('Guild role tidak tersedia untuk memuat pilihan Division.');
   const settings = managementRoleIds || (await getStaffRequestSettings(client, guild.id)).managementRoleIds;
   const registry = await getEmployeeRoleRegistry(client, guild.id);
-  const roles = await guild.roles.fetch().catch(() => guild.roles.cache);
+  const roles = guild.roles.cache?.size
+    ? guild.roles.cache
+    : await guild.roles.fetch().catch(() => guild.roles.cache);
   const options = buildStaffRequestDivisionOptions({
     guildRoles: [...roles.values()],
     registryRoles: registry.roles,

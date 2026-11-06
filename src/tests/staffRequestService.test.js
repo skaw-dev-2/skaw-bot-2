@@ -5,6 +5,7 @@ import {
   buildAbsenceDateOptions,
   buildAbsenceDatePickerPayload,
   formatAbsenceDuration,
+  getAbsenceReminderTargetDate,
   buildStaffRequestLogEmbed,
   buildStaffRequestRoleMetadata,
   isStaffRequestRoleWithinHierarchy,
@@ -316,6 +317,11 @@ test('absence date options roll forward from the current Jakarta date for 25 day
     now: new Date('2026-11-06T00:00:00.000Z'), offsetDays: 725,
   }).components.map(row => row.toJSON());
   assert.equal(finalPage[0].components[0].options.length, 6);
+});
+
+test('one-day Absence reminder date follows the Asia/Jakarta calendar boundary', () => {
+  assert.equal(getAbsenceReminderTargetDate(new Date('2026-11-06T16:59:59.000Z')), '2026-11-07');
+  assert.equal(getAbsenceReminderTargetDate(new Date('2026-11-06T17:00:00.000Z')), '2026-11-08');
 });
 
 test('absence duration is displayed in calendar months, weeks, days, and hours', () => {

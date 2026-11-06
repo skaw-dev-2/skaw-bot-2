@@ -9,6 +9,7 @@ import { getEmployeeRoleRegistry, BASE_EMPLOYEE_ROLE } from './employeeRoleRegis
 import { logger } from '../utils/logger.js';
 
 export const STAFF_REQUEST_BASE_ROLE_ID = BASE_EMPLOYEE_ROLE.id;
+export const STAFF_REQUEST_ABSENCE_ROLE_ID = '1414628665496699003';
 export const DEFAULT_STAFF_REQUEST_MANAGEMENT_ROLE_IDS = Object.freeze(['1414623053471547474']);
 
 const SNOWFLAKE_RE = /^\d{17,20}$/;
@@ -38,6 +39,11 @@ function getJakartaCalendarDate(date = new Date()) {
 function dateToIsoFromJakarta(date = new Date()) {
   const current = getJakartaCalendarDate(date);
   return String(current.year).padStart(4, '0') + '-' + String(current.month).padStart(2, '0') + '-' + String(current.day).padStart(2, '0');
+}
+
+export function getAbsenceReminderTargetDate(now = new Date()) {
+  const today = parseAbsenceDate(dateToIsoFromJakarta(now), 'Tanggal hari ini');
+  return formatIsoDate(addCalendarDays(today, 1));
 }
 
 function addCalendarDays(date, days) {
@@ -672,6 +678,52 @@ async function sendStaffRequestLog(guild, settings, request, event) {
     return false;
   }
 }
+
+async function fetchStaffRequestGuild(client, guildId) {
+  const guild = client.guilds.cache.get(String(guildId))
+    || await client.guilds.fetch(String(guildId)).catch(() => null);
+  if (!guild) throw new Error('Server pengajuan tidak dapat ditemukan.');
+  return guild;
+}
+
+async function assignApprovedAbsenceRole(client, guild, request) {
+  if (!guild) throw new Error('Server pengajuan tidak tersedia.');
+
+  const role = guild.roles.cache.get(STAFF_REQUEST_ABSENCE_ROLE_ID)
+    || await guild.roles.fetch(STAFF_REQUEST_ABSENCE_ROLE_ID).catch(() => null);
+  if (!role) throw new Error('Role Absence tidak ditemukan di server.');
+  if (role.managed) throw new Error('Role Absence dikelola oleh integrasi lain dan tidak dapat diberikan secara manual.');
+
+  const botMember = guild.members.me || await guild.members.fetchMe().catch(() => null);
+  if (!botMember?.permissions?.has(PermissionFlagsBits.ManageRoles)) {
+    throw new Error('Bot tidak memiliki permission Manage Roles.');
+  }
+  const highestBotRole = botMember.roles?.highest;
+  if (!highestBotRole || typeof highestBotRole.comparePositionTo !== 'function'
+      || highestBotRole.comparePositionTo(role) <= 0) {
+    throw new Error('Posisi role tertinggi bot harus berada di atas role Absence.');
+  }
+
+  const member = guild.members.cache.get(String(request.applicantId))
+    || await guild.members.fetch(String(request.applicantId)).catch(() => null);
+  if (!member?.roles?.cache) throw new Error('Pemohon tidak ditemukan sebagai anggota server.');
+
+  if (!member.roles.cache.has(STAFF_REQUEST_ABSENCE_ROLE_ID)) {
+    await member.roles.add(role, 'Staff Request ' + request.requestId + ' approved');
+  }
+
+  const pool = getPool(client);
+  await pool.query(
+    `UPDATE skaw_staff_requests
+       SET absence_role_assigned_at=COALESCE(absence_role_assigned_at, CURRENT_TIMESTAMP),
+           absence_role_assignment_claimed_at=NULL,
+           absence_role_assignment_last_error=NULL,
+           updated_at=CURRENT_TIMESTAMP
+     WHERE guild_id=$1 AND request_id=$2 AND status='approved'`,
+    [String(guild.id), String(request.requestId)],
+  );
+  return true;
+}
 export function buildStaffRequestDecisionRows(request) {
   const template = REQUEST_TYPES[request.type];
   if (!template) throw new Error('Jenis pengajuan tidak dikenal.');
@@ -910,6 +962,12 @@ async function notifyApplicant(guild, request) {
     '**Request ID:** ' + request.requestId,
   ];
   if (request.reviewReason) lines.push('**Catatan Management:** ' + escapeMarkdown(request.reviewReason));
+  if (request.type === 'absence' && request.status === 'approved') {
+    lines.push('');
+    lines.push(request.absenceRoleAssigned === true
+      ? '✅ Role **Absence** sudah otomatis ditambahkan ke akun kamu.'
+      : '⚠️ Pengajuan kamu sudah disetujui, tetapi role **Absence** belum berhasil ditambahkan otomatis. Silakan hubungi Management.');
+  }
   await member.send({ content: lines.join('\n'), allowedMentions: { parse: [] } }).catch(error => {
     logger.warn('Could not DM Staff Request applicant', { requestId: request.requestId, userId: request.applicantId, error: error.message });
   });
@@ -926,7 +984,31 @@ async function finalizeDecision(client, interaction, requestId, status, reason =
   }
   const request = mapStaffRequest(result.rows[0]);
   const settings = await getStaffRequestSettings(client, interaction.guildId);
-  const updated = { ...request, managementRoleIds: settings.managementRoleIds };
+  let absenceRoleAssigned = null;
+  if (status === 'approved' && request.type === 'absence') {
+    try {
+      await assignApprovedAbsenceRole(client, interaction.guild, request);
+      absenceRoleAssigned = true;
+    } catch (error) {
+      absenceRoleAssigned = false;
+      await pool.query(
+        'UPDATE skaw_staff_requests SET absence_role_assignment_last_error=$3 WHERE guild_id=$1 AND request_id=$2',
+        [String(interaction.guildId), String(requestId), String(error?.message || error).slice(0, 1000)],
+      ).catch(() => {});
+      logger.error('Staff Request approved but Absence role assignment failed', {
+        guildId: interaction.guildId,
+        requestId,
+        applicantId: request.applicantId,
+        roleId: STAFF_REQUEST_ABSENCE_ROLE_ID,
+        error,
+      });
+    }
+  }
+  const updated = {
+    ...request,
+    managementRoleIds: settings.managementRoleIds,
+    ...(absenceRoleAssigned === null ? {} : { absenceRoleAssigned }),
+  };
   await updateRequestMessage(client, interaction.guild, updated).catch(error => {
     logger.error('Staff Request decision saved but message update failed', { requestId, status, error });
   });
@@ -939,6 +1021,159 @@ function getDateDifferenceInDays(startValue, endValue) {
   const start = parseAbsenceDate(startValue, 'Tanggal mulai');
   const end = parseAbsenceDate(endValue, 'Tanggal selesai');
   return Math.floor((end.getTime() - start.getTime()) / 86400000);
+}
+
+export async function checkStaffAbsenceLifecycle(client, now = new Date()) {
+  const pool = getPool(client);
+  const today = dateToIsoFromJakarta(now);
+  const reminderDate = getAbsenceReminderTargetDate(now);
+  const summary = { roleAssignments: 0, remindersSent: 0, failed: 0 };
+
+  // Recover approved, still-active absence requests whose role assignment failed earlier.
+  const pendingRoleAssignments = await pool.query(
+    `SELECT * FROM skaw_staff_requests
+      WHERE request_type='absence'
+        AND status='approved'
+        AND date_end >= $1::date
+        AND absence_role_assigned_at IS NULL
+        AND (absence_role_assignment_claimed_at IS NULL
+             OR absence_role_assignment_claimed_at < CURRENT_TIMESTAMP - INTERVAL '30 minutes')
+      ORDER BY date_end ASC, reviewed_at ASC
+      LIMIT 100`,
+    [today],
+  );
+
+  for (const candidate of pendingRoleAssignments.rows || []) {
+    const claim = await pool.query(
+      `UPDATE skaw_staff_requests
+          SET absence_role_assignment_claimed_at=CURRENT_TIMESTAMP
+        WHERE id=$1
+          AND request_type='absence'
+          AND status='approved'
+          AND date_end >= $2::date
+          AND absence_role_assigned_at IS NULL
+          AND (absence_role_assignment_claimed_at IS NULL
+               OR absence_role_assignment_claimed_at < CURRENT_TIMESTAMP - INTERVAL '30 minutes')
+        RETURNING *`,
+      [candidate.id, today],
+    );
+    if (!claim.rows?.[0]) continue;
+
+    const request = mapStaffRequest(claim.rows[0]);
+    try {
+      const guild = await fetchStaffRequestGuild(client, request.guildId);
+      await assignApprovedAbsenceRole(client, guild, request);
+      summary.roleAssignments += 1;
+    } catch (error) {
+      summary.failed += 1;
+      await pool.query(
+        `UPDATE skaw_staff_requests
+            SET absence_role_assignment_claimed_at=NULL,
+                absence_role_assignment_last_error=$2,
+                updated_at=CURRENT_TIMESTAMP
+          WHERE id=$1 AND absence_role_assigned_at IS NULL`,
+        [candidate.id, String(error?.message || error).slice(0, 1000)],
+      ).catch(() => {});
+      logger.warn('Could not apply Absence role to approved request', {
+        requestId: request.requestId,
+        guildId: request.guildId,
+        applicantId: request.applicantId,
+        roleId: STAFF_REQUEST_ABSENCE_ROLE_ID,
+        error: error.message,
+      });
+    }
+  }
+
+  // date_end is inclusive: a request ending tomorrow is reminded during the current Jakarta day.
+  const dueReminders = await pool.query(
+    `SELECT * FROM skaw_staff_requests
+      WHERE request_type='absence'
+        AND status='approved'
+        AND date_end=$1::date
+        AND absence_reminder_sent_at IS NULL
+        AND (absence_reminder_claimed_at IS NULL
+             OR absence_reminder_claimed_at < CURRENT_TIMESTAMP - INTERVAL '30 minutes')
+      ORDER BY date_end ASC, created_at ASC
+      LIMIT 100`,
+    [reminderDate],
+  );
+
+  for (const candidate of dueReminders.rows || []) {
+    const claim = await pool.query(
+      `UPDATE skaw_staff_requests
+          SET absence_reminder_claimed_at=CURRENT_TIMESTAMP,
+              absence_reminder_attempts=COALESCE(absence_reminder_attempts, 0) + 1
+        WHERE id=$1
+          AND request_type='absence'
+          AND status='approved'
+          AND absence_reminder_sent_at IS NULL
+          AND (absence_reminder_claimed_at IS NULL
+               OR absence_reminder_claimed_at < CURRENT_TIMESTAMP - INTERVAL '30 minutes')
+        RETURNING *`,
+      [candidate.id],
+    );
+    if (!claim.rows?.[0]) continue;
+
+    const request = mapStaffRequest(claim.rows[0]);
+    try {
+      const guild = await fetchStaffRequestGuild(client, request.guildId);
+      const member = guild.members.cache.get(request.applicantId)
+        || await guild.members.fetch(request.applicantId).catch(() => null);
+      if (!member) throw new Error('Pemohon tidak ditemukan di server; DM pengingat belum dapat dikirim.');
+
+      const endDate = parseAbsenceDate(request.dateEnd, 'Tanggal akhir Absence');
+      const formattedEndDate = new Intl.DateTimeFormat('id-ID', {
+        weekday: 'long',
+        day: '2-digit',
+        month: 'long',
+        year: 'numeric',
+        timeZone: 'UTC',
+      }).format(endDate);
+      const reminder = [
+        '**SKAW GROUP · ABSENCE REMINDER**',
+        '',
+        'Halo **' + escapeMarkdown(cleanText(request.applicantName, 'Name', { maxLength: 100 })) + '**,',
+        'Ini adalah pengingat bahwa masa Absence kamu akan berakhir besok, **' + formattedEndDate + '**.',
+        '',
+        'Silakan persiapkan kembali aktivitas kamu di SKAW Group. Apabila masih membutuhkan waktu Absence tambahan, koordinasikan dengan Management sebelum masa Absence berakhir.',
+        '',
+        '**Request ID:** `' + request.requestId + '`',
+      ].join('\n');
+
+      await member.send({ content: reminder, allowedMentions: { parse: [] } });
+      await pool.query(
+        `UPDATE skaw_staff_requests
+            SET absence_reminder_sent_at=CURRENT_TIMESTAMP,
+                absence_reminder_claimed_at=NULL,
+                absence_reminder_last_error=NULL,
+                updated_at=CURRENT_TIMESTAMP
+          WHERE id=$1 AND absence_reminder_sent_at IS NULL`,
+        [candidate.id],
+      );
+      summary.remindersSent += 1;
+    } catch (error) {
+      summary.failed += 1;
+      await pool.query(
+        `UPDATE skaw_staff_requests
+            SET absence_reminder_claimed_at=NULL,
+                absence_reminder_last_error=$2,
+                updated_at=CURRENT_TIMESTAMP
+          WHERE id=$1 AND absence_reminder_sent_at IS NULL`,
+        [candidate.id, String(error?.message || error).slice(0, 1000)],
+      ).catch(() => {});
+      logger.warn('Could not send one-day Absence reminder DM', {
+        requestId: request.requestId,
+        guildId: request.guildId,
+        applicantId: request.applicantId,
+        error: error.message,
+      });
+    }
+  }
+
+  if (summary.roleAssignments || summary.remindersSent || summary.failed) {
+    logger.info('Staff Request absence lifecycle check completed', summary);
+  }
+  return summary;
 }
 
 async function handleAbsenceDatePickerInteraction(interaction, client) {
@@ -1138,7 +1373,9 @@ async function handleDecisionButton(interaction, client) {
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   const updated = await finalizeDecision(client, interaction, request.requestId, 'approved');
   return interaction.editReply({
-    content: '✅ Pengajuan ' + updated.requestId + ' berhasil di-approve.',
+    content: updated.absenceRoleAssigned === false
+      ? '✅ Pengajuan ' + updated.requestId + ' berhasil di-approve, tetapi role Absence gagal diberikan otomatis. Pastikan bot memiliki permission Manage Roles dan posisi role bot berada di atas role Absence.'
+      : '✅ Pengajuan ' + updated.requestId + ' berhasil di-approve.',
     allowedMentions: { parse: [] },
   });
 }

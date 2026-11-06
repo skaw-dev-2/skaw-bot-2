@@ -6,7 +6,8 @@ import {
   buildAbsenceDatePickerPayload,
   formatAbsenceDuration,
   buildStaffRequestLogEmbed,
-  buildStaffRequestDivisionOptions,
+  buildStaffRequestRoleMetadata,
+  isStaffRequestRoleWithinHierarchy,
   buildRequestModal,
   buildStaffRequestDecisionRows,
   buildStaffRequestDecisionStatement,
@@ -25,24 +26,61 @@ test('built-in SKAW division roles are resolved from employee role IDs', () => {
   });
 });
 
-test('Staff Request Division dropdown offers active built-in, custom and Management choices', () => {
-  const options = buildStaffRequestDivisionOptions({
-    guildRoles: [
-      { id: '1414623229288513586', name: 'Mechanic Division | SKAW' },
-      { id: '1414623053471547474', name: 'Management Company | SKAW' },
-      { id: '1456912660510543945', name: 'Builder | SKAW' },
-      { id: '22222222222222222', name: 'Modshop Division | SKAW' },
-    ],
+test('Staff Request role metadata includes active built-in and registered position roles only', () => {
+  const metadata = buildStaffRequestRoleMetadata({
     registryRoles: [
-      { id: '22222222222222222', name: 'Modshop Division | SKAW', category: 'division', department: 'modshop', active: true },
+      { id: '22222222222222222', name: 'Marine Senior | SKAW', category: 'rank', department: 'marine', level: 3, active: true },
+      { id: '33333333333333333', name: 'Marine Division | SKAW', category: 'division', department: 'marine', active: true },
+      { id: '44444444444444444', name: 'Old Warning | SKAW', category: 'warning', department: 'marine', active: true },
+      { id: '55555555555555555', name: 'Inactive Rank | SKAW', category: 'rank', department: 'marine', level: 2, active: false },
     ],
-    managementRoleIds: ['1414623053471547474'],
   });
-  assert.ok(options.some(option => option.value === 'role:1414623229288513586'));
-  assert.ok(options.some(option => option.value === 'domain:builder' && /Builder Division/.test(option.label)));
-  assert.ok(options.some(option => option.value === 'role:22222222222222222'));
-  assert.ok(options.some(option => option.value === 'management' && option.label === 'Management'));
+  assert.ok(metadata.has('1414629366574354512'));
+  assert.ok(metadata.has('22222222222222222'));
+  assert.ok(metadata.has('33333333333333333'));
+  assert.equal(metadata.has('44444444444444444'), false);
+  assert.equal(metadata.has('55555555555555555'), false);
+  assert.equal(metadata.has(STAFF_REQUEST_BASE_ROLE_ID), false);
 });
+
+test('Staff Request role selection respects SKAW level and Discord role hierarchy', () => {
+  const metadata = buildStaffRequestRoleMetadata();
+  const highest = {
+    id: '1414629366574354512',
+    position: 30,
+    comparePositionTo(other) { return this.position - other.position; },
+  };
+  const member = {
+    id: 'user-1',
+    roles: {
+      cache: new Map([
+        [STAFF_REQUEST_BASE_ROLE_ID, { id: STAFF_REQUEST_BASE_ROLE_ID }],
+        [highest.id, highest],
+      ]),
+      highest,
+    },
+  };
+  const lowerRole = {
+    id: '1414629274282885120',
+    position: 20,
+    comparePositionTo(other) { return this.position - other.position; },
+  };
+  const higherLevelRole = {
+    id: '1466363836951957801',
+    position: 29,
+    comparePositionTo(other) { return this.position - other.position; },
+  };
+  const discordHigherRole = {
+    id: '1414629137389322244',
+    position: 31,
+    comparePositionTo(other) { return this.position - other.position; },
+  };
+  assert.equal(isStaffRequestRoleWithinHierarchy(lowerRole, member, metadata, 'guild-owner', 'everyone'), true);
+  assert.equal(isStaffRequestRoleWithinHierarchy(higherLevelRole, member, metadata, 'guild-owner', 'everyone'), false);
+  assert.equal(isStaffRequestRoleWithinHierarchy(discordHigherRole, member, metadata, 'guild-owner', 'everyone'), false);
+  assert.equal(isStaffRequestRoleWithinHierarchy(discordHigherRole, { id: 'guild-owner', roles: member.roles }, metadata, 'guild-owner', 'everyone'), true);
+});
+
 test('configured Management roles can submit requests and resolve to Management division', () => {
   const managementRoleId = '1414623053471547474';
   assert.equal(canSubmitStaffRequest([managementRoleId], [managementRoleId]), true);
@@ -241,22 +279,17 @@ test('approval decisions are atomic and update only pending requests', () => {
   assert.throws(() => buildStaffRequestDecisionStatement('x', 'y', 'pending', 'z'), /Decision status/i);
 });
 
-test('absence form asks the applicant to enter Name and select Division manually', () => {
-  const divisionOptions = [
-    { label: 'Management', value: 'management', description: 'Management SKAW' },
-    { label: 'Mechanic Division | SKAW', value: 'role:1414623229288513586', description: 'Pilih divisi Mechanic' },
-  ];
+test('absence form asks the applicant to enter Name and select a Role manually', () => {
   const absence = buildRequestModal('1414500416724406316', 'absence', {
     dateStart: '2026-11-06',
     dateEnd: '2026-11-13',
-    divisionOptions,
   }).toJSON();
   const serialized = JSON.stringify(absence);
   assert.equal(absence.components.length, 3);
   assert.equal(absence.custom_id, 'skaw_sr_form|absence|1414500416724406316|2026-11-06|2026-11-13');
   assert.match(serialized, /applicant_name/);
-  assert.match(serialized, /division/);
-  assert.match(serialized, /role:1414623229288513586/);
+  assert.match(serialized, /\"custom_id\":\"role\"/);
+  assert.match(serialized, /\"type\":6/);
   assert.match(serialized, /reason/);
   assert.equal(absence.title, 'Absence Request');
 
@@ -308,17 +341,12 @@ test('staff request log embeds capture request lifecycle details', () => {
   assert.match(embed.description, /1 week/);
 });
 
-test('resignation form asks for Name, Division, Reason and optional Note', () => {
-  const resignation = buildRequestModal('1414500416724406316', 'resignation', {
-    divisionOptions: [
-      { label: 'Management', value: 'management', description: 'Management SKAW' },
-      { label: 'Mechanic Division | SKAW', value: 'role:1414623229288513586', description: 'Pilih divisi Mechanic' },
-    ],
-  }).toJSON();
+test('resignation form asks for Name, Role, Reason and optional Note', () => {
+  const resignation = buildRequestModal('1414500416724406316', 'resignation').toJSON();
   const serialized = JSON.stringify(resignation);
   assert.equal(resignation.components.length, 4);
   assert.match(serialized, /applicant_name/);
-  assert.match(serialized, /division/);
+  assert.match(serialized, /\"custom_id\":\"role\"/);
   assert.match(serialized, /reason/);
   assert.match(serialized, /note/);
 });

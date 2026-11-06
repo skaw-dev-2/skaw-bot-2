@@ -486,9 +486,6 @@ async function submitStaffRequest(client, guild, interaction, type, input) {
   const member = interaction.member?.roles?.cache
     ? interaction.member
     : await guild.members.fetch(interaction.user.id).catch(() => null);
-  if (!member?.roles?.cache?.has(STAFF_REQUEST_BASE_ROLE_ID)) {
-    throw new Error('Fitur ini hanya dapat digunakan oleh anggota dengan role Company Staff | SKAW.');
-  }
   const settings = await getStaffRequestSettings(client, guild.id);
   if (!canSubmitStaffRequest([...member.roles.cache.keys()], settings.managementRoleIds)) {
     throw new Error('Fitur ini hanya dapat digunakan oleh anggota Company Staff atau Management SKAW.');

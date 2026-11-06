@@ -6,6 +6,7 @@ import {
   buildAbsenceDatePickerPayload,
   formatAbsenceDuration,
   buildStaffRequestLogEmbed,
+  buildStaffRequestDivisionOptions,
   buildRequestModal,
   buildStaffRequestDecisionRows,
   buildStaffRequestDecisionStatement,
@@ -24,6 +25,24 @@ test('built-in SKAW division roles are resolved from employee role IDs', () => {
   });
 });
 
+test('Staff Request Division dropdown offers active built-in, custom and Management choices', () => {
+  const options = buildStaffRequestDivisionOptions({
+    guildRoles: [
+      { id: '1414623229288513586', name: 'Mechanic Division | SKAW' },
+      { id: '1414623053471547474', name: 'Management Company | SKAW' },
+      { id: '1456912660510543945', name: 'Builder | SKAW' },
+      { id: '22222222222222222', name: 'Modshop Division | SKAW' },
+    ],
+    registryRoles: [
+      { id: '22222222222222222', name: 'Modshop Division | SKAW', category: 'division', department: 'modshop', active: true },
+    ],
+    managementRoleIds: ['1414623053471547474'],
+  });
+  assert.ok(options.some(option => option.value === 'role:1414623229288513586'));
+  assert.ok(options.some(option => option.value === 'domain:builder' && /Builder Division/.test(option.label)));
+  assert.ok(options.some(option => option.value === 'role:22222222222222222'));
+  assert.ok(options.some(option => option.value === 'management' && option.label === 'Management'));
+});
 test('configured Management roles can submit requests and resolve to Management division', () => {
   const managementRoleId = '1414623053471547474';
   assert.equal(canSubmitStaffRequest([managementRoleId], [managementRoleId]), true);
@@ -222,17 +241,26 @@ test('approval decisions are atomic and update only pending requests', () => {
   assert.throws(() => buildStaffRequestDecisionStatement('x', 'y', 'pending', 'z'), /Decision status/i);
 });
 
-test('absence form uses selectable dates for start and end and validates the range', () => {
-  const absence = buildRequestModal('1414500416724406316', 'absence', '2026-11-06', '2026-11-13').toJSON();
-  assert.equal(absence.components.length, 1);
+test('absence form asks the applicant to enter Name and select Division manually', () => {
+  const divisionOptions = [
+    { label: 'Management', value: 'management', description: 'Management SKAW' },
+    { label: 'Mechanic Division | SKAW', value: 'role:1414623229288513586', description: 'Pilih divisi Mechanic' },
+  ];
+  const absence = buildRequestModal('1414500416724406316', 'absence', {
+    dateStart: '2026-11-06',
+    dateEnd: '2026-11-13',
+    divisionOptions,
+  }).toJSON();
+  const serialized = JSON.stringify(absence);
+  assert.equal(absence.components.length, 3);
   assert.equal(absence.custom_id, 'skaw_sr_form|absence|1414500416724406316|2026-11-06|2026-11-13');
-  assert.equal(absence.components[0].components[0].custom_id, 'reason');
-  assert.equal(absence.components[0].components[0].type, 4);
+  assert.match(serialized, /applicant_name/);
+  assert.match(serialized, /division/);
+  assert.match(serialized, /role:1414623229288513586/);
+  assert.match(serialized, /reason/);
+  assert.equal(absence.title, 'Absence Request');
 
-  assert.equal(
-    buildAbsenceDateRange('2026-11-06', '2026-11-13'),
-    '06 Nov 2026 - 13 Nov 2026',
-  );
+  assert.equal(buildAbsenceDateRange('2026-11-06', '2026-11-13'), '06 Nov 2026 - 13 Nov 2026');
   assert.throws(() => buildAbsenceDateRange('2026-02-30', '2026-03-02'), /tidak valid/i);
   assert.throws(() => buildAbsenceDateRange('2026-11-14', '2026-11-13'), /tidak boleh setelah/i);
 });
@@ -280,11 +308,19 @@ test('staff request log embeds capture request lifecycle details', () => {
   assert.match(embed.description, /1 week/);
 });
 
-test('resignation modal keeps its reason and optional note inputs', () => {
-  const resignation = buildRequestModal('1414500416724406316', 'resignation').toJSON();
-  assert.equal(resignation.components.length, 2);
-  assert.equal(resignation.components[0].components[0].custom_id, 'reason');
-  assert.equal(resignation.components[1].components[0].custom_id, 'note');
+test('resignation form asks for Name, Division, Reason and optional Note', () => {
+  const resignation = buildRequestModal('1414500416724406316', 'resignation', {
+    divisionOptions: [
+      { label: 'Management', value: 'management', description: 'Management SKAW' },
+      { label: 'Mechanic Division | SKAW', value: 'role:1414623229288513586', description: 'Pilih divisi Mechanic' },
+    ],
+  }).toJSON();
+  const serialized = JSON.stringify(resignation);
+  assert.equal(resignation.components.length, 4);
+  assert.match(serialized, /applicant_name/);
+  assert.match(serialized, /division/);
+  assert.match(serialized, /reason/);
+  assert.match(serialized, /note/);
 });
 
 test('invalid request type and unsafe broadcast mentions are rejected', () => {

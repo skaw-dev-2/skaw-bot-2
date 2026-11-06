@@ -30,6 +30,14 @@ test('custom registered division roles are resolved', () => {
   });
 });
 
+test('Builder division can be inferred from its registered SKAW employee position', () => {
+  assert.deepEqual(resolveDivisionRoleFromIds(['1456912660510543945'], []), {
+    id: null,
+    name: 'Builder Division | SKAW',
+    inferred: true,
+  });
+});
+
 test('missing or inactive division role is not inferred', () => {
   assert.equal(resolveDivisionRoleFromIds(['1555555555555555555'], []), null);
   assert.equal(resolveDivisionRoleFromIds(['1555555555555555555'], [{
@@ -110,8 +118,9 @@ test('employee-supplied markdown is escaped in the review embed', () => {
     reason: 'Reason with **formatting**',
     managementRoleIds: ['1414623053471547474'],
   }).toJSON();
-  assert.match(embed.description, /Name \\*with\\* formatting/);
-  assert.match(embed.description, /Reason with \\*\\*formatting\\*\\*/);
+  const slash = String.fromCharCode(92);
+  assert.ok(embed.description.includes('Name ' + slash + '*with' + slash + '* formatting'));
+  assert.ok(embed.description.includes('Reason with ' + slash + '**formatting' + slash + '**'));
 });
 
 test('pending request controls provide Approve and Reject; completed controls are disabled', () => {

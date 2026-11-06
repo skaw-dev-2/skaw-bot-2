@@ -6,6 +6,7 @@ import {
   buildAbsenceDatePickerPayload,
   formatAbsenceDuration,
   getAbsenceReminderTargetDate,
+  isAbsencePeriodExpired,
   buildStaffRequestLogEmbed,
   buildStaffRequestRoleMetadata,
   isStaffRequestRoleWithinHierarchy,
@@ -324,10 +325,37 @@ test('one-day Absence reminder date follows the Asia/Jakarta calendar boundary',
   assert.equal(getAbsenceReminderTargetDate(new Date('2026-11-06T17:00:00.000Z')), '2026-11-08');
 });
 
+test('Absence expires only after its inclusive end date has passed in Jakarta', () => {
+  assert.equal(isAbsencePeriodExpired('2026-11-06', new Date('2026-11-06T16:59:59.000Z')), false);
+  assert.equal(isAbsencePeriodExpired('2026-11-06', new Date('2026-11-06T17:00:00.000Z')), true);
+  assert.equal(isAbsencePeriodExpired('2026-11-07', new Date('2026-11-06T17:00:00.000Z')), false);
+});
+
 test('absence duration is displayed in calendar months, weeks, days, and hours', () => {
   assert.equal(formatAbsenceDuration('2026-11-06', '2026-11-13'), '1 week (7 days / 168 hours)');
   assert.equal(formatAbsenceDuration('2026-11-06', '2026-12-06'), '1 month (30 days / 720 hours)');
   assert.equal(formatAbsenceDuration('2026-11-06', '2026-11-06'), '1 day (24 hours)');
+});
+
+test('Management Absence reminder log clearly identifies an ending absence', () => {
+  const embed = buildStaffRequestLogEmbed({
+    requestId: 'SKAW-ABS-ENDING01',
+    type: 'absence',
+    applicantId: '1414500416724406316',
+    applicantName: 'Christopher Marquez',
+    divisionRoleId: '1414623229288513586',
+    dateRange: '06 Nov 2026 - 13 Nov 2026',
+    dateStart: '2026-11-06',
+    dateEnd: '2026-11-13',
+    reason: 'Banyak kerjaan OC',
+    status: 'approved',
+  }, 'absence_ending_tomorrow').toJSON();
+  assert.match(embed.title, /ABSENCE ENDING TOMORROW/);
+  assert.match(embed.description, /Management Reminder/);
+  assert.match(embed.description, /akan berakhir besok/);
+  assert.match(embed.description, /<@1414500416724406316>/);
+  assert.match(embed.description, /13 Nov 2026/);
+  assert.match(embed.description, /SKAW-ABS-ENDING01/);
 });
 
 test('staff request log embeds capture request lifecycle details', () => {

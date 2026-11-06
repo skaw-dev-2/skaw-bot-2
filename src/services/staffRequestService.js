@@ -1201,4 +1201,3 @@ export async function handleStaffRequestInteraction(interaction, client) {
   }
 }
 
-export { buildRequestModal };

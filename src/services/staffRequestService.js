@@ -103,7 +103,7 @@ export function resolveDivisionRoleFromIds(memberRoleIds = [], registryRoles = [
       if (domainLabels[domain]) fallbackDomains.add(domain);
     }
     for (const role of registryRoles || []) {
-      if (role?.active === false || !['rank', 'other'].includes(role?.category)) continue;
+      if (role?.active === false || role?.category !== 'rank') continue;
       const department = String(role?.department || '').toLowerCase();
       if (domainLabels[department]) fallbackDomains.add(department);
     }
@@ -477,11 +477,19 @@ async function submitStaffRequest(client, guild, interaction, type, input) {
 
   const requestId = formatRequestId(type);
   const applicantName = cleanText(member.displayName || interaction.user.username, 'Name', { maxLength: 100 });
-  const inserted = await pool.query(
-    "INSERT INTO skaw_staff_requests (request_id, guild_id, request_type, applicant_id, applicant_name, division_role_id, division_name, date_range, reason, note, status, channel_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending',$11) RETURNING *",
-    [requestId, String(guild.id), type, String(interaction.user.id), applicantName,
-      division.id, division.name, dateRange, reason, note, String(channel.id)],
-  );
+  let inserted;
+  try {
+    inserted = await pool.query(
+      "INSERT INTO skaw_staff_requests (request_id, guild_id, request_type, applicant_id, applicant_name, division_role_id, division_name, date_range, reason, note, status, channel_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending',$11) RETURNING *",
+      [requestId, String(guild.id), type, String(interaction.user.id), applicantName,
+        division.id, division.name, dateRange, reason, note, String(channel.id)],
+    );
+  } catch (error) {
+    if (type === 'resignation' && error?.code === '23505') {
+      throw new Error('Kamu masih memiliki pengajuan resign yang menunggu keputusan Management.');
+    }
+    throw error;
+  }
   const request = mapStaffRequest(inserted.rows[0]);
   const requestWithRoles = { ...request, managementRoleIds: managerRoles.map(role => role.id) };
   const botMember = guild.members.me || await guild.members.fetchMe().catch(() => null);

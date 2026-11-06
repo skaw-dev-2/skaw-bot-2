@@ -3,6 +3,9 @@ import assert from 'node:assert/strict';
 import {
   buildAbsenceDateRange,
   buildAbsenceDateOptions,
+  buildAbsenceDatePickerPayload,
+  formatAbsenceDuration,
+  buildStaffRequestLogEmbed,
   buildRequestModal,
   buildStaffRequestDecisionRows,
   buildStaffRequestDecisionStatement,
@@ -41,11 +44,13 @@ test('Staff Request setup has independent Absence and Resignation channel select
   const payload = buildStaffRequestSetupPayload({
     absenceChannelId: '1414500416724406315',
     resignationChannelId: '1414500416724406316',
+    logChannelId: '1414500416724406317',
     managementRoleIds: ['1414623053471547474'],
   });
   const customIds = payload.components.flatMap(row => row.components).map(component => component.toJSON().custom_id);
   assert.ok(customIds.includes('skaw_sr_setup_absence_channel'));
   assert.ok(customIds.includes('skaw_sr_setup_resignation_channel'));
+  assert.ok(customIds.includes('skaw_sr_setup_logs_channel'));
 });
 
 test('custom registered division roles are resolved', () => {
@@ -95,6 +100,8 @@ test('absence embed includes the applicant Discord username beside the display n
     applicantUsername: 'Castillo_DePablo',
     divisionRoleId: '1414623229288513586',
     dateRange: '03 Nov 2026 - 13 Nov 2026',
+    dateStart: '2026-11-03',
+    dateEnd: '2026-11-13',
     reason: 'Banyak kerjaan OC',
     managementRoleIds: ['1414623053471547474'],
   }).toJSON();
@@ -103,7 +110,12 @@ test('absence embed includes the applicant Discord username beside the display n
   assert.ok(embed.description.includes('Christopher Marquez (@Castillo' + String.fromCharCode(92) + '_DePablo)'));
   assert.match(embed.description, /<@&1414623229288513586>/);
   assert.match(embed.description, /03 Nov 2026 - 13 Nov 2026/);
+  assert.match(embed.description, /Duration/);
+  assert.match(embed.description, /1 week/);
+  assert.match(embed.description, /240 hours/);
   assert.match(embed.description, /Banyak kerjaan OC/);
+  assert.equal(embed.fields.some(field => field.name === 'Request ID'), false);
+  assert.equal(embed.fields.some(field => field.name === 'Decision Date'), false);
   assert.match(embed.description, /Permission to/);
   assert.match(embed.description, /Signed,/);
   assert.match(embed.fields.find(field => field.name === 'Approval Status').value, /Pending Approval/);
@@ -211,14 +223,11 @@ test('approval decisions are atomic and update only pending requests', () => {
 });
 
 test('absence form uses selectable dates for start and end and validates the range', () => {
-  const absence = buildRequestModal('1414500416724406316', 'absence').toJSON();
-  assert.equal(absence.components.length, 3);
-  const fields = absence.components.map(component => component.component);
-  assert.deepEqual(fields.map(component => component.custom_id), ['start_date', 'end_date', 'reason']);
-  assert.deepEqual(fields.slice(0, 2).map(component => component.type), [3, 3]);
-  assert.equal(fields[0].options.length, 25);
-  assert.equal(fields[1].options.length, 25);
-  assert.equal(fields[2].type, 4);
+  const absence = buildRequestModal('1414500416724406316', 'absence', '2026-11-06', '2026-11-13').toJSON();
+  assert.equal(absence.components.length, 1);
+  assert.equal(absence.custom_id, 'skaw_sr_form|absence|1414500416724406316|2026-11-06|2026-11-13');
+  assert.equal(absence.components[0].components[0].custom_id, 'reason');
+  assert.equal(absence.components[0].components[0].type, 4);
 
   assert.equal(
     buildAbsenceDateRange('2026-11-06', '2026-11-13'),
@@ -233,6 +242,37 @@ test('absence date options roll forward from the current Jakarta date for 25 day
   assert.equal(options.length, 25);
   assert.equal(options[0].value, '2026-11-06');
   assert.equal(options[24].value, '2026-11-30');
+  const nextPage = buildAbsenceDateOptions(new Date('2026-11-06T00:00:00.000Z'), 25);
+  assert.equal(nextPage[0].value, '2026-12-01');
+  assert.equal(nextPage[24].value, '2026-12-25');
+  const picker = buildAbsenceDatePickerPayload('1414500416724406316', { now: new Date('2026-11-06T00:00:00.000Z') });
+  assert.equal(picker.components[0].components[0].options.length, 25);
+  assert.match(picker.components[1].components[1].custom_id, /\|25$/);
+});
+
+test('absence duration is displayed in calendar months, weeks, days, and hours', () => {
+  assert.equal(formatAbsenceDuration('2026-11-06', '2026-11-13'), '1 week (7 days / 168 hours)');
+  assert.equal(formatAbsenceDuration('2026-11-06', '2026-12-06'), '1 month (30 days / 720 hours)');
+  assert.equal(formatAbsenceDuration('2026-11-06', '2026-11-06'), '1 day (1 day / 24 hours)');
+});
+
+test('staff request log embeds capture request lifecycle details', () => {
+  const embed = buildStaffRequestLogEmbed({
+    requestId: 'SKAW-ABS-1234567890',
+    type: 'absence',
+    applicantId: '1414500416724406316',
+    applicantName: 'Christopher Marquez',
+    applicantUsername: 'Castillo_DePablo',
+    divisionRoleId: '1414623229288513586',
+    dateRange: '06 Nov 2026 - 13 Nov 2026',
+    dateStart: '2026-11-06',
+    dateEnd: '2026-11-13',
+    reason: 'Banyak kerjaan OC',
+    status: 'pending',
+  }, 'submitted').toJSON();
+  assert.match(embed.title, /ABSENCE.*NEW REQUEST SUBMITTED/);
+  assert.match(embed.description, /SKAW-ABS-1234567890/);
+  assert.match(embed.description, /1 week/);
 });
 
 test('resignation modal keeps its reason and optional note inputs', () => {

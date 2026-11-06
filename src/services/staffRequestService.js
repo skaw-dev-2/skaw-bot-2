@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelSelectMenuBuilder, ChannelType,
-  EmbedBuilder, escapeMarkdown, LabelBuilder, MessageFlags, ModalBuilder, PermissionFlagsBits,
+  EmbedBuilder, escapeMarkdown, MessageFlags, ModalBuilder, PermissionFlagsBits,
   RoleSelectMenuBuilder, StringSelectMenuBuilder, TextInputBuilder, TextInputStyle,
 } from 'discord.js';
 import { SKAW_EMPLOYEE_ROLE_CATALOG } from './employeeLogsAutoRoleService.js';
@@ -117,7 +117,8 @@ export function formatAbsenceDuration(startValue, endValue) {
   if (weeks) parts.push(weeks + ' week' + (weeks === 1 ? '' : 's'));
   if (days) parts.push(days + ' day' + (days === 1 ? '' : 's'));
   if (!parts.length) parts.push('1 day');
-  return parts.join(', ') + ' (' + durationDays + ' day' + (durationDays === 1 ? '' : 's') + ' / ' + (durationDays * 24) + ' hours)';
+  if (durationDays === 1) return '1 day (24 hours)';
+  return parts.join(', ') + ' (' + durationDays + ' days / ' + (durationDays * 24) + ' hours)';
 }
 
 export function buildAbsenceDatePickerPayload(userId, { step = 'start', startDate = null, offsetDays = 0, now = new Date() } = {}) {
@@ -126,7 +127,9 @@ export function buildAbsenceDatePickerPayload(userId, { step = 'start', startDat
   if (!Number.isInteger(offset) || offset < 0 || offset > 725 || offset % ABSENCE_DATE_PAGE_SIZE !== 0) throw new Error('Halaman tanggal tidak valid.');
   const today = parseAbsenceDate(dateToIsoFromJakarta(now), 'Tanggal hari ini');
   const anchor = step === 'end' ? parseAbsenceDate(startDate, 'Tanggal mulai') : today;
-  const dateOptions = buildAbsenceDateOptions(addCalendarDays(anchor, offset));
+  const availableDays = step === 'start' ? ABSENCE_MAX_FUTURE_DAYS - offset + 1 : ABSENCE_MAX_FUTURE_DAYS - offset + 1;
+  const dateOptions = buildAbsenceDateOptions(addCalendarDays(anchor, offset))
+    .slice(0, Math.max(1, Math.min(ABSENCE_DATE_PAGE_SIZE, availableDays)));
   const stepLabel = step === 'start' ? 'Tanggal Mulai' : 'Tanggal Selesai';
   const select = new StringSelectMenuBuilder()
     .setCustomId(step === 'start' ? 'skaw_sr_date_start|' + String(userId) : 'skaw_sr_date_end|' + String(userId) + '|' + String(startDate))

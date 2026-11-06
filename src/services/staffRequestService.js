@@ -987,6 +987,9 @@ async function handleSubmitButton(interaction, client) {
     });
   }
 
+  if (request.type === 'absence') {
+    return interaction.reply({ ...buildAbsenceDatePickerPayload(interaction.user.id), flags: MessageFlags.Ephemeral });
+  }
   return interaction.showModal(buildRequestModal(interaction.user.id, request.type));
 }
 
@@ -1057,7 +1060,8 @@ export function isStaffRequestInteraction(interaction) {
     interaction.isButton?.()
     || interaction.isModalSubmit?.()
     || interaction.isRoleSelectMenu?.()
-    || interaction.isChannelSelectMenu?.(),
+    || interaction.isChannelSelectMenu?.()
+    || interaction.isStringSelectMenu?.(),
   );
 }
 
@@ -1069,6 +1073,10 @@ export async function handleStaffRequestInteraction(interaction, client) {
     }
     if (interaction.isModalSubmit?.() && id.startsWith('skaw_sr_reject|')) {
       return handleRejectModal(interaction, client);
+    }
+    if ((interaction.isStringSelectMenu?.() && id.startsWith('skaw_sr_date_'))
+        || (interaction.isButton?.() && id.startsWith('skaw_sr_date_page|'))) {
+      return handleAbsenceDatePickerInteraction(interaction);
     }
     if ((interaction.isChannelSelectMenu?.() || interaction.isRoleSelectMenu?.() || interaction.isButton?.())
         && id.startsWith('skaw_sr_setup_')) {

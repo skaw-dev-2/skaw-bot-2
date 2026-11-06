@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelSelectMenuBuilder, ChannelType,
-  EmbedBuilder, escapeMarkdown, MessageFlags, ModalBuilder, PermissionFlagsBits,
+  EmbedBuilder, escapeMarkdown, LabelBuilder, MessageFlags, ModalBuilder, PermissionFlagsBits,
   RoleSelectMenuBuilder, StringSelectMenuBuilder, TextInputBuilder, TextInputStyle,
 } from 'discord.js';
 import { SKAW_EMPLOYEE_ROLE_CATALOG } from './employeeLogsAutoRoleService.js';
@@ -270,6 +270,92 @@ export function resolveDivisionRoleFromIds(memberRoleIds = [], registryRoles = [
   return divisions[0];
 }
 
+const STAFF_REQUEST_DIVISION_DOMAINS = Object.freeze({
+  mechanic: 'Mechanic',
+  builder: 'Builder',
+  trucker: 'Trucker',
+  taxi: 'Taxi',
+});
+
+export function buildStaffRequestDivisionOptions({ guildRoles = [], registryRoles = [], managementRoleIds = [] } = {}) {
+  const roleMap = new Map((guildRoles || []).map(role => [String(role?.id || ''), role]));
+  const options = new Map();
+  const representedDomains = new Set();
+  const addRoleOption = (roleId, domain = null) => {
+    const id = String(roleId || '');
+    const role = roleMap.get(id);
+    if (!role || !SNOWFLAKE_RE.test(id)) return;
+    const metadata = domain ? { domain } : null;
+    options.set('role:' + id, {
+      label: String(role.name || 'Division').slice(0, 100),
+      value: 'role:' + id,
+      description: 'Pilih divisi ' + String(role.name || 'SKAW').slice(0, 70),
+    });
+    if (metadata?.domain) representedDomains.add(metadata.domain);
+  };
+
+  for (const [roleId, metadata] of Object.entries(SKAW_EMPLOYEE_ROLE_CATALOG)) {
+    if (!metadata?.active || metadata.kind !== 'division') continue;
+    addRoleOption(roleId, metadata.domain);
+  }
+  for (const role of registryRoles || []) {
+    if (role?.category !== 'division' || role?.active === false) continue;
+    addRoleOption(role.id, role.department);
+  }
+
+  const availableDomains = new Set();
+  for (const [roleId, metadata] of Object.entries(SKAW_EMPLOYEE_ROLE_CATALOG)) {
+    if (!metadata?.active || metadata.position === false || !STAFF_REQUEST_DIVISION_DOMAINS[metadata.domain]) continue;
+    if (roleMap.has(roleId)) availableDomains.add(metadata.domain);
+  }
+  for (const role of registryRoles || []) {
+    if (role?.active === false || role?.category !== 'rank' || !STAFF_REQUEST_DIVISION_DOMAINS[role.department]) continue;
+    if (roleMap.has(String(role.id))) availableDomains.add(String(role.department));
+  }
+  for (const domain of availableDomains) {
+    if (representedDomains.has(domain)) continue;
+    const label = STAFF_REQUEST_DIVISION_DOMAINS[domain] + ' Division | SKAW';
+    options.set('domain:' + domain, {
+      label,
+      value: 'domain:' + domain,
+      description: 'Pilih divisi ' + STAFF_REQUEST_DIVISION_DOMAINS[domain],
+    });
+  }
+
+  const hasManagementRole = (managementRoleIds || []).some(id => roleMap.has(String(id)));
+  if (hasManagementRole) {
+    options.set('management', { label: 'Management', value: 'management', description: 'Management SKAW' });
+  }
+
+  return [...options.values()].sort((a, b) => {
+    if (a.value === 'management') return -1;
+    if (b.value === 'management') return 1;
+    return a.label.localeCompare(b.label, 'en', { sensitivity: 'base' });
+  }).slice(0, 25);
+}
+
+export async function getStaffRequestDivisionOptions(client, guild, managementRoleIds = null) {
+  if (!guild?.roles) throw new Error('Guild role tidak tersedia untuk memuat pilihan Division.');
+  const settings = managementRoleIds || (await getStaffRequestSettings(client, guild.id)).managementRoleIds;
+  const registry = await getEmployeeRoleRegistry(client, guild.id);
+  const roles = guild.roles.cache?.size
+    ? guild.roles.cache
+    : await guild.roles.fetch().catch(() => guild.roles.cache);
+  const options = buildStaffRequestDivisionOptions({
+    guildRoles: [...roles.values()],
+    registryRoles: registry.roles,
+    managementRoleIds: settings,
+  });
+  if (!options.length) throw new Error('Pilihan Division belum tersedia. Hubungi Management untuk memeriksa konfigurasi role divisi SKAW.');
+  return options;
+}
+
+function resolveSelectedStaffRequestDivision(options, selection) {
+  const selected = (options || []).find(option => option.value === String(selection || ''));
+  if (!selected) throw new Error('Division wajib dipilih dari daftar yang tersedia.');
+  const roleId = selected.value.startsWith('role:') ? selected.value.slice(5) : null;
+  return { id: roleId, name: selected.label };
+}
 async function getMemberDivision(client, guild, member, managementRoleIds = []) {
   const memberRoleIds = [...member.roles.cache.keys()];
   if (managementRoleIds.some(roleId => member.roles.cache.has(String(roleId)))) {
@@ -626,47 +712,57 @@ export function buildStaffRequestDecisionStatement(requestId, guildId, status, r
   };
 }
 
-function buildRequestModal(userId, type, dateStart = null, dateEnd = null) {
+export function buildRequestModal(userId, type, { dateStart = null, dateEnd = null, divisionOptions = [] } = {}) {
   const template = REQUEST_TYPES[type];
   if (!template) throw new Error('Jenis form tidak dikenal.');
-  const modal = new ModalBuilder()
-    .setCustomId('skaw_sr_form|' + type + '|' + String(userId))
-    .setTitle(template.label + ' Request');
-  if (type === 'absence') {
-    buildAbsenceDateRange(dateStart, dateEnd);
-    modal.setCustomId('skaw_sr_form|absence|' + String(userId) + '|' + String(dateStart) + '|' + String(dateEnd));
-    modal.addComponents(new ActionRowBuilder().addComponents(
-      new TextInputBuilder()
-        .setCustomId('reason')
-        .setLabel('Reason')
-        .setPlaceholder('Jelaskan alasan absence kamu.')
-        .setStyle(TextInputStyle.Paragraph)
-        .setRequired(true)
-        .setMaxLength(900),
-    ));
-  } else {
-    modal.addComponents(
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId('reason')
-          .setLabel('Resignation Reason')
-          .setPlaceholder('Jelaskan alasan pengunduran diri kamu.')
-          .setStyle(TextInputStyle.Paragraph)
-          .setRequired(true)
-          .setMaxLength(900),
-      ),
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId('note')
-          .setLabel('Note / Pesan Tambahan (optional)')
-          .setPlaceholder('Ucapan terima kasih atau pesan untuk Management.')
-          .setStyle(TextInputStyle.Paragraph)
-          .setRequired(false)
-          .setMaxLength(700),
-      ),
-    );
+  if (!Array.isArray(divisionOptions) || !divisionOptions.length || divisionOptions.length > 25) {
+    throw new Error('Pilihan Division belum tersedia atau melebihi batas dropdown Discord.');
   }
+  if (type === 'absence') buildAbsenceDateRange(dateStart, dateEnd);
+  const modal = new ModalBuilder()
+    .setCustomId('skaw_sr_form|' + type + '|' + String(userId) + '|' + (dateStart || '-') + '|' + (dateEnd || '-'))
+    .setTitle(template.label + ' Request');
+  const nameInput = new TextInputBuilder()
+    .setCustomId('applicant_name')
+    .setPlaceholder('Tulis nama kamu sesuai kebutuhan SKAW.')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setMaxLength(100);
+  const divisionSelect = new StringSelectMenuBuilder()
+    .setCustomId('division')
+    .setPlaceholder('Pilih division kamu')
+    .setMinValues(1)
+    .setMaxValues(1)
+    .addOptions(divisionOptions.map(({ label, value, description }) => ({ label, value, description })));
+  const reasonInput = new TextInputBuilder()
+    .setCustomId('reason')
+    .setPlaceholder(type === 'absence' ? 'Jelaskan alasan absence kamu.' : 'Jelaskan alasan pengunduran diri kamu.')
+    .setStyle(TextInputStyle.Paragraph)
+    .setRequired(true)
+    .setMaxLength(900);
+  const labels = [
+    new LabelBuilder().setLabel('Name').setDescription('Masukkan nama secara manual.').setTextInputComponent(nameInput),
+    new LabelBuilder().setLabel('Division').setDescription('Pilih divisi dari daftar SKAW.').setStringSelectMenuComponent(divisionSelect),
+    new LabelBuilder().setLabel(type === 'absence' ? 'Reason' : 'Resignation Reason').setTextInputComponent(reasonInput),
+  ];
+  if (type === 'resignation') {
+    labels.push(new LabelBuilder().setLabel('Note / Pesan Tambahan (optional)').setTextInputComponent(
+      new TextInputBuilder()
+        .setCustomId('note')
+        .setPlaceholder('Ucapan terima kasih atau pesan untuk Management.')
+        .setStyle(TextInputStyle.Paragraph)
+        .setRequired(false)
+        .setMaxLength(700),
+    ));
+  }
+  modal.addLabelComponents(...labels);
   return modal;
+}
+
+export async function openStaffRequestModal(interaction, client, type, dateStart = null, dateEnd = null) {
+  const settings = await getStaffRequestSettings(client, interaction.guildId);
+  const divisionOptions = await getStaffRequestDivisionOptions(client, interaction.guild, settings.managementRoleIds);
+  return interaction.showModal(buildRequestModal(interaction.user.id, type, { dateStart, dateEnd, divisionOptions }));
 }
 export async function openStaffRequestSetup(interaction, client) {
   if (!interaction.inGuild?.() || !interaction.guild) {
@@ -691,7 +787,8 @@ async function submitStaffRequest(client, guild, interaction, type, input) {
   if (!canSubmitStaffRequest([...member.roles.cache.keys()], settings.managementRoleIds)) {
     throw new Error('Fitur ini hanya dapat digunakan oleh anggota Company Staff atau Management SKAW.');
   }
-  const division = await getMemberDivision(client, guild, member, settings.managementRoleIds);
+  const divisionOptions = await getStaffRequestDivisionOptions(client, guild, settings.managementRoleIds);
+  const division = resolveSelectedStaffRequestDivision(divisionOptions, input.divisionSelection);
   const channelId = type === 'absence' ? settings.absenceChannelId : settings.resignationChannelId;
   if (!channelId) {
     throw new Error(
@@ -731,7 +828,7 @@ async function submitStaffRequest(client, guild, interaction, type, input) {
   }
 
   const requestId = formatRequestId(type);
-  const applicantName = cleanText(member.displayName || interaction.user.username, 'Name', { maxLength: 100 });
+  const applicantName = cleanText(input.applicantName, 'Name', { maxLength: 100 });
   const applicantUsername = cleanText(interaction.user.username || interaction.user.id, 'Discord username', { maxLength: 100 });
   let inserted;
   try {
@@ -836,7 +933,7 @@ function getDateDifferenceInDays(startValue, endValue) {
   return Math.floor((end.getTime() - start.getTime()) / 86400000);
 }
 
-async function handleAbsenceDatePickerInteraction(interaction) {
+async function handleAbsenceDatePickerInteraction(interaction, client) {
   const id = String(interaction.customId || '');
   if (interaction.isButton?.() && id.startsWith('skaw_sr_date_page|')) {
     const [, step, ownerId, startDateToken, offsetToken] = id.split('|');
@@ -861,7 +958,7 @@ async function handleAbsenceDatePickerInteraction(interaction) {
     const daysFromStart = getDateDifferenceInDays(startDate, selectedEnd);
     if (daysFromStart < 0) throw new Error('Tanggal selesai tidak boleh sebelum tanggal mulai.');
     if (daysFromStart > ABSENCE_MAX_FUTURE_DAYS) throw new Error('Durasi Absence maksimal 2 tahun dari tanggal mulai.');
-    return interaction.showModal(buildRequestModal(ownerId, 'absence', startDate, selectedEnd));
+    return openStaffRequestModal(interaction, client, 'absence', startDate, selectedEnd);
   }
   return null;
 }
@@ -874,9 +971,11 @@ async function handleRequestForm(interaction, client) {
   try {
     if (!Object.hasOwn(REQUEST_TYPES, type)) throw new Error('Jenis pengajuan tidak dikenal.');
     const input = {
-      dateRange: type === 'absence' ? buildAbsenceDateRange(dateStart, dateEnd) : null,
+      dateRange: type === 'absence' ? buildAbsenceDateRange(dateStart === '-' ? null : dateStart, dateEnd === '-' ? null : dateEnd) : null,
       dateStart: type === 'absence' ? dateStart : null,
       dateEnd: type === 'absence' ? dateEnd : null,
+      applicantName: interaction.fields.getTextInputValue('applicant_name'),
+      divisionSelection: interaction.fields.getStringSelectValues('division')[0],
       reason: interaction.fields.getTextInputValue('reason'),
       note: type === 'resignation' ? interaction.fields.getTextInputValue('note') : '',
     };
@@ -990,7 +1089,7 @@ async function handleSubmitButton(interaction, client) {
   if (request.type === 'absence') {
     return interaction.reply({ ...buildAbsenceDatePickerPayload(interaction.user.id), flags: MessageFlags.Ephemeral });
   }
-  return interaction.showModal(buildRequestModal(interaction.user.id, request.type));
+  return openStaffRequestModal(interaction, client, request.type);
 }
 
 async function handleDecisionButton(interaction, client) {
@@ -1076,7 +1175,7 @@ export async function handleStaffRequestInteraction(interaction, client) {
     }
     if ((interaction.isStringSelectMenu?.() && id.startsWith('skaw_sr_date_'))
         || (interaction.isButton?.() && id.startsWith('skaw_sr_date_page|'))) {
-      return handleAbsenceDatePickerInteraction(interaction);
+      return handleAbsenceDatePickerInteraction(interaction, client);
     }
     if ((interaction.isChannelSelectMenu?.() || interaction.isRoleSelectMenu?.() || interaction.isButton?.())
         && id.startsWith('skaw_sr_setup_')) {
@@ -1102,4 +1201,3 @@ export async function handleStaffRequestInteraction(interaction, client) {
   }
 }
 
-export { buildRequestModal };

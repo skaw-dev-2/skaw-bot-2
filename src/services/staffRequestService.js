@@ -205,6 +205,8 @@ function mapStaffRequest(row) {
     divisionRoleId: row.division_role_id ? String(row.division_role_id) : null,
     divisionName: row.division_name || null,
     dateRange: row.date_range || null,
+    dateStart: row.date_start ? (row.date_start instanceof Date ? row.date_start.toISOString().slice(0, 10) : String(row.date_start).slice(0, 10)) : null,
+    dateEnd: row.date_end ? (row.date_end instanceof Date ? row.date_end.toISOString().slice(0, 10) : String(row.date_end).slice(0, 10)) : null,
     reason: row.reason || '',
     note: row.note || '',
     status: row.status,
@@ -292,7 +294,7 @@ export async function getStaffRequestSettings(client, guildId) {
     [String(guildId), JSON.stringify(DEFAULT_STAFF_REQUEST_MANAGEMENT_ROLE_IDS)],
   );
   const result = await pool.query(
-    'SELECT guild_id, request_channel_id, absence_channel_id, resignation_channel_id, management_role_ids, updated_by, updated_at FROM skaw_staff_request_settings WHERE guild_id=$1 LIMIT 1',
+    'SELECT guild_id, request_channel_id, absence_channel_id, resignation_channel_id, log_channel_id, management_role_ids, updated_by, updated_at FROM skaw_staff_request_settings WHERE guild_id=$1 LIMIT 1',
     [String(guildId)],
   );
   const row = result.rows[0];
@@ -302,6 +304,7 @@ export async function getStaffRequestSettings(client, guildId) {
     guildId: String(guildId),
     absenceChannelId: row?.absence_channel_id ? String(row.absence_channel_id) : legacyChannelId,
     resignationChannelId: row?.resignation_channel_id ? String(row.resignation_channel_id) : legacyChannelId,
+    logChannelId: row?.log_channel_id ? String(row.log_channel_id) : null,
     managementRoleIds: roleIds.length ? roleIds : [...DEFAULT_STAFF_REQUEST_MANAGEMENT_ROLE_IDS],
     updatedBy: row?.updated_by ? String(row.updated_by) : null,
     updatedAt: row?.updated_at || null,
@@ -341,18 +344,33 @@ export async function setStaffRequestManagementRoles(client, guildId, roleIds, a
   return getStaffRequestSettings(client, guildId);
 }
 
+export async function setStaffRequestLogChannel(client, guildId, channelId, actorId) {
+  const id = channelId ? String(channelId) : null;
+  if (id && !SNOWFLAKE_RE.test(id)) throw new Error('Staff Request logs channel ID tidak valid.');
+  const pool = getPool(client);
+  await getStaffRequestSettings(client, guildId);
+  await pool.query(
+    'UPDATE skaw_staff_request_settings SET log_channel_id=$2, updated_by=$3, updated_at=CURRENT_TIMESTAMP WHERE guild_id=$1',
+    [String(guildId), id, String(actorId)],
+  );
+  return getStaffRequestSettings(client, guildId);
+}
+
 export function buildStaffRequestSetupPayload(settings, notice = null) {
   const embed = new EmbedBuilder()
     .setColor(0x1a9ef3)
     .setTitle('SKAW GROUP · STAFF REQUEST SETTINGS')
     .setDescription([
-      'Configure separate Absence and Resignation channels plus Management approval roles.',
+      'Configure request channels, a shared activity log channel, and Management approval roles.',
       '',
       '**Absence Channel**',
       settings.absenceChannelId ? '<#' + settings.absenceChannelId + '>' : 'Not configured',
       '',
       '**Resignation Channel**',
       settings.resignationChannelId ? '<#' + settings.resignationChannelId + '>' : 'Not configured',
+      '',
+      '**Activity Logs Channel**',
+      settings.logChannelId ? '<#' + settings.logChannelId + '>' : 'Not configured',
       '',
       '**Management Approval Roles**',
       settings.managementRoleIds.length ? settings.managementRoleIds.map(id => '<@&' + id + '>').join(', ') : 'Not configured',
@@ -379,6 +397,14 @@ export function buildStaffRequestSetupPayload(settings, notice = null) {
     .setMaxValues(1);
   if (settings.resignationChannelId) resignationChannelSelect.setDefaultChannels(settings.resignationChannelId);
 
+  const logChannelSelect = new ChannelSelectMenuBuilder()
+    .setCustomId('skaw_sr_setup_logs_channel')
+    .setPlaceholder('Select Staff Request activity logs channel')
+    .setChannelTypes(ChannelType.GuildText)
+    .setMinValues(1)
+    .setMaxValues(1);
+  if (settings.logChannelId) logChannelSelect.setDefaultChannels(settings.logChannelId);
+
   const roleSelect = new RoleSelectMenuBuilder()
     .setCustomId('skaw_sr_setup_roles')
     .setPlaceholder('Select Management approval roles')
@@ -391,11 +417,16 @@ export function buildStaffRequestSetupPayload(settings, notice = null) {
     components: [
       new ActionRowBuilder().addComponents(absenceChannelSelect),
       new ActionRowBuilder().addComponents(resignationChannelSelect),
+      new ActionRowBuilder().addComponents(logChannelSelect),
       new ActionRowBuilder().addComponents(roleSelect),
       new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId('skaw_sr_setup_reset')
-          .setLabel('Reset to Management Company')
+          .setLabel('Reset Management Roles')
+          .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId('skaw_sr_setup_logs_disable')
+          .setLabel('Disable Logs')
           .setStyle(ButtonStyle.Secondary),
       ),
     ],

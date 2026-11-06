@@ -270,107 +270,108 @@ export function resolveDivisionRoleFromIds(memberRoleIds = [], registryRoles = [
   return divisions[0];
 }
 
-const STAFF_REQUEST_DIVISION_DOMAINS = Object.freeze({
-  mechanic: 'Mechanic',
-  builder: 'Builder',
-  trucker: 'Trucker',
-  taxi: 'Taxi',
-});
+export function buildStaffRequestRoleMetadata({ registryRoles = [], managementRoleIds = [] } = {}) {
+  const metadata = new Map();
 
-export function buildStaffRequestDivisionOptions({ guildRoles = [], registryRoles = [], managementRoleIds = [] } = {}) {
-  const roleMap = new Map((guildRoles || []).map(role => [String(role?.id || ''), role]));
-  const options = new Map();
-  const representedDomains = new Set();
-  const addRoleOption = (roleId, domain = null) => {
-    const id = String(roleId || '');
-    const role = roleMap.get(id);
-    if (!role || !SNOWFLAKE_RE.test(id)) return;
-    const metadata = domain ? { domain } : null;
-    options.set('role:' + id, {
-      label: String(role.name || 'Division').slice(0, 100),
-      value: 'role:' + id,
-      description: 'Pilih divisi ' + String(role.name || 'SKAW').slice(0, 70),
-    });
-    if (metadata?.domain) representedDomains.add(metadata.domain);
-  };
-
-  for (const [roleId, metadata] of Object.entries(SKAW_EMPLOYEE_ROLE_CATALOG)) {
-    if (!metadata?.active || metadata.kind !== 'division') continue;
-    addRoleOption(roleId, metadata.domain);
-  }
-  for (const role of registryRoles || []) {
-    if (role?.category !== 'division' || role?.active === false) continue;
-    addRoleOption(role.id, role.department);
+  for (const [id, entry] of Object.entries(SKAW_EMPLOYEE_ROLE_CATALOG)) {
+    if (entry?.active !== true || entry.position === false
+        || !['position', 'rank', 'division'].includes(entry.kind)) continue;
+    metadata.set(String(id), { ...entry, id: String(id) });
   }
 
-  const availableDomains = new Set();
-  for (const [roleId, metadata] of Object.entries(SKAW_EMPLOYEE_ROLE_CATALOG)) {
-    if (!metadata?.active || metadata.position === false || !STAFF_REQUEST_DIVISION_DOMAINS[metadata.domain]) continue;
-    if (roleMap.has(roleId)) availableDomains.add(metadata.domain);
-  }
-  for (const role of registryRoles || []) {
-    if (role?.active === false || role?.category !== 'rank' || !STAFF_REQUEST_DIVISION_DOMAINS[role.department]) continue;
-    if (roleMap.has(String(role.id))) availableDomains.add(String(role.department));
-  }
-  for (const domain of availableDomains) {
-    if (representedDomains.has(domain)) continue;
-    const label = STAFF_REQUEST_DIVISION_DOMAINS[domain] + ' Division | SKAW';
-    options.set('domain:' + domain, {
-      label,
-      value: 'domain:' + domain,
-      description: 'Pilih divisi ' + STAFF_REQUEST_DIVISION_DOMAINS[domain],
+  for (const entry of registryRoles || []) {
+    const id = String(entry?.id || '');
+    if (!SNOWFLAKE_RE.test(id) || entry?.active === false
+        || !['rank', 'division'].includes(String(entry?.category || ''))) continue;
+    metadata.set(id, {
+      id,
+      name: String(entry.name || 'SKAW Role'),
+      domain: String(entry.department || 'other'),
+      level: entry.category === 'rank' ? Number(entry.level) || 1 : 0,
+      kind: entry.category,
+      active: true,
+      position: true,
     });
   }
 
-  const hasManagementRole = (managementRoleIds || []).some(id => roleMap.has(String(id)));
-  if (hasManagementRole) {
-    options.set('management', { label: 'Management', value: 'management', description: 'Management SKAW' });
+  for (const rawId of managementRoleIds || []) {
+    const id = String(rawId);
+    if (!SNOWFLAKE_RE.test(id) || metadata.has(id)) continue;
+    metadata.set(id, {
+      id,
+      name: 'Management Role',
+      domain: 'management',
+      level: 4,
+      kind: 'position',
+      active: true,
+      position: true,
+    });
   }
 
-  return [...options.values()].sort((a, b) => {
-    if (a.value === 'management') return -1;
-    if (b.value === 'management') return 1;
-    return a.label.localeCompare(b.label, 'en', { sensitivity: 'base' });
-  }).slice(0, 25);
+  return metadata;
 }
 
-export async function getStaffRequestDivisionOptions(client, guild, managementRoleIds = null) {
-  if (!guild?.roles) throw new Error('Guild role tidak tersedia untuk memuat pilihan Division.');
-  const settings = managementRoleIds || (await getStaffRequestSettings(client, guild.id)).managementRoleIds;
+/**
+ * A requester may select only a registered active SKAW position at or below
+ * their own highest SKAW level, and never above their actual Discord role.
+ * The guild owner bypasses hierarchy checks, but not the active-role check.
+ */
+export function isStaffRequestRoleWithinHierarchy(role, member, roleMetadata, guildOwnerId = null, everyoneRoleId = null) {
+  const roleId = String(role?.id || '');
+  const entry = roleMetadata?.get?.(roleId);
+  if (!role || !entry || entry.active !== true || entry.position === false
+      || role.managed || roleId === String(everyoneRoleId || '')) return false;
+
+  const actorId = String(member?.id || member?.user?.id || '');
+  if (actorId && String(guildOwnerId || '') === actorId) return true;
+
+  const memberRoleIds = new Set([...(member?.roles?.cache?.keys?.() || [])].map(String));
+  const ownedLevels = [...memberRoleIds]
+    .map(id => Number(roleMetadata.get(id)?.level))
+    .filter(Number.isFinite);
+  if (!ownedLevels.length) return memberRoleIds.has(roleId);
+
+  const actorMaxLevel = Math.max(...ownedLevels);
+  if (Number(entry.level ?? 0) > actorMaxLevel) return false;
+
+  const highest = member?.roles?.highest;
+  if (highest && typeof role.comparePositionTo === 'function') {
+    return role.comparePositionTo(highest) <= 0;
+  }
+  if (highest && Number.isFinite(Number(role.position)) && Number.isFinite(Number(highest.position))) {
+    return Number(role.position) <= Number(highest.position);
+  }
+  return memberRoleIds.has(roleId);
+}
+
+async function getStaffRequestRoleContext(client, guild, member, managementRoleIds = []) {
+  if (!guild?.roles) throw new Error('Server role tidak tersedia untuk memuat pilihan Role.');
   const registry = await getEmployeeRoleRegistry(client, guild.id);
-  const roles = guild.roles.cache?.size
-    ? guild.roles.cache
-    : await guild.roles.fetch().catch(() => guild.roles.cache);
-  const options = buildStaffRequestDivisionOptions({
-    guildRoles: [...roles.values()],
+  const metadata = buildStaffRequestRoleMetadata({
     registryRoles: registry.roles,
-    managementRoleIds: settings,
+    managementRoleIds,
   });
-  if (!options.length) throw new Error('Pilihan Division belum tersedia. Hubungi Management untuk memeriksa konfigurasi role divisi SKAW.');
-  return options;
+  const fetchedRoles = await guild.roles.fetch().catch(() => guild.roles.cache);
+  const roles = new Map([...(fetchedRoles?.values?.() || [])].map(role => [String(role.id), role]));
+  const selectableRoles = [...roles.values()].filter(role =>
+    isStaffRequestRoleWithinHierarchy(role, member, metadata, guild.ownerId, guild.id));
+  if (!selectableRoles.length) {
+    throw new Error('Tidak ada role/jabatan SKAW aktif yang sesuai dengan hierarki akun kamu. Hubungi Management untuk memeriksa penempatan role.');
+  }
+  return { roles, metadata, selectableRoles };
 }
 
-function resolveSelectedStaffRequestDivision(options, selection) {
-  const selected = (options || []).find(option => option.value === String(selection || ''));
-  if (!selected) throw new Error('Division wajib dipilih dari daftar yang tersedia.');
-  const roleId = selected.value.startsWith('role:') ? selected.value.slice(5) : null;
-  return { id: roleId, name: selected.label };
-}
-async function getMemberDivision(client, guild, member, managementRoleIds = []) {
-  const memberRoleIds = [...member.roles.cache.keys()];
-  if (managementRoleIds.some(roleId => member.roles.cache.has(String(roleId)))) {
-    return { id: null, name: 'Management' };
+function resolveSelectedStaffRequestRole(roleId, context, member, guild) {
+  const id = String(roleId || '');
+  const role = context?.roles?.get(id);
+  if (!role) throw new Error('Role yang dipilih tidak ditemukan di server. Silakan buka ulang form dan pilih role yang tersedia.');
+  if (!context.metadata.has(id)) {
+    throw new Error('Role tersebut bukan role/jabatan SKAW aktif yang terdaftar.');
   }
-  const registry = await getEmployeeRoleRegistry(client, guild.id);
-  const division = resolveDivisionRoleFromIds(memberRoleIds, registry.roles, managementRoleIds);
-  if (!division) {
-    throw new Error('Division Role SKAW belum ditemukan pada akun kamu. Hubungi Management untuk memperbarui role divisi.');
+  if (!isStaffRequestRoleWithinHierarchy(role, member, context.metadata, guild?.ownerId, guild?.id)) {
+    throw new Error('Akses hierarki tidak mengizinkan kamu memilih role tersebut. Pilih role pada level yang setara atau lebih rendah dari hierarki kamu.');
   }
-  if (division.inferred) return { id: null, name: division.name };
-  const role = member.roles.cache.get(division.id)
-    || await guild.roles.fetch(division.id).catch(() => null);
-  if (!role) throw new Error('Division Role tidak ditemukan di server. Hubungi Management.');
-  return { id: role.id, name: role.name };
+  return { id: String(role.id), name: String(role.name || 'SKAW Role') };
 }
 
 export async function getStaffRequestSettings(client, guildId) {
@@ -556,9 +557,9 @@ export function buildStaffRequestEmbed(request) {
     ? escapeMarkdown(cleanText(request.applicantUsername, 'Discord username', { maxLength: 100 }))
     : null;
   const cleanReason = escapeMarkdown(cleanText(request.reason, 'Reason', { maxLength: 900 }));
-  const cleanDivision = request.divisionRoleId
+  const cleanRole = request.divisionRoleId
     ? '<@&' + String(request.divisionRoleId) + '>'
-    : escapeMarkdown(cleanText(request.divisionName || 'Not recorded', 'Division', { maxLength: 100 }));
+    : escapeMarkdown(cleanText(request.divisionName || 'Not recorded', 'Role', { maxLength: 100 }));
   const reviewerPermission = (request.managementRoleIds || DEFAULT_STAFF_REQUEST_MANAGEMENT_ROLE_IDS)
     .map(id => '<@&' + String(id) + '>')
     .join(', ');
@@ -567,7 +568,7 @@ export function buildStaffRequestEmbed(request) {
     '__**' + template.title + '**__',
     '',
     '> **Name :** ' + cleanName + (cleanUsername ? ' (@' + cleanUsername + ')' : ''),
-    '> **Division :** ' + cleanDivision,
+    '> **Role :** ' + cleanRole,
   ];
   if (request.type === 'absence') {
     lines.push(
@@ -626,11 +627,11 @@ export function buildStaffRequestLogEmbed(request, event = 'submitted') {
   const eventColors = { submitted: 0x2563eb, approved: 0x16a34a, rejected: 0xdc2626, delivery_failed: 0xd97706 };
   const name = escapeMarkdown(cleanText(request.applicantName, 'Name', { maxLength: 100 }));
   const username = request.applicantUsername ? escapeMarkdown(cleanText(request.applicantUsername, 'Discord username', { maxLength: 100 })) : null;
-  const division = request.divisionRoleId ? '<@&' + String(request.divisionRoleId) + '>' : escapeMarkdown(cleanText(request.divisionName || 'Not recorded', 'Division', { maxLength: 100 }));
+  const role = request.divisionRoleId ? '<@&' + String(request.divisionRoleId) + '>' : escapeMarkdown(cleanText(request.divisionName || 'Not recorded', 'Role', { maxLength: 100 }));
   const lines = [
     '**Employee:** <@' + String(request.applicantId) + '>',
     '**Name:** ' + name + (username ? ' (@' + username + ')' : ''),
-    '**Division:** ' + division,
+    '**Role:** ' + role,
     '**Request ID:** `' + String(request.requestId || 'N/A') + '`',
     '**Reason:** ' + escapeMarkdown(cleanText(request.reason || 'Not recorded', 'Reason', { maxLength: 900 })),
   ];
@@ -712,12 +713,9 @@ export function buildStaffRequestDecisionStatement(requestId, guildId, status, r
   };
 }
 
-export function buildRequestModal(userId, type, { dateStart = null, dateEnd = null, divisionOptions = [] } = {}) {
+export function buildRequestModal(userId, type, { dateStart = null, dateEnd = null } = {}) {
   const template = REQUEST_TYPES[type];
   if (!template) throw new Error('Jenis form tidak dikenal.');
-  if (!Array.isArray(divisionOptions) || !divisionOptions.length || divisionOptions.length > 25) {
-    throw new Error('Pilihan Division belum tersedia atau melebihi batas dropdown Discord.');
-  }
   if (type === 'absence') buildAbsenceDateRange(dateStart, dateEnd);
   const modal = new ModalBuilder()
     .setCustomId('skaw_sr_form|' + type + '|' + String(userId) + '|' + (dateStart || '-') + '|' + (dateEnd || '-'))
@@ -728,12 +726,11 @@ export function buildRequestModal(userId, type, { dateStart = null, dateEnd = nu
     .setStyle(TextInputStyle.Short)
     .setRequired(true)
     .setMaxLength(100);
-  const divisionSelect = new StringSelectMenuBuilder()
-    .setCustomId('division')
-    .setPlaceholder('Pilih division kamu')
+  const roleSelect = new RoleSelectMenuBuilder()
+    .setCustomId('role')
+    .setPlaceholder('Pilih role/jabatan SKAW kamu')
     .setMinValues(1)
-    .setMaxValues(1)
-    .addOptions(divisionOptions.map(({ label, value, description }) => ({ label, value, description })));
+    .setMaxValues(1);
   const reasonInput = new TextInputBuilder()
     .setCustomId('reason')
     .setPlaceholder(type === 'absence' ? 'Jelaskan alasan absence kamu.' : 'Jelaskan alasan pengunduran diri kamu.')
@@ -742,7 +739,7 @@ export function buildRequestModal(userId, type, { dateStart = null, dateEnd = nu
     .setMaxLength(900);
   const labels = [
     new LabelBuilder().setLabel('Name').setDescription('Masukkan nama secara manual.').setTextInputComponent(nameInput),
-    new LabelBuilder().setLabel('Division').setDescription('Pilih divisi dari daftar SKAW.').setStringSelectMenuComponent(divisionSelect),
+    new LabelBuilder().setLabel('Role').setDescription('Pilih role SKAW sesuai level dan hierarki akses kamu. Pilihan akan divalidasi saat dikirim.').setRoleSelectMenuComponent(roleSelect),
     new LabelBuilder().setLabel(type === 'absence' ? 'Reason' : 'Resignation Reason').setTextInputComponent(reasonInput),
   ];
   if (type === 'resignation') {
@@ -761,8 +758,12 @@ export function buildRequestModal(userId, type, { dateStart = null, dateEnd = nu
 
 export async function openStaffRequestModal(interaction, client, type, dateStart = null, dateEnd = null) {
   const settings = await getStaffRequestSettings(client, interaction.guildId);
-  const divisionOptions = await getStaffRequestDivisionOptions(client, interaction.guild, settings.managementRoleIds);
-  return interaction.showModal(buildRequestModal(interaction.user.id, type, { dateStart, dateEnd, divisionOptions }));
+  const member = interaction.member?.roles?.cache
+    ? interaction.member
+    : await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
+  if (!member?.roles?.cache) throw new Error('Data hierarki akun tidak dapat dimuat. Coba kembali.');
+  await getStaffRequestRoleContext(client, interaction.guild, member, settings.managementRoleIds);
+  return interaction.showModal(buildRequestModal(interaction.user.id, type, { dateStart, dateEnd }));
 }
 export async function openStaffRequestSetup(interaction, client) {
   if (!interaction.inGuild?.() || !interaction.guild) {
@@ -787,8 +788,8 @@ async function submitStaffRequest(client, guild, interaction, type, input) {
   if (!canSubmitStaffRequest([...member.roles.cache.keys()], settings.managementRoleIds)) {
     throw new Error('Fitur ini hanya dapat digunakan oleh anggota Company Staff atau Management SKAW.');
   }
-  const divisionOptions = await getStaffRequestDivisionOptions(client, guild, settings.managementRoleIds);
-  const division = resolveSelectedStaffRequestDivision(divisionOptions, input.divisionSelection);
+  const roleContext = await getStaffRequestRoleContext(client, guild, member, settings.managementRoleIds);
+  const selectedRole = resolveSelectedStaffRequestRole(input.roleSelection, roleContext, member, guild);
   const channelId = type === 'absence' ? settings.absenceChannelId : settings.resignationChannelId;
   if (!channelId) {
     throw new Error(
@@ -835,7 +836,7 @@ async function submitStaffRequest(client, guild, interaction, type, input) {
     inserted = await pool.query(
       "INSERT INTO skaw_staff_requests (request_id, guild_id, request_type, applicant_id, applicant_name, applicant_username, division_role_id, division_name, date_range, date_start, date_end, reason, note, status, channel_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'pending',$14) RETURNING *",
       [requestId, String(guild.id), type, String(interaction.user.id), applicantName, applicantUsername,
-        division.id, division.name, dateRange, dateStart, dateEnd, reason, note, String(channel.id)],
+        selectedRole.id, selectedRole.name, dateRange, dateStart, dateEnd, reason, note, String(channel.id)],
     );
   } catch (error) {
     if (type === 'resignation' && error?.code === '23505') {
@@ -975,7 +976,7 @@ async function handleRequestForm(interaction, client) {
       dateStart: type === 'absence' ? dateStart : null,
       dateEnd: type === 'absence' ? dateEnd : null,
       applicantName: interaction.fields.getTextInputValue('applicant_name'),
-      divisionSelection: interaction.fields.getStringSelectValues('division')[0],
+      roleSelection: interaction.fields.getSelectedRoles('role')?.first()?.id,
       reason: interaction.fields.getTextInputValue('reason'),
       note: type === 'resignation' ? interaction.fields.getTextInputValue('note') : '',
     };

@@ -486,6 +486,9 @@ export function buildStaffRequestEmbed(request) {
   if (request.type === 'absence') {
     lines.push(
       '> **Date :** ' + escapeMarkdown(cleanText(request.dateRange, 'Date', { maxLength: 100 })),
+      ...(request.dateStart && request.dateEnd
+        ? ['> **Duration :** ' + escapeMarkdown(formatAbsenceDuration(request.dateStart, request.dateEnd))]
+        : []),
       '> **Reason :** ' + cleanReason,
     );
   } else {
@@ -512,7 +515,6 @@ export function buildStaffRequestEmbed(request) {
     .setTitle('SKAW GROUP · ' + template.label.toUpperCase() + ' REQUEST')
     .setDescription(lines.join('\n'))
     .addFields(
-      { name: 'Request ID', value: String(request.requestId || 'Pending ID'), inline: true },
       { name: 'Approval Status', value: statusLabel, inline: true },
     )
     .setFooter({ text: 'SKAW GROUP · PEOPLE OPERATIONS' })
@@ -528,15 +530,54 @@ export function buildStaffRequestEmbed(request) {
       inline: false,
     });
   }
-  if (request.reviewedAt) {
-    const reviewedAt = new Date(request.reviewedAt);
-    if (!Number.isNaN(reviewedAt.getTime())) {
-      embed.addFields({ name: 'Decision Date', value: reviewedAt.toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' }), inline: true });
-    }
-  }
   return embed;
 }
 
+export function buildStaffRequestLogEmbed(request, event = 'submitted') {
+  const template = REQUEST_TYPES[request.type];
+  if (!template) throw new Error('Jenis pengajuan tidak dikenal.');
+  const eventLabels = { submitted: 'NEW REQUEST SUBMITTED', approved: 'REQUEST APPROVED', rejected: 'REQUEST REJECTED', delivery_failed: 'REQUEST DELIVERY FAILED' };
+  const eventColors = { submitted: 0x2563eb, approved: 0x16a34a, rejected: 0xdc2626, delivery_failed: 0xd97706 };
+  const name = escapeMarkdown(cleanText(request.applicantName, 'Name', { maxLength: 100 }));
+  const username = request.applicantUsername ? escapeMarkdown(cleanText(request.applicantUsername, 'Discord username', { maxLength: 100 })) : null;
+  const division = request.divisionRoleId ? '<@&' + String(request.divisionRoleId) + '>' : escapeMarkdown(cleanText(request.divisionName || 'Not recorded', 'Division', { maxLength: 100 }));
+  const lines = [
+    '**Employee:** <@' + String(request.applicantId) + '>',
+    '**Name:** ' + name + (username ? ' (@' + username + ')' : ''),
+    '**Division:** ' + division,
+    '**Request ID:** `' + String(request.requestId || 'N/A') + '`',
+    '**Reason:** ' + escapeMarkdown(cleanText(request.reason || 'Not recorded', 'Reason', { maxLength: 900 })),
+  ];
+  if (request.type === 'absence' && request.dateRange) {
+    lines.splice(3, 0, '**Date:** ' + escapeMarkdown(cleanText(request.dateRange, 'Date', { maxLength: 100 })));
+    if (request.dateStart && request.dateEnd) lines.splice(4, 0, '**Duration:** ' + escapeMarkdown(formatAbsenceDuration(request.dateStart, request.dateEnd)));
+  }
+  if (request.note) lines.push('**Note:** ' + escapeMarkdown(cleanText(request.note, 'Note', { maxLength: 700 })));
+  if (request.reviewedBy) lines.push('**Reviewed By:** <@' + String(request.reviewedBy) + '>');
+  if (request.reviewReason) lines.push('**Management Note:** ' + escapeMarkdown(cleanText(request.reviewReason, 'Management note', { maxLength: 800 })));
+  return new EmbedBuilder()
+    .setColor(eventColors[event] || 0x64748b)
+    .setTitle('SKAW GROUP · ' + template.label.toUpperCase() + ' · ' + (eventLabels[event] || 'REQUEST UPDATE'))
+    .setDescription(lines.join('\n'))
+    .setFooter({ text: 'SKAW GROUP · PEOPLE OPERATIONS LOGS' })
+    .setTimestamp(request.reviewedAt || request.createdAt || new Date());
+}
+
+async function sendStaffRequestLog(guild, settings, request, event) {
+  if (!settings?.logChannelId) return false;
+  const channel = guild.channels.cache.get(settings.logChannelId) || await guild.channels.fetch(settings.logChannelId).catch(() => null);
+  if (!channel?.isTextBased?.() || channel.isDMBased?.()) {
+    logger.warn('Staff Request logs channel is unavailable', { guildId: guild.id, channelId: settings.logChannelId });
+    return false;
+  }
+  try {
+    await channel.send({ embeds: [buildStaffRequestLogEmbed(request, event)], allowedMentions: { parse: [] } });
+    return true;
+  } catch (error) {
+    logger.warn('Could not send Staff Request activity log', { guildId: guild.id, requestId: request.requestId, event, channelId: settings.logChannelId, error: error.message });
+    return false;
+  }
+}
 export function buildStaffRequestDecisionRows(request) {
   const template = REQUEST_TYPES[request.type];
   if (!template) throw new Error('Jenis pengajuan tidak dikenal.');
@@ -585,43 +626,24 @@ export function buildStaffRequestDecisionStatement(requestId, guildId, status, r
   };
 }
 
-function buildRequestModal(userId, type) {
+function buildRequestModal(userId, type, dateStart = null, dateEnd = null) {
   const template = REQUEST_TYPES[type];
   if (!template) throw new Error('Jenis form tidak dikenal.');
   const modal = new ModalBuilder()
     .setCustomId('skaw_sr_form|' + type + '|' + String(userId))
     .setTitle(template.label + ' Request');
-
   if (type === 'absence') {
-    const dateOptions = buildAbsenceDateOptions();
-    const dateSelect = (customId, placeholder) => new StringSelectMenuBuilder()
-      .setCustomId(customId)
-      .setPlaceholder(placeholder)
-      .setMinValues(1)
-      .setMaxValues(1)
-      .setRequired(true)
-      .addOptions(dateOptions);
-
-    modal.addLabelComponents(
-      new LabelBuilder()
-        .setLabel('Tanggal Mulai')
-        .setDescription('Pilih tanggal mulai Absence.')
-        .setStringSelectMenuComponent(dateSelect('start_date', 'Pilih tanggal mulai')),
-      new LabelBuilder()
-        .setLabel('Tanggal Selesai')
-        .setDescription('Pilih tanggal terakhir Absence.')
-        .setStringSelectMenuComponent(dateSelect('end_date', 'Pilih tanggal selesai')),
-      new LabelBuilder()
+    buildAbsenceDateRange(dateStart, dateEnd);
+    modal.setCustomId('skaw_sr_form|absence|' + String(userId) + '|' + String(dateStart) + '|' + String(dateEnd));
+    modal.addComponents(new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId('reason')
         .setLabel('Reason')
-        .setTextInputComponent(
-          new TextInputBuilder()
-            .setCustomId('reason')
-            .setPlaceholder('Jelaskan alasan absence kamu.')
-            .setStyle(TextInputStyle.Paragraph)
-            .setRequired(true)
-            .setMaxLength(900),
-        ),
-    );
+        .setPlaceholder('Jelaskan alasan absence kamu.')
+        .setStyle(TextInputStyle.Paragraph)
+        .setRequired(true)
+        .setMaxLength(900),
+    ));
   } else {
     modal.addComponents(
       new ActionRowBuilder().addComponents(
@@ -646,7 +668,6 @@ function buildRequestModal(userId, type) {
   }
   return modal;
 }
-
 export async function openStaffRequestSetup(interaction, client) {
   if (!interaction.inGuild?.() || !interaction.guild) {
     return interaction.reply({ content: 'Staff Request hanya dapat dikonfigurasi di dalam server.', flags: MessageFlags.Ephemeral });

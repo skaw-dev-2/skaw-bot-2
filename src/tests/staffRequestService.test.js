@@ -148,11 +148,12 @@ test('members with multiple active division roles are asked to contact Managemen
   ), /lebih dari satu Division Role/i);
 });
 
-test('absence embed includes the applicant Discord username beside the display name', () => {
+test('absence embed renders the applicant as a clickable Discord mention beside the display name', () => {
   const embed = buildStaffRequestEmbed({
     requestId: 'SKAW-ABS-1234567890',
     type: 'absence',
     status: 'pending',
+    applicantId: '1414500416724406316',
     applicantName: 'Christopher Marquez',
     applicantUsername: 'Castillo_DePablo',
     divisionRoleId: '1414623229288513586',
@@ -164,7 +165,8 @@ test('absence embed includes the applicant Discord username beside the display n
   }).toJSON();
 
   assert.match(embed.description, /ABSENCE FORM/);
-  assert.ok(embed.description.includes('Christopher Marquez (@Castillo' + String.fromCharCode(92) + '_DePablo)'));
+  assert.ok(embed.description.includes('Christopher Marquez (<@1414500416724406316>)'));
+  assert.doesNotMatch(embed.description, /\(@Castillo/);
   assert.match(embed.description, /<@&1414623229288513586>/);
   assert.match(embed.description, /03 Nov 2026 - 13 Nov 2026/);
   assert.match(embed.description, /Duration/);
@@ -338,6 +340,9 @@ test('staff request log embeds capture request lifecycle details', () => {
   }, 'submitted').toJSON();
   assert.match(embed.title, /ABSENCE.*NEW REQUEST SUBMITTED/);
   assert.match(embed.description, /SKAW-ABS-1234567890/);
+  assert.match(embed.description, /\*\*Name:\*\* Christopher Marquez \(<@1414500416724406316>\)/);
+  assert.match(embed.description, /\*\*Employee:\*\* <@1414500416724406316>/);
+  assert.doesNotMatch(embed.description, /\(@Castillo/);
   assert.match(embed.description, /1 week/);
 });
 

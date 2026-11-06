@@ -120,7 +120,7 @@ test('employee-supplied markdown is escaped in the review embed', () => {
   }).toJSON();
   const slash = String.fromCharCode(92);
   assert.ok(embed.description.includes('Name ' + slash + '*with' + slash + '* formatting'));
-  assert.ok(embed.description.includes('Reason with ' + slash + '**formatting' + slash + '**'));
+  assert.ok(embed.description.includes('Reason with ' + slash + '*' + slash + '*formatting' + slash + '*' + slash + '*'));
 });
 
 test('pending request controls provide Approve and Reject; completed controls are disabled', () => {

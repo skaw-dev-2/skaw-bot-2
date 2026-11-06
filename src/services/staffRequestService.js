@@ -553,6 +553,10 @@ export function buildStaffRequestEmbed(request) {
   if (!REQUEST_STATUSES.has(request.status || 'pending')) throw new Error('Status pengajuan tidak dikenal.');
 
   const cleanName = escapeMarkdown(cleanText(request.applicantName, 'Name', { maxLength: 100 }));
+  const applicantId = SNOWFLAKE_RE.test(String(request.applicantId || ''))
+    ? String(request.applicantId)
+    : null;
+  const userMention = applicantId ? '<@' + applicantId + '>' : null;
   const cleanUsername = request.applicantUsername
     ? escapeMarkdown(cleanText(request.applicantUsername, 'Discord username', { maxLength: 100 }))
     : null;
@@ -567,7 +571,7 @@ export function buildStaffRequestEmbed(request) {
   const lines = [
     '__**' + template.title + '**__',
     '',
-    '> **Name :** ' + cleanName + (cleanUsername ? ' (@' + cleanUsername + ')' : ''),
+    '> **Name :** ' + cleanName + (userMention ? ' (' + userMention + ')' : (cleanUsername ? ' (@' + cleanUsername + ')' : '')),
     '> **Role :** ' + cleanRole,
   ];
   if (request.type === 'absence') {
@@ -626,11 +630,14 @@ export function buildStaffRequestLogEmbed(request, event = 'submitted') {
   const eventLabels = { submitted: 'NEW REQUEST SUBMITTED', approved: 'REQUEST APPROVED', rejected: 'REQUEST REJECTED', delivery_failed: 'REQUEST DELIVERY FAILED' };
   const eventColors = { submitted: 0x2563eb, approved: 0x16a34a, rejected: 0xdc2626, delivery_failed: 0xd97706 };
   const name = escapeMarkdown(cleanText(request.applicantName, 'Name', { maxLength: 100 }));
-  const username = request.applicantUsername ? escapeMarkdown(cleanText(request.applicantUsername, 'Discord username', { maxLength: 100 })) : null;
+  const applicantId = SNOWFLAKE_RE.test(String(request.applicantId || ''))
+    ? String(request.applicantId)
+    : null;
+  const userMention = applicantId ? '<@' + applicantId + '>' : null;
   const role = request.divisionRoleId ? '<@&' + String(request.divisionRoleId) + '>' : escapeMarkdown(cleanText(request.divisionName || 'Not recorded', 'Role', { maxLength: 100 }));
   const lines = [
-    '**Employee:** <@' + String(request.applicantId) + '>',
-    '**Name:** ' + name + (username ? ' (@' + username + ')' : ''),
+    '**Employee:** ' + (userMention || 'Not identified'),
+    '**Name:** ' + name + (userMention ? ' (' + userMention + ')' : ''),
     '**Role:** ' + role,
     '**Request ID:** `' + String(request.requestId || 'N/A') + '`',
     '**Reason:** ' + escapeMarkdown(cleanText(request.reason || 'Not recorded', 'Reason', { maxLength: 900 })),

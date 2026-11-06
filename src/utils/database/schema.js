@@ -25,6 +25,7 @@ export const tableStatements = [
     )`,
     `ALTER TABLE skaw_staff_request_settings ADD COLUMN IF NOT EXISTS absence_channel_id VARCHAR(20)`,
     `ALTER TABLE skaw_staff_request_settings ADD COLUMN IF NOT EXISTS resignation_channel_id VARCHAR(20)`,
+    `ALTER TABLE skaw_staff_request_settings ADD COLUMN IF NOT EXISTS log_channel_id VARCHAR(20)`,
     `UPDATE skaw_staff_request_settings
        SET absence_channel_id = COALESCE(absence_channel_id, request_channel_id),
            resignation_channel_id = COALESCE(resignation_channel_id, request_channel_id)
@@ -54,6 +55,8 @@ export const tableStatements = [
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )`,
     `ALTER TABLE skaw_staff_requests ADD COLUMN IF NOT EXISTS applicant_username VARCHAR(100)`,
+    `ALTER TABLE skaw_staff_requests ADD COLUMN IF NOT EXISTS date_start DATE`,
+    `ALTER TABLE skaw_staff_requests ADD COLUMN IF NOT EXISTS date_end DATE`,
 
     `CREATE TABLE IF NOT EXISTS ${t.guilds} (
         id VARCHAR(20) PRIMARY KEY,

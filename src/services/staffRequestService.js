@@ -830,8 +830,43 @@ async function finalizeDecision(client, interaction, requestId, status, reason =
   return updated;
 }
 
+function getDateDifferenceInDays(startValue, endValue) {
+  const start = parseAbsenceDate(startValue, 'Tanggal mulai');
+  const end = parseAbsenceDate(endValue, 'Tanggal selesai');
+  return Math.floor((end.getTime() - start.getTime()) / 86400000);
+}
+
+async function handleAbsenceDatePickerInteraction(interaction) {
+  const id = String(interaction.customId || '');
+  if (interaction.isButton?.() && id.startsWith('skaw_sr_date_page|')) {
+    const [, step, ownerId, startDateToken, offsetToken] = id.split('|');
+    if (ownerId !== String(interaction.user.id)) return interaction.reply({ content: 'Pemilih tanggal ini bukan milik sesi kamu.', flags: MessageFlags.Ephemeral });
+    return interaction.update(buildAbsenceDatePickerPayload(ownerId, {
+      step, startDate: startDateToken === '-' ? null : startDateToken, offsetDays: Number(offsetToken),
+    }));
+  }
+  if (!interaction.isStringSelectMenu?.()) return null;
+  if (id.startsWith('skaw_sr_date_start|')) {
+    const [, ownerId] = id.split('|');
+    if (ownerId !== String(interaction.user.id)) return interaction.reply({ content: 'Pemilih tanggal ini bukan milik sesi kamu.', flags: MessageFlags.Ephemeral });
+    const selectedStart = String(interaction.values?.[0] || '');
+    const daysFromToday = getDateDifferenceInDays(dateToIsoFromJakarta(new Date()), selectedStart);
+    if (daysFromToday < 0 || daysFromToday > ABSENCE_MAX_FUTURE_DAYS) throw new Error('Tanggal mulai harus berada dari hari ini sampai 2 tahun ke depan.');
+    return interaction.update(buildAbsenceDatePickerPayload(ownerId, { step: 'end', startDate: selectedStart }));
+  }
+  if (id.startsWith('skaw_sr_date_end|')) {
+    const [, ownerId, startDate] = id.split('|');
+    if (ownerId !== String(interaction.user.id)) return interaction.reply({ content: 'Pemilih tanggal ini bukan milik sesi kamu.', flags: MessageFlags.Ephemeral });
+    const selectedEnd = String(interaction.values?.[0] || '');
+    const daysFromStart = getDateDifferenceInDays(startDate, selectedEnd);
+    if (daysFromStart < 0) throw new Error('Tanggal selesai tidak boleh sebelum tanggal mulai.');
+    if (daysFromStart > ABSENCE_MAX_FUTURE_DAYS) throw new Error('Durasi Absence maksimal 2 tahun dari tanggal mulai.');
+    return interaction.showModal(buildRequestModal(ownerId, 'absence', startDate, selectedEnd));
+  }
+  return null;
+}
 async function handleRequestForm(interaction, client) {
-  const [, type, ownerId] = String(interaction.customId || '').split('|');
+  const [, type, ownerId, dateStart, dateEnd] = String(interaction.customId || '').split('|');
   if (ownerId !== String(interaction.user.id)) {
     return interaction.reply({ content: 'Form ini bukan milik sesi kamu.', flags: MessageFlags.Ephemeral });
   }
@@ -839,12 +874,9 @@ async function handleRequestForm(interaction, client) {
   try {
     if (!Object.hasOwn(REQUEST_TYPES, type)) throw new Error('Jenis pengajuan tidak dikenal.');
     const input = {
-      dateRange: type === 'absence'
-        ? buildAbsenceDateRange(
-          interaction.fields.getStringSelectValues('start_date')[0],
-          interaction.fields.getStringSelectValues('end_date')[0],
-        )
-        : null,
+      dateRange: type === 'absence' ? buildAbsenceDateRange(dateStart, dateEnd) : null,
+      dateStart: type === 'absence' ? dateStart : null,
+      dateEnd: type === 'absence' ? dateEnd : null,
       reason: interaction.fields.getTextInputValue('reason'),
       note: type === 'resignation' ? interaction.fields.getTextInputValue('note') : '',
     };
@@ -867,6 +899,7 @@ async function handleSetupComponent(interaction, client) {
   if (interaction.isChannelSelectMenu?.() && (
     id === 'skaw_sr_setup_absence_channel'
     || id === 'skaw_sr_setup_resignation_channel'
+    || id === 'skaw_sr_setup_logs_channel'
     || id === 'skaw_sr_setup_channel'
   )) {
     await interaction.deferUpdate();
@@ -874,6 +907,8 @@ async function handleSetupComponent(interaction, client) {
     if (id === 'skaw_sr_setup_channel') {
       settings = await setStaffRequestChannel(client, interaction.guildId, 'absence', interaction.values[0], interaction.user.id);
       settings = await setStaffRequestChannel(client, interaction.guildId, 'resignation', interaction.values[0], interaction.user.id);
+    } else if (id === 'skaw_sr_setup_logs_channel') {
+      settings = await setStaffRequestLogChannel(client, interaction.guildId, interaction.values[0], interaction.user.id);
     } else {
       const requestType = id === 'skaw_sr_setup_absence_channel' ? 'absence' : 'resignation';
       settings = await setStaffRequestChannel(client, interaction.guildId, requestType, interaction.values[0], interaction.user.id);
@@ -883,7 +918,9 @@ async function handleSetupComponent(interaction, client) {
         settings,
         id === 'skaw_sr_setup_channel'
           ? 'Legacy request channel berhasil diterapkan ke Absence dan Resignation.'
-          : (id === 'skaw_sr_setup_absence_channel' ? 'Absence channel' : 'Resignation channel') + ' berhasil diperbarui.',
+          : id === 'skaw_sr_setup_logs_channel'
+            ? 'Staff Request activity logs channel berhasil diperbarui.'
+            : (id === 'skaw_sr_setup_absence_channel' ? 'Absence channel' : 'Resignation channel') + ' berhasil diperbarui.',
       ),
       allowedMentions: { parse: [] },
     });
@@ -893,6 +930,14 @@ async function handleSetupComponent(interaction, client) {
     const settings = await setStaffRequestManagementRoles(client, interaction.guildId, interaction.values, interaction.user.id);
     return interaction.editReply({
       ...buildStaffRequestSetupPayload(settings, 'Management approval roles berhasil diperbarui.'),
+      allowedMentions: { parse: [] },
+    });
+  }
+  if (interaction.isButton?.() && id === 'skaw_sr_setup_logs_disable') {
+    await interaction.deferUpdate();
+    const settings = await setStaffRequestLogChannel(client, interaction.guildId, null, interaction.user.id);
+    return interaction.editReply({
+      ...buildStaffRequestSetupPayload(settings, 'Staff Request activity logs dinonaktifkan.'),
       allowedMentions: { parse: [] },
     });
   }

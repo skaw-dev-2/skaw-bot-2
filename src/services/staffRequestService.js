@@ -10,6 +10,8 @@ import { logger } from '../utils/logger.js';
 
 export const STAFF_REQUEST_BASE_ROLE_ID = BASE_EMPLOYEE_ROLE.id;
 export const STAFF_REQUEST_ABSENCE_ROLE_ID = '1414628665496699003';
+export const STAFF_REQUEST_CIVILIAN_ROLE_ID = '1415329997396119603';
+export const STAFF_REQUEST_RETIRED_ROLE_ID = '1429469335654633593';
 export const DEFAULT_STAFF_REQUEST_MANAGEMENT_ROLE_IDS = Object.freeze(['1414623053471547474']);
 
 const SNOWFLAKE_RE = /^\d{17,20}$/;
@@ -228,6 +230,9 @@ function mapStaffRequest(row) {
     reviewedBy: row.reviewed_by ? String(row.reviewed_by) : null,
     reviewedAt: row.reviewed_at || null,
     reviewReason: row.review_reason || null,
+    resignationRoleResetAt: row.resignation_role_reset_at || null,
+    resignationRoleResetLastError: row.resignation_role_reset_last_error || null,
+    resignationRoleResetAttempts: Number(row.resignation_role_reset_attempts || 0),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -646,6 +651,7 @@ export function buildStaffRequestLogEmbed(request, event = 'submitted') {
     rejected: 'REQUEST REJECTED',
     delivery_failed: 'REQUEST DELIVERY FAILED',
     absence_ending_tomorrow: 'ABSENCE ENDING TOMORROW',
+    resignation_roles_reset: 'ROLE TRANSITION COMPLETED',
   };
   const eventColors = {
     submitted: 0x2563eb,
@@ -653,6 +659,7 @@ export function buildStaffRequestLogEmbed(request, event = 'submitted') {
     rejected: 0xdc2626,
     delivery_failed: 0xd97706,
     absence_ending_tomorrow: 0xd97706,
+    resignation_roles_reset: 0x16a34a,
   };
   const name = escapeMarkdown(cleanText(request.applicantName, 'Name', { maxLength: 100 }));
   const applicantId = SNOWFLAKE_RE.test(String(request.applicantId || ''))
@@ -673,6 +680,29 @@ export function buildStaffRequestLogEmbed(request, event = 'submitted') {
   }
   if (event === 'absence_ending_tomorrow') {
     lines.unshift('**Management Reminder:** Masa Absence pegawai ini akan berakhir besok. Mohon pantau masa pengembalian aktivitas pegawai.');
+  }
+  if (request.type === 'resignation' && event === 'approved') {
+    const completed = request.resignationRolesUpdated === true || Boolean(request.resignationRoleResetAt);
+    lines.push(
+      '**Membership Transition:** ' + (completed
+        ? '✅ Completed — employee status has returned to civilian.'
+        : '⏳ Approved — automatic role transition is pending completion.'),
+    );
+    if (completed) {
+      lines.push(
+        '**Final Roles:** @Civilian | SKAW and @Retired Employe | SKAW',
+        '**Role Cleanup:** All other assignable roles have been removed.',
+      );
+    } else if (request.resignationRoleResetLastError) {
+      lines.push('**Processing Note:** ' + escapeMarkdown(cleanText(request.resignationRoleResetLastError, 'Role transition note', { maxLength: 500 })));
+    }
+  }
+  if (event === 'resignation_roles_reset') {
+    lines.unshift('**Management Update:** The resignation role transition has now been completed successfully.');
+    lines.push(
+      '**Final Roles:** @Civilian | SKAW and @Retired Employe | SKAW',
+      '**Role Cleanup:** All other assignable roles have been removed.',
+    );
   }
   if (request.note) lines.push('**Note:** ' + escapeMarkdown(cleanText(request.note, 'Note', { maxLength: 700 })));
   if (request.reviewedBy) lines.push('**Reviewed By:** <@' + String(request.reviewedBy) + '>');
@@ -746,6 +776,99 @@ async function assignApprovedAbsenceRole(client, guild, request) {
   );
   return true;
 }
+
+export function buildResignationRoleTransition(memberRoleIds = [], guildId = '') {
+  const currentRoleIds = new Set([...memberRoleIds].map(String));
+  const finalRoleIds = [STAFF_REQUEST_CIVILIAN_ROLE_ID, STAFF_REQUEST_RETIRED_ROLE_ID];
+  return {
+    finalRoleIds,
+    rolesToAdd: finalRoleIds.filter(roleId => !currentRoleIds.has(roleId)),
+    rolesToRemove: [...currentRoleIds].filter(roleId =>
+      roleId !== String(guildId || '') && !finalRoleIds.includes(roleId)),
+  };
+}
+
+async function applyApprovedResignationRoleTransition(guild, request) {
+  if (!guild) throw new Error('Server pengajuan tidak tersedia.');
+
+  const fetchedRoles = await guild.roles.fetch().catch(() => guild.roles.cache);
+  const roleCache = fetchedRoles || guild.roles.cache;
+  const civilianRole = roleCache.get(STAFF_REQUEST_CIVILIAN_ROLE_ID);
+  const retiredRole = roleCache.get(STAFF_REQUEST_RETIRED_ROLE_ID);
+  if (!civilianRole) throw new Error('Role Civilian | SKAW tidak ditemukan di server.');
+  if (!retiredRole) throw new Error('Role Retired Employe | SKAW tidak ditemukan di server.');
+
+  const botMember = guild.members.me || await guild.members.fetchMe().catch(() => null);
+  if (!botMember?.permissions?.has(PermissionFlagsBits.ManageRoles)) {
+    throw new Error('Bot tidak memiliki permission Manage Roles.');
+  }
+  const highestBotRole = botMember.roles?.highest;
+  if (!highestBotRole || typeof highestBotRole.comparePositionTo !== 'function') {
+    throw new Error('Hierarki role tertinggi bot tidak dapat diverifikasi.');
+  }
+
+  const member = guild.members.cache.get(String(request.applicantId))
+    || await guild.members.fetch(String(request.applicantId)).catch(() => null);
+  if (!member?.roles?.cache) throw new Error('Pemohon tidak ditemukan sebagai anggota server.');
+  if (String(member.id) === String(guild.ownerId || '')) {
+    throw new Error('Role Guild Owner tidak dapat diubah oleh bot.');
+  }
+
+  const transition = buildResignationRoleTransition(member.roles.cache.keys(), guild.id);
+  const rolesToValidate = [
+    civilianRole,
+    retiredRole,
+    ...transition.rolesToRemove.map(roleId => roleCache.get(roleId)),
+  ];
+  if (rolesToValidate.some(role => !role)) {
+    throw new Error('Sebagian role pemohon tidak dapat diverifikasi. Tidak ada perubahan role yang dilakukan.');
+  }
+
+  for (const role of rolesToValidate) {
+    if (role.managed) {
+      throw new Error('Role ' + String(role.name || role.id) + ' dikelola integrasi lain dan tidak dapat diubah.');
+    }
+    if (highestBotRole.comparePositionTo(role) <= 0) {
+      throw new Error('Posisi role tertinggi bot harus berada di atas role ' + String(role.name || role.id) + '.');
+    }
+  }
+
+  const memberHighestRole = member.roles.highest;
+  if (memberHighestRole && highestBotRole.comparePositionTo(memberHighestRole) <= 0) {
+    throw new Error('Role tertinggi bot harus berada di atas seluruh role milik pemohon sebelum proses resign dapat diselesaikan.');
+  }
+
+  const updatedMember = await member.roles.set(
+    transition.finalRoleIds,
+    'Staff Request ' + request.requestId + ' approved: transition to Civilian / Retired',
+  );
+
+  const resultingRoleIds = new Set([...updatedMember.roles.cache.keys()].map(String));
+  const unexpectedRoles = [...resultingRoleIds].filter(roleId =>
+    roleId !== String(guild.id) && !transition.finalRoleIds.includes(roleId));
+  if (!transition.finalRoleIds.every(roleId => resultingRoleIds.has(roleId)) || unexpectedRoles.length) {
+    throw new Error('Discord belum mengonfirmasi susunan role akhir yang diharapkan.');
+  }
+  return transition;
+}
+
+async function claimApprovedResignationRoleTransition(pool, requestRowId) {
+  return pool.query(
+    `UPDATE skaw_staff_requests
+        SET resignation_role_reset_claimed_at=CURRENT_TIMESTAMP,
+            resignation_role_reset_attempts=COALESCE(resignation_role_reset_attempts, 0) + 1,
+            updated_at=CURRENT_TIMESTAMP
+      WHERE id=$1
+        AND request_type='resignation'
+        AND status='approved'
+        AND resignation_role_reset_at IS NULL
+        AND (resignation_role_reset_claimed_at IS NULL
+             OR resignation_role_reset_claimed_at < CURRENT_TIMESTAMP - INTERVAL '30 minutes')
+      RETURNING *`,
+    [String(requestRowId)],
+  );
+}
+
 export function buildStaffRequestDecisionRows(request) {
   const template = REQUEST_TYPES[request.type];
   if (!template) throw new Error('Jenis pengajuan tidak dikenal.');
@@ -972,10 +1095,46 @@ async function updateRequestMessage(client, guild, request) {
   return true;
 }
 
-async function notifyApplicant(guild, request) {
-  const member = guild.members.cache.get(request.applicantId)
-    || await guild.members.fetch(request.applicantId).catch(() => null);
-  if (!member) return;
+export function buildStaffRequestApplicantDm(request) {
+  if (request.type === 'resignation' && request.status === 'approved') {
+    const name = escapeMarkdown(cleanText(request.applicantName || 'SKAW Member', 'Name', { maxLength: 100 }));
+    const completed = request.resignationRolesUpdated === true || Boolean(request.resignationRoleResetAt);
+    const lines = request.resignationRoleResetFollowup
+      ? [
+        'Halo **' + name + '**,',
+        '',
+        'Pembaruan dari **SKAW Group People Operations**: penyesuaian role akun kamu sekarang sudah berhasil diselesaikan.',
+      ]
+      : [
+        'Halo **' + name + '**,',
+        '',
+        'Pengajuan **Resignation / Resign** kamu di **SKAW Group** telah resmi **disetujui oleh Management**.',
+      ];
+
+    lines.push('');
+    if (completed) {
+      lines.push(
+        'Status keanggotaan kamu kini telah dikembalikan menjadi **warga biasa (Civilian)**. Seluruh role kepegawaian, jabatan, dan divisi SKAW lainnya sudah dicabut.',
+        '',
+        '**Role yang dipertahankan pada akun kamu:**',
+        '• **@Civilian | SKAW** — role utama untuk status warga terverifikasi.',
+        '• **@Retired Employe | SKAW** — penanda mantan karyawan SKAW.',
+        '',
+        'Terima kasih atas waktu, kerja keras, kontribusi, dan dedikasi yang telah kamu berikan selama menjadi bagian dari SKAW Group. Setiap usaha dan pencapaian kamu menjadi bagian dari perjalanan perusahaan.',
+        'Kami menghargai seluruh pengabdian kamu dan mendoakan kesuksesan untuk langkah berikutnya. Pintu SKAW akan selalu terbuka untuk kamu.',
+      );
+    } else {
+      lines.push(
+        'Persetujuan resign sudah tercatat, tetapi penyesuaian role akun kamu belum berhasil diselesaikan secara otomatis.',
+        'Management akan menindaklanjuti proses tersebut. Kamu tidak perlu mengirim ulang form Resignation.',
+      );
+    }
+
+    lines.push('', '**Request ID:** ' + String(request.requestId || 'N/A'));
+    if (request.reviewReason) lines.push('**Catatan Management:** ' + escapeMarkdown(request.reviewReason));
+    return lines.join('\n');
+  }
+
   const action = request.status === 'approved' ? 'disetujui' : 'ditolak';
   const type = REQUEST_TYPES[request.type]?.label || 'Staff Request';
   const lines = [
@@ -990,7 +1149,17 @@ async function notifyApplicant(guild, request) {
       ? '✅ Role **Absence** sudah otomatis ditambahkan ke akun kamu.'
       : '⚠️ Pengajuan kamu sudah disetujui, tetapi role **Absence** belum berhasil ditambahkan otomatis. Silakan hubungi Management.');
   }
-  await member.send({ content: lines.join('\n'), allowedMentions: { parse: [] } }).catch(error => {
+  return lines.join('\n');
+}
+
+async function notifyApplicant(guild, request) {
+  const member = guild.members.cache.get(request.applicantId)
+    || await guild.members.fetch(request.applicantId).catch(() => null);
+  if (!member) return;
+  await member.send({
+    content: buildStaffRequestApplicantDm(request),
+    allowedMentions: { parse: [] },
+  }).catch(error => {
     logger.warn('Could not DM Staff Request applicant', { requestId: request.requestId, userId: request.applicantId, error: error.message });
   });
 }
@@ -1007,6 +1176,51 @@ async function finalizeDecision(client, interaction, requestId, status, reason =
   const request = mapStaffRequest(result.rows[0]);
   const settings = await getStaffRequestSettings(client, interaction.guildId);
   let absenceRoleAssigned = null;
+  let resignationRolesUpdated = null;
+  let resignationRoleResetLastError = null;
+  if (status === 'approved' && request.type === 'resignation') {
+    const claim = await claimApprovedResignationRoleTransition(pool, request.id);
+    if (!claim.rows?.[0]) {
+      const current = await pool.query(
+        'SELECT resignation_role_reset_at FROM skaw_staff_requests WHERE id=$1 LIMIT 1',
+        [String(request.id)],
+      );
+      resignationRolesUpdated = Boolean(current.rows?.[0]?.resignation_role_reset_at);
+      if (!resignationRolesUpdated) {
+        resignationRoleResetLastError = 'Role transition is already processing or awaiting the next automatic retry.';
+      }
+    } else {
+      try {
+        await applyApprovedResignationRoleTransition(interaction.guild, request);
+        await pool.query(
+          `UPDATE skaw_staff_requests
+              SET resignation_role_reset_at=COALESCE(resignation_role_reset_at, CURRENT_TIMESTAMP),
+                  resignation_role_reset_claimed_at=NULL,
+                  resignation_role_reset_last_error=NULL,
+                  updated_at=CURRENT_TIMESTAMP
+            WHERE id=$1 AND status='approved'`,
+          [String(request.id)],
+        );
+        resignationRolesUpdated = true;
+      } catch (error) {
+        resignationRoleResetLastError = String(error?.message || error).slice(0, 1000);
+        await pool.query(
+          `UPDATE skaw_staff_requests
+              SET resignation_role_reset_claimed_at=NULL,
+                  resignation_role_reset_last_error=$2,
+                  updated_at=CURRENT_TIMESTAMP
+            WHERE id=$1 AND resignation_role_reset_at IS NULL`,
+          [String(request.id), resignationRoleResetLastError],
+        ).catch(() => {});
+        logger.error('Resignation approved but role transition failed', {
+          guildId: request.guildId,
+          requestId,
+          applicantId: request.applicantId,
+          error,
+        });
+      }
+    }
+  }
   if (status === 'approved' && request.type === 'absence') {
     try {
       await assignApprovedAbsenceRole(client, interaction.guild, request);
@@ -1030,6 +1244,8 @@ async function finalizeDecision(client, interaction, requestId, status, reason =
     ...request,
     managementRoleIds: settings.managementRoleIds,
     ...(absenceRoleAssigned === null ? {} : { absenceRoleAssigned }),
+    ...(resignationRolesUpdated === null ? {} : { resignationRolesUpdated }),
+    ...(resignationRoleResetLastError === null ? {} : { resignationRoleResetLastError }),
   };
   await updateRequestMessage(client, interaction.guild, updated).catch(error => {
     logger.error('Staff Request decision saved but message update failed', { requestId, status, error });
@@ -1054,8 +1270,64 @@ export async function checkStaffAbsenceLifecycle(client, now = new Date()) {
     remindersSent: 0,
     managementLogsSent: 0,
     rolesRemoved: 0,
+    resignationRoleResets: 0,
     failed: 0,
   };
+
+  // Retry role transitions for approved Resignations that could not be completed
+  // during the Management approval interaction.
+  const pendingResignationResets = await pool.query(
+    `SELECT * FROM skaw_staff_requests
+      WHERE request_type='resignation'
+        AND status='approved'
+        AND resignation_role_reset_at IS NULL
+        AND (resignation_role_reset_claimed_at IS NULL
+             OR resignation_role_reset_claimed_at < CURRENT_TIMESTAMP - INTERVAL '30 minutes')
+      ORDER BY reviewed_at ASC
+      LIMIT 100`,
+  );
+
+  for (const candidate of pendingResignationResets.rows || []) {
+    const claim = await claimApprovedResignationRoleTransition(pool, candidate.id);
+    if (!claim.rows?.[0]) continue;
+
+    const request = mapStaffRequest(claim.rows[0]);
+    try {
+      const guild = await fetchStaffRequestGuild(client, request.guildId);
+      await applyApprovedResignationRoleTransition(guild, request);
+      await pool.query(
+        `UPDATE skaw_staff_requests
+            SET resignation_role_reset_at=COALESCE(resignation_role_reset_at, CURRENT_TIMESTAMP),
+                resignation_role_reset_claimed_at=NULL,
+                resignation_role_reset_last_error=NULL,
+                updated_at=CURRENT_TIMESTAMP
+          WHERE id=$1 AND status='approved'`,
+        [String(request.id)],
+      );
+
+      const updated = { ...request, resignationRolesUpdated: true };
+      const settings = await getStaffRequestSettings(client, request.guildId);
+      await sendStaffRequestLog(guild, settings, updated, 'resignation_roles_reset');
+      await notifyApplicant(guild, { ...updated, resignationRoleResetFollowup: true });
+      summary.resignationRoleResets += 1;
+    } catch (error) {
+      summary.failed += 1;
+      await pool.query(
+        `UPDATE skaw_staff_requests
+            SET resignation_role_reset_claimed_at=NULL,
+                resignation_role_reset_last_error=$2,
+                updated_at=CURRENT_TIMESTAMP
+          WHERE id=$1 AND resignation_role_reset_at IS NULL`,
+        [String(request.id), String(error?.message || error).slice(0, 1000)],
+      ).catch(() => {});
+      logger.warn('Could not complete approved Resignation role transition', {
+        requestId: request.requestId,
+        guildId: request.guildId,
+        applicantId: request.applicantId,
+        error: error.message,
+      });
+    }
+  }
 
   // Recover approved, still-active absence requests whose role assignment failed earlier.
   const pendingRoleAssignments = await pool.query(
@@ -1389,8 +1661,8 @@ export async function checkStaffAbsenceLifecycle(client, now = new Date()) {
   }
 
   if (summary.roleAssignments || summary.remindersSent || summary.managementLogsSent
-      || summary.rolesRemoved || summary.failed) {
-    logger.info('Staff Request absence lifecycle check completed', summary);
+      || summary.rolesRemoved || summary.resignationRoleResets || summary.failed) {
+    logger.info('Staff Request lifecycle check completed', summary);
   }
   return summary;
 }

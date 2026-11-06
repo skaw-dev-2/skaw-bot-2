@@ -8,6 +8,10 @@ import {
   getAbsenceReminderTargetDate,
   isAbsencePeriodExpired,
   buildStaffRequestLogEmbed,
+  buildStaffRequestApplicantDm,
+  buildResignationRoleTransition,
+  STAFF_REQUEST_CIVILIAN_ROLE_ID,
+  STAFF_REQUEST_RETIRED_ROLE_ID,
   buildStaffRequestRoleMetadata,
   isStaffRequestRoleWithinHierarchy,
   buildRequestModal,
@@ -378,6 +382,85 @@ test('staff request log embeds capture request lifecycle details', () => {
   assert.match(embed.description, /\*\*Employee:\*\* <@1414500416724406316>/);
   assert.doesNotMatch(embed.description, /\(@Castillo/);
   assert.match(embed.description, /1 week/);
+});
+
+test('approved Resignation retains only Civilian and Retired SKAW roles', () => {
+  const plan = buildResignationRoleTransition([
+    '1414500416724406316',
+    STAFF_REQUEST_CIVILIAN_ROLE_ID,
+    '1414629366574354512',
+    '1414623229288513586',
+    STAFF_REQUEST_RETIRED_ROLE_ID,
+  ], '1414500416724406316');
+
+  assert.deepEqual(plan.finalRoleIds, [
+    STAFF_REQUEST_CIVILIAN_ROLE_ID,
+    STAFF_REQUEST_RETIRED_ROLE_ID,
+  ]);
+  assert.deepEqual(plan.rolesToAdd, []);
+  assert.deepEqual(plan.rolesToRemove, [
+    '1414629366574354512',
+    '1414623229288513586',
+  ]);
+
+  const memberWithoutRetired = buildResignationRoleTransition([
+    '1414500416724406316',
+    '1414629366574354512',
+  ], '1414500416724406316');
+  assert.deepEqual(memberWithoutRetired.rolesToAdd, [
+    STAFF_REQUEST_CIVILIAN_ROLE_ID,
+    STAFF_REQUEST_RETIRED_ROLE_ID,
+  ]);
+});
+
+test('Resignation approval DM thanks the employee and confirms the civilian transition', () => {
+  const message = buildStaffRequestApplicantDm({
+    type: 'resignation',
+    status: 'approved',
+    applicantName: 'Christopher Marquez',
+    requestId: 'SKAW-RES-1234567890',
+    resignationRolesUpdated: true,
+  });
+
+  assert.match(message, /disetujui oleh Management/);
+  assert.match(message, /warga biasa \(Civilian\)/);
+  assert.match(message, /@Civilian \| SKAW/);
+  assert.match(message, /@Retired Employe \| SKAW/);
+  assert.match(message, /Terima kasih atas waktu, kerja keras, kontribusi, dan dedikasi/);
+  assert.match(message, /SKAW-RES-1234567890/);
+});
+
+test('Resignation approval DM does not claim role transition before it completes', () => {
+  const message = buildStaffRequestApplicantDm({
+    type: 'resignation',
+    status: 'approved',
+    applicantName: 'Christopher Marquez',
+    requestId: 'SKAW-RES-1234567890',
+    resignationRolesUpdated: false,
+    resignationRoleResetLastError: 'Bot role hierarchy is too low.',
+  });
+
+  assert.match(message, /penyesuaian role akun kamu belum berhasil/);
+  assert.match(message, /Management akan menindaklanjuti/);
+  assert.doesNotMatch(message, /warga biasa \(Civilian\)/);
+});
+
+test('Resignation approval log records role transition and retained roles', () => {
+  const embed = buildStaffRequestLogEmbed({
+    requestId: 'SKAW-RES-LOG123456',
+    type: 'resignation',
+    applicantId: '1414500416724406316',
+    applicantName: 'Christopher Marquez',
+    divisionRoleId: '1414623229288513586',
+    reason: 'Mengundurkan diri',
+    status: 'approved',
+    resignationRolesUpdated: true,
+  }, 'approved').toJSON();
+
+  assert.match(embed.title, /RESIGNATION.*REQUEST APPROVED/);
+  assert.match(embed.description, /Membership Transition.*Completed/);
+  assert.match(embed.description, /@Civilian \| SKAW and @Retired Employe \| SKAW/);
+  assert.match(embed.description, /All other assignable roles/);
 });
 
 test('resignation form asks for Name, Role, Reason and optional Note', () => {

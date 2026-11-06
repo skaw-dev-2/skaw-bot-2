@@ -53,9 +53,6 @@ export function buildAbsenceDateOptions(now = new Date(), offsetDays = 0) {
   const first = addCalendarDays(base, Math.max(0, Number(offsetDays) || 0));
   return Array.from({ length: ABSENCE_DATE_PAGE_SIZE }, (_, index) => {
     const date = addCalendarDays(first, index);
-    const year = date.getUTCFullYear();
-    const month = date.getUTCMonth() + 1;
-    const day = date.getUTCDate();
     return {
       label: new Intl.DateTimeFormat('id-ID', { weekday: 'long', day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC' }).format(date),
       value: formatIsoDate(date),
@@ -127,7 +124,7 @@ export function buildAbsenceDatePickerPayload(userId, { step = 'start', startDat
   if (!Number.isInteger(offset) || offset < 0 || offset > 725 || offset % ABSENCE_DATE_PAGE_SIZE !== 0) throw new Error('Halaman tanggal tidak valid.');
   const today = parseAbsenceDate(dateToIsoFromJakarta(now), 'Tanggal hari ini');
   const anchor = step === 'end' ? parseAbsenceDate(startDate, 'Tanggal mulai') : today;
-  const availableDays = step === 'start' ? ABSENCE_MAX_FUTURE_DAYS - offset + 1 : ABSENCE_MAX_FUTURE_DAYS - offset + 1;
+  const availableDays = ABSENCE_MAX_FUTURE_DAYS - offset + 1;
   const dateOptions = buildAbsenceDateOptions(addCalendarDays(anchor, offset))
     .slice(0, Math.max(1, Math.min(ABSENCE_DATE_PAGE_SIZE, availableDays)));
   const stepLabel = step === 'start' ? 'Tanggal Mulai' : 'Tanggal Selesai';
@@ -148,7 +145,7 @@ export function buildAbsenceDatePickerPayload(userId, { step = 'start', startDat
     step === 'end' ? '**Tanggal mulai:** ' + startDate : '',
     '', '**Rentang pilihan:**', dateOptions[0].label + ' — ' + dateOptions[dateOptions.length - 1].label,
     '', 'Gunakan tombol Previous / Next untuk membuka tanggal di bulan berikutnya.',
-    'Pilihan tanggal tersedia hingga 2 tahun ke depan.',
+    step === 'start' ? 'Tanggal tersedia hingga 2 tahun ke depan.' : 'Tanggal selesai tersedia hingga 2 tahun setelah tanggal mulai.',
   ].filter(Boolean).join('\n')).setFooter({ text: 'SKAW GROUP · PEOPLE OPERATIONS' });
   return {
     embeds: [embed],

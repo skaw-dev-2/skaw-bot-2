@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildAbsenceDateRange,
-  buildAbsenceMonthOptions,
+  buildAbsenceDateOptions,
   buildRequestModal,
   buildStaffRequestDecisionRows,
   buildStaffRequestDecisionStatement,
@@ -210,31 +210,29 @@ test('approval decisions are atomic and update only pending requests', () => {
   assert.throws(() => buildStaffRequestDecisionStatement('x', 'y', 'pending', 'z'), /Decision status/i);
 });
 
-test('absence form uses date dropdowns for start and end, and validates the selected range', () => {
+test('absence form uses selectable dates for start and end and validates the range', () => {
   const absence = buildRequestModal('1414500416724406316', 'absence').toJSON();
-  assert.equal(absence.components.length, 5);
+  assert.equal(absence.components.length, 3);
   const fields = absence.components.map(component => component.component);
-  assert.deepEqual(fields.map(component => component.custom_id), [
-    'start_month', 'start_day', 'end_month', 'end_day', 'reason',
-  ]);
-  assert.deepEqual(fields.slice(0, 4).map(component => component.type), [3, 3, 3, 3]);
+  assert.deepEqual(fields.map(component => component.custom_id), ['start_date', 'end_date', 'reason']);
+  assert.deepEqual(fields.slice(0, 2).map(component => component.type), [3, 3]);
   assert.equal(fields[0].options.length, 25);
-  assert.equal(fields[1].options.length, 31);
-  assert.equal(fields[4].type, 4);
+  assert.equal(fields[1].options.length, 25);
+  assert.equal(fields[2].type, 4);
 
   assert.equal(
-    buildAbsenceDateRange('2026-11', '06', '2026-11', '13'),
+    buildAbsenceDateRange('2026-11-06', '2026-11-13'),
     '06 Nov 2026 - 13 Nov 2026',
   );
-  assert.throws(() => buildAbsenceDateRange('2026-02', '30', '2026-03', '02'), /tidak valid/i);
-  assert.throws(() => buildAbsenceDateRange('2026-11', '14', '2026-11', '13'), /tidak boleh setelah/i);
+  assert.throws(() => buildAbsenceDateRange('2026-02-30', '2026-03-02'), /tidak valid/i);
+  assert.throws(() => buildAbsenceDateRange('2026-11-14', '2026-11-13'), /tidak boleh setelah/i);
 });
 
-test('absence month options roll forward in Asia/Jakarta and include 25 months', () => {
-  const options = buildAbsenceMonthOptions(new Date('2026-11-06T00:00:00.000Z'));
+test('absence date options roll forward from the current Jakarta date for 25 days', () => {
+  const options = buildAbsenceDateOptions(new Date('2026-11-06T00:00:00.000Z'));
   assert.equal(options.length, 25);
-  assert.equal(options[0].value, '2026-11');
-  assert.equal(options[24].value, '2028-11');
+  assert.equal(options[0].value, '2026-11-06');
+  assert.equal(options[24].value, '2026-11-30');
 });
 
 test('resignation modal keeps its reason and optional note inputs', () => {

@@ -1,0 +1,41 @@
+name: SKAW Staff Request Tests
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'src/services/staffRequestService.js'
+      - 'src/commands/Utility/staffrequest.js'
+      - 'src/utils/database/schema.js'
+      - 'src/events/interactionCreate.js'
+      - 'src/tests/staffRequestService.test.js'
+      - 'package.json'
+      - '.github/workflows/staff-request-tests.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'src/services/staffRequestService.js'
+      - 'src/commands/Utility/staffrequest.js'
+      - 'src/utils/database/schema.js'
+      - 'src/events/interactionCreate.js'
+      - 'src/tests/staffRequestService.test.js'
+      - 'package.json'
+      - '.github/workflows/staff-request-tests.yml'
+
+jobs:
+  staff-request-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Run SKAW Staff Request tests
+        run: npm run test:staff-requests

@@ -13,6 +13,37 @@ const t = pgConfig.tables;
 
 export const tableStatements = [
     ...RECRUITMENT_TABLE_STATEMENTS,
+    `CREATE TABLE IF NOT EXISTS skaw_staff_request_settings (
+        guild_id VARCHAR(20) PRIMARY KEY,
+        request_channel_id VARCHAR(20),
+        management_role_ids JSONB NOT NULL DEFAULT '["1414623053471547474"]'::jsonb,
+        updated_by VARCHAR(20),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )`,
+
+    `CREATE TABLE IF NOT EXISTS skaw_staff_requests (
+        id BIGSERIAL PRIMARY KEY,
+        request_id VARCHAR(40) NOT NULL UNIQUE,
+        guild_id VARCHAR(20) NOT NULL,
+        request_type VARCHAR(20) NOT NULL CHECK (request_type IN ('absence', 'resignation')),
+        applicant_id VARCHAR(20) NOT NULL,
+        applicant_name VARCHAR(100) NOT NULL,
+        division_role_id VARCHAR(20),
+        division_name VARCHAR(100),
+        date_range VARCHAR(100),
+        reason TEXT NOT NULL,
+        note TEXT,
+        status VARCHAR(24) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected', 'delivery_failed')),
+        channel_id VARCHAR(20),
+        message_id VARCHAR(20),
+        reviewed_by VARCHAR(20),
+        reviewed_at TIMESTAMP,
+        review_reason TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )`,
+
     `CREATE TABLE IF NOT EXISTS ${t.guilds} (
         id VARCHAR(20) PRIMARY KEY,
         config JSONB DEFAULT '{}',
@@ -179,6 +210,9 @@ export const tableStatements = [
 
 export const indexStatements = [
     ...RECRUITMENT_INDEX_STATEMENTS,
+    `CREATE INDEX IF NOT EXISTS idx_skaw_staff_requests_guild_created ON skaw_staff_requests(guild_id, created_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_skaw_staff_requests_applicant_status ON skaw_staff_requests(guild_id, applicant_id, request_type, status)`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_skaw_staff_requests_pending_resignation ON skaw_staff_requests(guild_id, applicant_id) WHERE request_type='resignation' AND status='pending'`,
     `CREATE INDEX IF NOT EXISTS idx_guild_users_guild_id ON ${t.guild_users}(guild_id)`,
     `CREATE INDEX IF NOT EXISTS idx_guild_users_user_id ON ${t.guild_users}(user_id)`,
     `CREATE INDEX IF NOT EXISTS idx_birthdays_guild_id ON ${t.birthdays}(guild_id)`,
@@ -214,6 +248,8 @@ export const UPDATE_TIMESTAMP_FUNCTION = `
  * `name` is the trigger identifier, `table` is the concrete table name.
  */
 export const triggerDefinitions = [
+    { name: 'update_skaw_staff_request_settings_updated_at', table: 'skaw_staff_request_settings' },
+    { name: 'update_skaw_staff_requests_updated_at', table: 'skaw_staff_requests' },
     { name: 'update_guilds_updated_at', table: t.guilds },
     { name: 'update_users_updated_at', table: t.users },
     { name: 'update_welcome_configs_updated_at', table: t.welcome_configs },

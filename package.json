@@ -24,7 +24,8 @@
     "test:message-manager": "node --test src/tests/messageManagerService.test.js src/tests/messageManagerCommand.test.js",
     "test:role-access": "node --test src/tests/roleAccessManagerService.test.js",
     "test:skaw-verification": "node --test src/tests/skawVerificationService.test.js src/tests/skawVerificationCommand.test.js src/tests/skawVerificationDashboard.test.js",
-    "test:recruitment": "node --test src/tests/skawRecruitmentService.test.js"
+    "test:recruitment": "node --test src/tests/skawRecruitmentService.test.js",
+    "test:staff-requests": "node --test src/tests/staffRequestService.test.js"
   },
   "dependencies": {
     "@discordjs/rest": "^2.6.1",

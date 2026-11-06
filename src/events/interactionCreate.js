@@ -25,6 +25,7 @@ import { handleRoleTemplateInteraction } from '../services/roleTemplatePanelServ
 import { handleMessageManagerInteraction, isMessageManagerInteraction } from '../commands/Utility/message.js';
 import { isSkawVerificationDashboardInteraction, handleSkawVerificationDashboardRoute } from '../services/skawVerificationDashboardService.js';
 import { isSkawRecruitmentInteraction, handleSkawRecruitmentInteraction } from '../services/skawRecruitmentService.js';
+import { isStaffRequestInteraction, handleStaffRequestInteraction } from '../services/staffRequestService.js';
 
 const COMMAND_ERROR_SUBTYPES = {
   warn: 'warn_failed',
@@ -63,6 +64,12 @@ export default {
       try {
         InteractionHelper.patchInteractionResponses(interaction);
         ResponseCoordinator.attach(interaction);
+
+        // SKAW Staff Request controls remain persistent after bot restarts.
+        if (isStaffRequestInteraction(interaction)) {
+          await handleStaffRequestInteraction(interaction, client);
+          return;
+        }
 
         // SKAW Recruitment persistent custom-ID routing.
         if (isSkawRecruitmentInteraction(interaction)) {

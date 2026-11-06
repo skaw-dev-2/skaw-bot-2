@@ -124,20 +124,35 @@ test('employee-supplied markdown is escaped in the review embed', () => {
 });
 
 test('pending request controls provide Approve and Reject; completed controls are disabled', () => {
-  const pending = buildStaffRequestDecisionRows({
+  const pendingRows = buildStaffRequestDecisionRows({
     requestId: 'SKAW-ABS-1234567890',
+    type: 'absence',
     status: 'pending',
-  })[0].toJSON();
-  assert.deepEqual(pending.components.map(component => component.label), ['Approve', 'Reject']);
-  assert.deepEqual(pending.components.map(component => component.disabled), [undefined, undefined]);
+  }).map(row => row.toJSON());
+  assert.deepEqual(pendingRows[0].components.map(component => component.label), ['Approve', 'Reject']);
+  assert.deepEqual(pendingRows[0].components.map(component => component.disabled), [undefined, undefined]);
+  assert.equal(pendingRows[1].components[0].label, 'Submit Absence');
+  assert.equal(pendingRows[1].components[0].custom_id, 'skaw_sr_submit|SKAW-ABS-1234567890');
 
-  const approved = buildStaffRequestDecisionRows({
+  const approvedRows = buildStaffRequestDecisionRows({
     requestId: 'SKAW-ABS-1234567890',
+    type: 'absence',
     status: 'approved',
-  })[0].toJSON();
-  assert.equal(approved.components.length, 1);
-  assert.equal(approved.components[0].label, 'Approved');
-  assert.equal(approved.components[0].disabled, true);
+  }).map(row => row.toJSON());
+  assert.equal(approvedRows[0].components.length, 1);
+  assert.equal(approvedRows[0].components[0].label, 'Approved');
+  assert.equal(approvedRows[0].components[0].disabled, true);
+  assert.equal(approvedRows[1].components[0].label, 'Submit Absence');
+});
+
+test('resignation request controls contain a matching submit button', () => {
+  const rows = buildStaffRequestDecisionRows({
+    requestId: 'SKAW-RES-1234567890',
+    type: 'resignation',
+    status: 'pending',
+  }).map(row => row.toJSON());
+  assert.equal(rows[1].components[0].label, 'Submit Resignation');
+  assert.equal(rows[1].components[0].custom_id, 'skaw_sr_submit|SKAW-RES-1234567890');
 });
 
 test('approval decisions are atomic and update only pending requests', () => {

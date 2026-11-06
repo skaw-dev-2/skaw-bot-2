@@ -246,8 +246,13 @@ test('absence date options roll forward from the current Jakarta date for 25 day
   assert.equal(nextPage[0].value, '2026-12-01');
   assert.equal(nextPage[24].value, '2026-12-25');
   const picker = buildAbsenceDatePickerPayload('1414500416724406316', { now: new Date('2026-11-06T00:00:00.000Z') });
-  assert.equal(picker.components[0].components[0].options.length, 25);
-  assert.match(picker.components[1].components[1].custom_id, /\|25$/);
+  const pickerRows = picker.components.map(row => row.toJSON());
+  assert.equal(pickerRows[0].components[0].options.length, 25);
+  assert.match(pickerRows[1].components[1].custom_id, /\|25$/);
+  const finalPage = buildAbsenceDatePickerPayload('1414500416724406316', {
+    now: new Date('2026-11-06T00:00:00.000Z'), offsetDays: 725,
+  }).components.map(row => row.toJSON());
+  assert.equal(finalPage[0].components[0].options.length, 6);
 });
 
 test('absence duration is displayed in calendar months, weeks, days, and hours', () => {

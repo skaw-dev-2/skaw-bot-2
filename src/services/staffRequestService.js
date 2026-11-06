@@ -46,6 +46,13 @@ export function getAbsenceReminderTargetDate(now = new Date()) {
   return formatIsoDate(addCalendarDays(today, 1));
 }
 
+export function isAbsencePeriodExpired(endValue, now = new Date()) {
+  const end = parseAbsenceDate(endValue, 'Tanggal akhir Absence');
+  const today = parseAbsenceDate(dateToIsoFromJakarta(now), 'Tanggal hari ini');
+  // date_end is inclusive; the period expires after that Jakarta calendar day has passed.
+  return end.getTime() < today.getTime();
+}
+
 function addCalendarDays(date, days) {
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate() + Number(days || 0), 12));
 }
@@ -633,8 +640,20 @@ export function buildStaffRequestEmbed(request) {
 export function buildStaffRequestLogEmbed(request, event = 'submitted') {
   const template = REQUEST_TYPES[request.type];
   if (!template) throw new Error('Jenis pengajuan tidak dikenal.');
-  const eventLabels = { submitted: 'NEW REQUEST SUBMITTED', approved: 'REQUEST APPROVED', rejected: 'REQUEST REJECTED', delivery_failed: 'REQUEST DELIVERY FAILED' };
-  const eventColors = { submitted: 0x2563eb, approved: 0x16a34a, rejected: 0xdc2626, delivery_failed: 0xd97706 };
+  const eventLabels = {
+    submitted: 'NEW REQUEST SUBMITTED',
+    approved: 'REQUEST APPROVED',
+    rejected: 'REQUEST REJECTED',
+    delivery_failed: 'REQUEST DELIVERY FAILED',
+    absence_ending_tomorrow: 'ABSENCE ENDING TOMORROW',
+  };
+  const eventColors = {
+    submitted: 0x2563eb,
+    approved: 0x16a34a,
+    rejected: 0xdc2626,
+    delivery_failed: 0xd97706,
+    absence_ending_tomorrow: 0xd97706,
+  };
   const name = escapeMarkdown(cleanText(request.applicantName, 'Name', { maxLength: 100 }));
   const applicantId = SNOWFLAKE_RE.test(String(request.applicantId || ''))
     ? String(request.applicantId)
@@ -651,6 +670,9 @@ export function buildStaffRequestLogEmbed(request, event = 'submitted') {
   if (request.type === 'absence' && request.dateRange) {
     lines.splice(3, 0, '**Date:** ' + escapeMarkdown(cleanText(request.dateRange, 'Date', { maxLength: 100 })));
     if (request.dateStart && request.dateEnd) lines.splice(4, 0, '**Duration:** ' + escapeMarkdown(formatAbsenceDuration(request.dateStart, request.dateEnd)));
+  }
+  if (event === 'absence_ending_tomorrow') {
+    lines.unshift('**Management Reminder:** Masa Absence pegawai ini akan berakhir besok. Mohon pantau masa pengembalian aktivitas pegawai.');
   }
   if (request.note) lines.push('**Note:** ' + escapeMarkdown(cleanText(request.note, 'Note', { maxLength: 700 })));
   if (request.reviewedBy) lines.push('**Reviewed By:** <@' + String(request.reviewedBy) + '>');
@@ -1027,7 +1049,13 @@ export async function checkStaffAbsenceLifecycle(client, now = new Date()) {
   const pool = getPool(client);
   const today = dateToIsoFromJakarta(now);
   const reminderDate = getAbsenceReminderTargetDate(now);
-  const summary = { roleAssignments: 0, remindersSent: 0, failed: 0 };
+  const summary = {
+    roleAssignments: 0,
+    remindersSent: 0,
+    managementLogsSent: 0,
+    rolesRemoved: 0,
+    failed: 0,
+  };
 
   // Recover approved, still-active absence requests whose role assignment failed earlier.
   const pendingRoleAssignments = await pool.query(
@@ -1170,7 +1198,198 @@ export async function checkStaffAbsenceLifecycle(client, now = new Date()) {
     }
   }
 
-  if (summary.roleAssignments || summary.remindersSent || summary.failed) {
+  // Publish a one-day advance reminder to the configured Activity Logs channel for Management.
+  // This is tracked independently from the applicant DM so either delivery can retry safely.
+  const dueManagementLogs = await pool.query(
+    `SELECT * FROM skaw_staff_requests
+      WHERE request_type='absence'
+        AND status='approved'
+        AND date_end=$1::date
+        AND absence_log_reminder_sent_at IS NULL
+        AND (absence_log_reminder_claimed_at IS NULL
+             OR absence_log_reminder_claimed_at < CURRENT_TIMESTAMP - INTERVAL '30 minutes')
+      ORDER BY date_end ASC, created_at ASC
+      LIMIT 100`,
+    [reminderDate],
+  );
+
+  for (const candidate of dueManagementLogs.rows || []) {
+    const request = mapStaffRequest(candidate);
+    const settings = await getStaffRequestSettings(client, request.guildId);
+    // No channel configured: leave this event pending so it can still be delivered
+    // later on the reminder day if Management configures Activity Logs.
+    if (!settings.logChannelId) continue;
+
+    const claim = await pool.query(
+      `UPDATE skaw_staff_requests
+          SET absence_log_reminder_claimed_at=CURRENT_TIMESTAMP,
+              absence_log_reminder_attempts=COALESCE(absence_log_reminder_attempts, 0) + 1
+        WHERE id=$1
+          AND request_type='absence'
+          AND status='approved'
+          AND date_end=$2::date
+          AND absence_log_reminder_sent_at IS NULL
+          AND (absence_log_reminder_claimed_at IS NULL
+               OR absence_log_reminder_claimed_at < CURRENT_TIMESTAMP - INTERVAL '30 minutes')
+        RETURNING *`,
+      [candidate.id, reminderDate],
+    );
+    if (!claim.rows?.[0]) continue;
+
+    try {
+      const guild = await fetchStaffRequestGuild(client, request.guildId);
+      const delivered = await sendStaffRequestLog(
+        guild,
+        settings,
+        mapStaffRequest(claim.rows[0]),
+        'absence_ending_tomorrow',
+      );
+      if (!delivered) throw new Error('Activity Logs channel tidak dapat menerima pengingat Absence.');
+
+      await pool.query(
+        `UPDATE skaw_staff_requests
+            SET absence_log_reminder_sent_at=CURRENT_TIMESTAMP,
+                absence_log_reminder_claimed_at=NULL,
+                absence_log_reminder_last_error=NULL,
+                updated_at=CURRENT_TIMESTAMP
+          WHERE id=$1 AND absence_log_reminder_sent_at IS NULL`,
+        [candidate.id],
+      );
+      summary.managementLogsSent += 1;
+    } catch (error) {
+      summary.failed += 1;
+      await pool.query(
+        `UPDATE skaw_staff_requests
+            SET absence_log_reminder_claimed_at=NULL,
+                absence_log_reminder_last_error=$2,
+                updated_at=CURRENT_TIMESTAMP
+          WHERE id=$1 AND absence_log_reminder_sent_at IS NULL`,
+        [candidate.id, String(error?.message || error).slice(0, 1000)],
+      ).catch(() => {});
+      logger.warn('Could not send one-day Absence reminder to Management Activity Logs', {
+        requestId: request.requestId,
+        guildId: request.guildId,
+        channelId: settings.logChannelId,
+        error: error.message,
+      });
+    }
+  }
+
+  // Remove the Absence role after the inclusive end date has passed in Jakarta.
+  // Keep the role when another approved absence for the same employee is still
+  // active or scheduled for a future date.
+  const expiredRequests = await pool.query(
+    `SELECT expired.*
+       FROM skaw_staff_requests AS expired
+      WHERE expired.request_type='absence'
+        AND expired.status='approved'
+        AND expired.date_end < $1::date
+        AND expired.absence_role_removed_at IS NULL
+        AND (expired.absence_role_removal_claimed_at IS NULL
+             OR expired.absence_role_removal_claimed_at < CURRENT_TIMESTAMP - INTERVAL '30 minutes')
+        AND NOT EXISTS (
+          SELECT 1
+            FROM skaw_staff_requests AS other
+           WHERE other.guild_id=expired.guild_id
+             AND other.applicant_id=expired.applicant_id
+             AND other.request_type='absence'
+             AND other.status='approved'
+             AND other.date_end >= $1::date
+        )
+      ORDER BY expired.date_end ASC, expired.created_at ASC
+      LIMIT 100`,
+    [today],
+  );
+
+  for (const candidate of expiredRequests.rows || []) {
+    const claim = await pool.query(
+      `UPDATE skaw_staff_requests
+          SET absence_role_removal_claimed_at=CURRENT_TIMESTAMP
+        WHERE id=$1
+          AND request_type='absence'
+          AND status='approved'
+          AND date_end < $2::date
+          AND absence_role_removed_at IS NULL
+          AND (absence_role_removal_claimed_at IS NULL
+               OR absence_role_removal_claimed_at < CURRENT_TIMESTAMP - INTERVAL '30 minutes')
+          AND NOT EXISTS (
+            SELECT 1
+              FROM skaw_staff_requests AS other
+             WHERE other.guild_id=skaw_staff_requests.guild_id
+               AND other.applicant_id=skaw_staff_requests.applicant_id
+               AND other.request_type='absence'
+               AND other.status='approved'
+               AND other.date_end >= $2::date
+          )
+        RETURNING *`,
+      [candidate.id, today],
+    );
+    if (!claim.rows?.[0]) continue;
+
+    const request = mapStaffRequest(claim.rows[0]);
+    try {
+      const guild = await fetchStaffRequestGuild(client, request.guildId);
+      const role = guild.roles.cache.get(STAFF_REQUEST_ABSENCE_ROLE_ID)
+        || await guild.roles.fetch(STAFF_REQUEST_ABSENCE_ROLE_ID).catch(() => null);
+
+      if (role) {
+        if (role.managed) throw new Error('Role Absence dikelola oleh integrasi lain dan tidak dapat dicabut secara manual.');
+        const botMember = guild.members.me || await guild.members.fetchMe().catch(() => null);
+        if (!botMember?.permissions?.has(PermissionFlagsBits.ManageRoles)) {
+          throw new Error('Bot tidak memiliki permission Manage Roles untuk mencabut role Absence.');
+        }
+        const highestBotRole = botMember.roles?.highest;
+        if (!highestBotRole || typeof highestBotRole.comparePositionTo !== 'function'
+            || highestBotRole.comparePositionTo(role) <= 0) {
+          throw new Error('Posisi role tertinggi bot harus berada di atas role Absence.');
+        }
+
+        const member = guild.members.cache.get(request.applicantId)
+          || await guild.members.fetch(request.applicantId).catch(() => null);
+        if (member?.roles?.cache?.has(STAFF_REQUEST_ABSENCE_ROLE_ID)) {
+          await member.roles.remove(role, 'Absence period ended: ' + request.requestId);
+        }
+      }
+
+      // Mark all expired requests for this employee as handled only after there
+      // are no other approved active/future Absence requests for the same employee.
+      await pool.query(
+        `UPDATE skaw_staff_requests
+            SET absence_role_removed_at=COALESCE(absence_role_removed_at, CURRENT_TIMESTAMP),
+                absence_role_removal_claimed_at=NULL,
+                absence_role_removal_last_error=NULL,
+                updated_at=CURRENT_TIMESTAMP
+          WHERE guild_id=$1
+            AND applicant_id=$2
+            AND request_type='absence'
+            AND status='approved'
+            AND date_end < $3::date
+            AND absence_role_removed_at IS NULL`,
+        [request.guildId, request.applicantId, today],
+      );
+      summary.rolesRemoved += 1;
+    } catch (error) {
+      summary.failed += 1;
+      await pool.query(
+        `UPDATE skaw_staff_requests
+            SET absence_role_removal_claimed_at=NULL,
+                absence_role_removal_last_error=$2,
+                updated_at=CURRENT_TIMESTAMP
+          WHERE id=$1 AND absence_role_removed_at IS NULL`,
+        [candidate.id, String(error?.message || error).slice(0, 1000)],
+      ).catch(() => {});
+      logger.warn('Could not remove expired Absence role', {
+        requestId: request.requestId,
+        guildId: request.guildId,
+        applicantId: request.applicantId,
+        roleId: STAFF_REQUEST_ABSENCE_ROLE_ID,
+        error: error.message,
+      });
+    }
+  }
+
+  if (summary.roleAssignments || summary.remindersSent || summary.managementLogsSent
+      || summary.rolesRemoved || summary.failed) {
     logger.info('Staff Request absence lifecycle check completed', summary);
   }
   return summary;

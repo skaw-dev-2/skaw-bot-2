@@ -785,7 +785,8 @@ async function submitStaffRequest(client, guild, interaction, type, input) {
   if (!canSubmitStaffRequest([...member.roles.cache.keys()], settings.managementRoleIds)) {
     throw new Error('Fitur ini hanya dapat digunakan oleh anggota Company Staff atau Management SKAW.');
   }
-  const division = await getMemberDivision(client, guild, member, settings.managementRoleIds);
+  const divisionOptions = await getStaffRequestDivisionOptions(client, guild, settings.managementRoleIds);
+  const division = resolveSelectedStaffRequestDivision(divisionOptions, input.divisionSelection);
   const channelId = type === 'absence' ? settings.absenceChannelId : settings.resignationChannelId;
   if (!channelId) {
     throw new Error(
@@ -825,7 +826,7 @@ async function submitStaffRequest(client, guild, interaction, type, input) {
   }
 
   const requestId = formatRequestId(type);
-  const applicantName = cleanText(member.displayName || interaction.user.username, 'Name', { maxLength: 100 });
+  const applicantName = cleanText(input.applicantName, 'Name', { maxLength: 100 });
   const applicantUsername = cleanText(interaction.user.username || interaction.user.id, 'Discord username', { maxLength: 100 });
   let inserted;
   try {
@@ -930,7 +931,7 @@ function getDateDifferenceInDays(startValue, endValue) {
   return Math.floor((end.getTime() - start.getTime()) / 86400000);
 }
 
-async function handleAbsenceDatePickerInteraction(interaction) {
+async function handleAbsenceDatePickerInteraction(interaction, client) {
   const id = String(interaction.customId || '');
   if (interaction.isButton?.() && id.startsWith('skaw_sr_date_page|')) {
     const [, step, ownerId, startDateToken, offsetToken] = id.split('|');
@@ -955,7 +956,7 @@ async function handleAbsenceDatePickerInteraction(interaction) {
     const daysFromStart = getDateDifferenceInDays(startDate, selectedEnd);
     if (daysFromStart < 0) throw new Error('Tanggal selesai tidak boleh sebelum tanggal mulai.');
     if (daysFromStart > ABSENCE_MAX_FUTURE_DAYS) throw new Error('Durasi Absence maksimal 2 tahun dari tanggal mulai.');
-    return interaction.showModal(buildRequestModal(ownerId, 'absence', startDate, selectedEnd));
+    return openStaffRequestModal(interaction, client, 'absence', startDate, selectedEnd);
   }
   return null;
 }
@@ -968,9 +969,11 @@ async function handleRequestForm(interaction, client) {
   try {
     if (!Object.hasOwn(REQUEST_TYPES, type)) throw new Error('Jenis pengajuan tidak dikenal.');
     const input = {
-      dateRange: type === 'absence' ? buildAbsenceDateRange(dateStart, dateEnd) : null,
+      dateRange: type === 'absence' ? buildAbsenceDateRange(dateStart === '-' ? null : dateStart, dateEnd === '-' ? null : dateEnd) : null,
       dateStart: type === 'absence' ? dateStart : null,
       dateEnd: type === 'absence' ? dateEnd : null,
+      applicantName: interaction.fields.getTextInputValue('applicant_name'),
+      divisionSelection: interaction.fields.getStringSelectValues('division')[0],
       reason: interaction.fields.getTextInputValue('reason'),
       note: type === 'resignation' ? interaction.fields.getTextInputValue('note') : '',
     };
@@ -1084,7 +1087,7 @@ async function handleSubmitButton(interaction, client) {
   if (request.type === 'absence') {
     return interaction.reply({ ...buildAbsenceDatePickerPayload(interaction.user.id), flags: MessageFlags.Ephemeral });
   }
-  return interaction.showModal(buildRequestModal(interaction.user.id, request.type));
+  return openStaffRequestModal(interaction, client, request.type);
 }
 
 async function handleDecisionButton(interaction, client) {
@@ -1170,7 +1173,7 @@ export async function handleStaffRequestInteraction(interaction, client) {
     }
     if ((interaction.isStringSelectMenu?.() && id.startsWith('skaw_sr_date_'))
         || (interaction.isButton?.() && id.startsWith('skaw_sr_date_page|'))) {
-      return handleAbsenceDatePickerInteraction(interaction);
+      return handleAbsenceDatePickerInteraction(interaction, client);
     }
     if ((interaction.isChannelSelectMenu?.() || interaction.isRoleSelectMenu?.() || interaction.isButton?.())
         && id.startsWith('skaw_sr_setup_')) {

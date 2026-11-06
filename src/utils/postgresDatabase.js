@@ -46,7 +46,11 @@ class PostgreSQLDatabase {
         this.pool = null;
         this.isConnected = false;
         this.connectionPromise = null;
-        this.allowedTableIdentifiers = new Set(Object.values(pgConfig.tables));
+        this.allowedTableIdentifiers = new Set([
+            ...Object.values(pgConfig.tables),
+            'skaw_staff_request_settings',
+            'skaw_staff_requests',
+        ]);
         this.allowedMigrationIdentifiers = new Set([pgConfig.migration.table]);
         this.lastFailureReason = null;
         this.lastFailureMessage = null;

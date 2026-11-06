@@ -838,12 +838,12 @@ async function applyApprovedResignationRoleTransition(guild, request) {
     throw new Error('Role tertinggi bot harus berada di atas seluruh role milik pemohon sebelum proses resign dapat diselesaikan.');
   }
 
-  await member.roles.set(
+  const updatedMember = await member.roles.set(
     transition.finalRoleIds,
     'Staff Request ' + request.requestId + ' approved: transition to Civilian / Retired',
   );
 
-  const resultingRoleIds = new Set([...member.roles.cache.keys()].map(String));
+  const resultingRoleIds = new Set([...updatedMember.roles.cache.keys()].map(String));
   const unexpectedRoles = [...resultingRoleIds].filter(roleId =>
     roleId !== String(guild.id) && !transition.finalRoleIds.includes(roleId));
   if (!transition.finalRoleIds.every(roleId => resultingRoleIds.has(roleId)) || unexpectedRoles.length) {

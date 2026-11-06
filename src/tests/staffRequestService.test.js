@@ -148,7 +148,7 @@ test('members with multiple active division roles are asked to contact Managemen
   ), /lebih dari satu Division Role/i);
 });
 
-test('absence embed includes the applicant Discord username beside the display name', () => {
+test('absence embed renders the applicant as a clickable Discord mention beside the display name', () => {
   const embed = buildStaffRequestEmbed({
     requestId: 'SKAW-ABS-1234567890',
     type: 'absence',

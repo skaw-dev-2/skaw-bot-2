@@ -102,7 +102,7 @@ test('absence embed includes the applicant Discord username beside the display n
   assert.match(embed.description, /ABSENCE FORM/);
   assert.match(embed.description, /Christopher Marquez \(@Castillo_DePablo\)/);
   assert.match(embed.description, /<@&1414623229288513586>/);
-  assert.match(embed.description, /3 Nov - 13 Nov 2026/);
+  assert.match(embed.description, /03 Nov 2026 - 13 Nov 2026/);
   assert.match(embed.description, /Banyak kerjaan OC/);
   assert.match(embed.description, /Permission to/);
   assert.match(embed.description, /Signed,/);

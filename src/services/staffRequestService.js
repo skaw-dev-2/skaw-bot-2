@@ -1373,7 +1373,9 @@ async function handleDecisionButton(interaction, client) {
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   const updated = await finalizeDecision(client, interaction, request.requestId, 'approved');
   return interaction.editReply({
-    content: '✅ Pengajuan ' + updated.requestId + ' berhasil di-approve.',
+    content: updated.absenceRoleAssigned === false
+      ? '✅ Pengajuan ' + updated.requestId + ' berhasil di-approve, tetapi role Absence gagal diberikan otomatis. Pastikan bot memiliki permission Manage Roles dan posisi role bot berada di atas role Absence.'
+      : '✅ Pengajuan ' + updated.requestId + ' berhasil di-approve.',
     allowedMentions: { parse: [] },
   });
 }

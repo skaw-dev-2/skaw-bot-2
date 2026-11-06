@@ -57,6 +57,13 @@ export const tableStatements = [
     `ALTER TABLE skaw_staff_requests ADD COLUMN IF NOT EXISTS applicant_username VARCHAR(100)`,
     `ALTER TABLE skaw_staff_requests ADD COLUMN IF NOT EXISTS date_start DATE`,
     `ALTER TABLE skaw_staff_requests ADD COLUMN IF NOT EXISTS date_end DATE`,
+    `ALTER TABLE skaw_staff_requests ADD COLUMN IF NOT EXISTS absence_role_assignment_claimed_at TIMESTAMP`,
+    `ALTER TABLE skaw_staff_requests ADD COLUMN IF NOT EXISTS absence_role_assigned_at TIMESTAMP`,
+    `ALTER TABLE skaw_staff_requests ADD COLUMN IF NOT EXISTS absence_role_assignment_last_error TEXT`,
+    `ALTER TABLE skaw_staff_requests ADD COLUMN IF NOT EXISTS absence_reminder_claimed_at TIMESTAMP`,
+    `ALTER TABLE skaw_staff_requests ADD COLUMN IF NOT EXISTS absence_reminder_sent_at TIMESTAMP`,
+    `ALTER TABLE skaw_staff_requests ADD COLUMN IF NOT EXISTS absence_reminder_attempts INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE skaw_staff_requests ADD COLUMN IF NOT EXISTS absence_reminder_last_error TEXT`,
 
     `CREATE TABLE IF NOT EXISTS ${t.guilds} (
         id VARCHAR(20) PRIMARY KEY,
@@ -226,6 +233,7 @@ export const indexStatements = [
     ...RECRUITMENT_INDEX_STATEMENTS,
     `CREATE INDEX IF NOT EXISTS idx_skaw_staff_requests_guild_created ON skaw_staff_requests(guild_id, created_at DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_skaw_staff_requests_applicant_status ON skaw_staff_requests(guild_id, applicant_id, request_type, status)`,
+    `CREATE INDEX IF NOT EXISTS idx_skaw_staff_requests_absence_lifecycle ON skaw_staff_requests(date_end, status) WHERE request_type='absence' AND status='approved'`,
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_skaw_staff_requests_pending_resignation ON skaw_staff_requests(guild_id, applicant_id) WHERE request_type='resignation' AND status='pending'`,
     `CREATE INDEX IF NOT EXISTS idx_guild_users_guild_id ON ${t.guild_users}(guild_id)`,
     `CREATE INDEX IF NOT EXISTS idx_guild_users_user_id ON ${t.guild_users}(user_id)`,

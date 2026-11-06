@@ -5,6 +5,8 @@ import {
   buildStaffRequestDecisionRows,
   buildStaffRequestDecisionStatement,
   buildStaffRequestEmbed,
+  buildStaffRequestSetupPayload,
+  canSubmitStaffRequest,
   resolveDivisionRoleFromIds,
   STAFF_REQUEST_BASE_ROLE_ID,
 } from '../services/staffRequestService.js';
@@ -15,6 +17,33 @@ test('built-in SKAW division roles are resolved from employee role IDs', () => {
     id: '1414623229288513586',
     name: 'Mechanic Division | SKAW',
   });
+});
+
+test('configured Management roles can submit requests and resolve to Management division', () => {
+  const managementRoleId = '1414623053471547474';
+  assert.equal(canSubmitStaffRequest([managementRoleId], [managementRoleId]), true);
+  assert.deepEqual(resolveDivisionRoleFromIds([managementRoleId], [], [managementRoleId]), {
+    id: null,
+    name: 'Management',
+    management: true,
+  });
+});
+
+test('every employee with Company Staff role can submit; unrelated members cannot', () => {
+  assert.equal(canSubmitStaffRequest([STAFF_REQUEST_BASE_ROLE_ID, '1414623154151882882'], ['1414623053471547474']), true);
+  assert.equal(canSubmitStaffRequest(['1414623154151882882'], ['1414623053471547474']), false);
+  assert.equal(canSubmitStaffRequest(['1555555555555555555'], ['1414623053471547474']), false);
+});
+
+test('Staff Request setup has independent Absence and Resignation channel selectors', () => {
+  const payload = buildStaffRequestSetupPayload({
+    absenceChannelId: '1414500416724406315',
+    resignationChannelId: '1414500416724406316',
+    managementRoleIds: ['1414623053471547474'],
+  });
+  const customIds = payload.components.flatMap(row => row.components).map(component => component.toJSON().custom_id);
+  assert.ok(customIds.includes('skaw_sr_setup_absence_channel'));
+  assert.ok(customIds.includes('skaw_sr_setup_resignation_channel'));
 });
 
 test('custom registered division roles are resolved', () => {

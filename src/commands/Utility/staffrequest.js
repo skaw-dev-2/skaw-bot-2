@@ -1,5 +1,6 @@
 import { MessageFlags, SlashCommandBuilder } from 'discord.js';
 import {
+  buildAbsenceDatePickerPayload,
   buildRequestModal,
   canSubmitStaffRequest,
   getStaffRequestSettings,
@@ -46,7 +47,10 @@ export default {
       }
 
       if (subcommand === 'absence') {
-        return interaction.showModal(buildRequestModal(interaction.user.id, 'absence'));
+        return interaction.reply({
+          ...buildAbsenceDatePickerPayload(interaction.user.id),
+          flags: MessageFlags.Ephemeral,
+        });
       }
       if (subcommand === 'resign') {
         return interaction.showModal(buildRequestModal(interaction.user.id, 'resignation'));

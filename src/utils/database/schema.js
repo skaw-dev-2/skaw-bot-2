@@ -64,6 +64,13 @@ export const tableStatements = [
     `ALTER TABLE skaw_staff_requests ADD COLUMN IF NOT EXISTS absence_reminder_sent_at TIMESTAMP`,
     `ALTER TABLE skaw_staff_requests ADD COLUMN IF NOT EXISTS absence_reminder_attempts INTEGER NOT NULL DEFAULT 0`,
     `ALTER TABLE skaw_staff_requests ADD COLUMN IF NOT EXISTS absence_reminder_last_error TEXT`,
+    `ALTER TABLE skaw_staff_requests ADD COLUMN IF NOT EXISTS absence_log_reminder_claimed_at TIMESTAMP`,
+    `ALTER TABLE skaw_staff_requests ADD COLUMN IF NOT EXISTS absence_log_reminder_sent_at TIMESTAMP`,
+    `ALTER TABLE skaw_staff_requests ADD COLUMN IF NOT EXISTS absence_log_reminder_attempts INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE skaw_staff_requests ADD COLUMN IF NOT EXISTS absence_log_reminder_last_error TEXT`,
+    `ALTER TABLE skaw_staff_requests ADD COLUMN IF NOT EXISTS absence_role_removal_claimed_at TIMESTAMP`,
+    `ALTER TABLE skaw_staff_requests ADD COLUMN IF NOT EXISTS absence_role_removed_at TIMESTAMP`,
+    `ALTER TABLE skaw_staff_requests ADD COLUMN IF NOT EXISTS absence_role_removal_last_error TEXT`,
 
     `CREATE TABLE IF NOT EXISTS ${t.guilds} (
         id VARCHAR(20) PRIMARY KEY,

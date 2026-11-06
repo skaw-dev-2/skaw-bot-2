@@ -253,7 +253,7 @@ test('absence date options roll forward from the current Jakarta date for 25 day
 test('absence duration is displayed in calendar months, weeks, days, and hours', () => {
   assert.equal(formatAbsenceDuration('2026-11-06', '2026-11-13'), '1 week (7 days / 168 hours)');
   assert.equal(formatAbsenceDuration('2026-11-06', '2026-12-06'), '1 month (30 days / 720 hours)');
-  assert.equal(formatAbsenceDuration('2026-11-06', '2026-11-06'), '1 day (1 day / 24 hours)');
+  assert.equal(formatAbsenceDuration('2026-11-06', '2026-11-06'), '1 day (24 hours)');
 });
 
 test('staff request log embeds capture request lifecycle details', () => {

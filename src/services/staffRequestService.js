@@ -93,7 +93,29 @@ export function resolveDivisionRoleFromIds(memberRoleIds = [], registryRoles = [
   }
 
   const divisions = [...matches.values()];
-  if (!divisions.length) return null;
+  if (!divisions.length) {
+    const domainLabels = { mechanic: 'Mechanic', builder: 'Builder', trucker: 'Trucker', taxi: 'Taxi' };
+    const fallbackDomains = new Set();
+    for (const [id, metadata] of Object.entries(SKAW_EMPLOYEE_ROLE_CATALOG)) {
+      if (!owned.has(id) || metadata?.active !== true || metadata?.position === false
+          || !metadata?.domain || ['management', 'partner'].includes(metadata.domain)) continue;
+      const domain = String(metadata.domain);
+      if (domainLabels[domain]) fallbackDomains.add(domain);
+    }
+    for (const role of registryRoles || []) {
+      if (role?.active === false || !['rank', 'other'].includes(role?.category)) continue;
+      const department = String(role?.department || '').toLowerCase();
+      if (domainLabels[department]) fallbackDomains.add(department);
+    }
+    if (fallbackDomains.size === 1) {
+      const domain = [...fallbackDomains][0];
+      return { id: null, name: domainLabels[domain] + ' Division | SKAW', inferred: true };
+    }
+    if (fallbackDomains.size > 1) {
+      throw new Error('Role divisi tidak dapat ditentukan secara otomatis. Hubungi Management untuk memperbarui Division Role akun kamu.');
+    }
+    return null;
+  }
   if (divisions.length > 1) {
     throw new Error('Akun kamu memiliki lebih dari satu Division Role aktif. Hubungi Management untuk memperbaiki penempatan divisi sebelum mengirim pengajuan.');
   }
@@ -106,6 +128,7 @@ async function getMemberDivision(client, guild, member) {
   if (!division) {
     throw new Error('Division Role SKAW belum ditemukan pada akun kamu. Hubungi Management untuk memperbarui role divisi.');
   }
+  if (division.inferred) return { id: null, name: division.name };
   const role = member.roles.cache.get(division.id)
     || await guild.roles.fetch(division.id).catch(() => null);
   if (!role) throw new Error('Division Role tidak ditemukan di server. Hubungi Management.');

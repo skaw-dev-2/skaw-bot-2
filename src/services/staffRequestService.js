@@ -17,6 +17,8 @@ const REQUEST_TYPES = Object.freeze({
   resignation: { code: 'RES', label: 'Resignation', title: 'RESIGNATION FORM', color: 0x2563eb },
 });
 const REQUEST_STATUSES = new Set(['pending', 'approved', 'rejected', 'delivery_failed']);
+const ABSENCE_DATE_PAGE_SIZE = 25;
+const ABSENCE_MAX_FUTURE_DAYS = 730;
 const MONTH_SHORT_NAMES_ID = Object.freeze([
   'Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun',
   'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des',
@@ -33,22 +35,33 @@ function getJakartaCalendarDate(date = new Date()) {
   };
 }
 
-export function buildAbsenceDateOptions(now = new Date()) {
-  const current = getJakartaCalendarDate(now);
-  return Array.from({ length: 25 }, (_, index) => {
-    const date = new Date(Date.UTC(current.year, current.month - 1, current.day + index, 12));
+function dateToIsoFromJakarta(date = new Date()) {
+  const current = getJakartaCalendarDate(date);
+  return String(current.year).padStart(4, '0') + '-' + String(current.month).padStart(2, '0') + '-' + String(current.day).padStart(2, '0');
+}
+
+function addCalendarDays(date, days) {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate() + Number(days || 0), 12));
+}
+
+function formatIsoDate(date) {
+  return String(date.getUTCFullYear()).padStart(4, '0') + '-' + String(date.getUTCMonth() + 1).padStart(2, '0') + '-' + String(date.getUTCDate()).padStart(2, '0');
+}
+
+export function buildAbsenceDateOptions(now = new Date(), offsetDays = 0) {
+  const base = parseAbsenceDate(now instanceof Date ? dateToIsoFromJakarta(now) : String(now), 'Tanggal');
+  const first = addCalendarDays(base, Math.max(0, Number(offsetDays) || 0));
+  return Array.from({ length: ABSENCE_DATE_PAGE_SIZE }, (_, index) => {
+    const date = addCalendarDays(first, index);
     const year = date.getUTCFullYear();
     const month = date.getUTCMonth() + 1;
     const day = date.getUTCDate();
     return {
-      label: new Intl.DateTimeFormat('id-ID', {
-        weekday: 'long', day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC',
-      }).format(date),
-      value: year + '-' + String(month).padStart(2, '0') + '-' + String(day).padStart(2, '0'),
+      label: new Intl.DateTimeFormat('id-ID', { weekday: 'long', day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC' }).format(date),
+      value: formatIsoDate(date),
     };
   });
 }
-
 function parseAbsenceDate(value, label) {
   const match = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!match) throw new Error(label + ' wajib dipilih dengan benar.');
@@ -73,6 +86,72 @@ export function buildAbsenceDateRange(startValue, endValue) {
     + ' ' + MONTH_SHORT_NAMES_ID[date.getUTCMonth()]
     + ' ' + date.getUTCFullYear();
   return format(start) + ' - ' + format(end);
+}
+function addCalendarMonth(date) {
+  const nextMonth = date.getUTCMonth() + 1;
+  const year = date.getUTCFullYear() + Math.floor(nextMonth / 12);
+  const month = nextMonth % 12;
+  const lastDay = new Date(Date.UTC(year, month + 1, 0, 12)).getUTCDate();
+  return new Date(Date.UTC(year, month, Math.min(date.getUTCDate(), lastDay), 12));
+}
+
+export function formatAbsenceDuration(startValue, endValue) {
+  const start = parseAbsenceDate(startValue, 'Tanggal mulai');
+  const end = parseAbsenceDate(endValue, 'Tanggal selesai');
+  if (start.getTime() > end.getTime()) throw new Error('Tanggal mulai tidak boleh setelah tanggal selesai.');
+  const elapsedDays = Math.floor((end.getTime() - start.getTime()) / 86400000);
+  const durationDays = Math.max(1, elapsedDays);
+  let cursor = start;
+  let months = 0;
+  while (months < ABSENCE_MAX_FUTURE_DAYS) {
+    const next = addCalendarMonth(cursor);
+    if (next.getTime() > end.getTime()) break;
+    cursor = next;
+    months += 1;
+  }
+  const remainingDays = Math.max(0, Math.floor((end.getTime() - cursor.getTime()) / 86400000));
+  const weeks = Math.floor(remainingDays / 7);
+  const days = remainingDays % 7;
+  const parts = [];
+  if (months) parts.push(months + ' month' + (months === 1 ? '' : 's'));
+  if (weeks) parts.push(weeks + ' week' + (weeks === 1 ? '' : 's'));
+  if (days) parts.push(days + ' day' + (days === 1 ? '' : 's'));
+  if (!parts.length) parts.push('1 day');
+  return parts.join(', ') + ' (' + durationDays + ' day' + (durationDays === 1 ? '' : 's') + ' / ' + (durationDays * 24) + ' hours)';
+}
+
+export function buildAbsenceDatePickerPayload(userId, { step = 'start', startDate = null, offsetDays = 0, now = new Date() } = {}) {
+  if (!['start', 'end'].includes(step)) throw new Error('Tahap pemilihan tanggal tidak valid.');
+  const offset = Number(offsetDays);
+  if (!Number.isInteger(offset) || offset < 0 || offset > 725 || offset % ABSENCE_DATE_PAGE_SIZE !== 0) throw new Error('Halaman tanggal tidak valid.');
+  const today = parseAbsenceDate(dateToIsoFromJakarta(now), 'Tanggal hari ini');
+  const anchor = step === 'end' ? parseAbsenceDate(startDate, 'Tanggal mulai') : today;
+  const dateOptions = buildAbsenceDateOptions(addCalendarDays(anchor, offset));
+  const stepLabel = step === 'start' ? 'Tanggal Mulai' : 'Tanggal Selesai';
+  const select = new StringSelectMenuBuilder()
+    .setCustomId(step === 'start' ? 'skaw_sr_date_start|' + String(userId) : 'skaw_sr_date_end|' + String(userId) + '|' + String(startDate))
+    .setPlaceholder('Pilih ' + stepLabel.toLowerCase())
+    .setMinValues(1).setMaxValues(1).addOptions(dateOptions);
+  const previousOffset = Math.max(0, offset - ABSENCE_DATE_PAGE_SIZE);
+  const nextOffset = Math.min(725, offset + ABSENCE_DATE_PAGE_SIZE);
+  const previous = new ButtonBuilder()
+    .setCustomId('skaw_sr_date_page|' + step + '|' + String(userId) + '|' + (startDate || '-') + '|' + previousOffset)
+    .setLabel('Previous 25 days').setStyle(ButtonStyle.Secondary).setDisabled(offset === 0);
+  const next = new ButtonBuilder()
+    .setCustomId('skaw_sr_date_page|' + step + '|' + String(userId) + '|' + (startDate || '-') + '|' + nextOffset)
+    .setLabel('Next 25 days').setStyle(ButtonStyle.Secondary).setDisabled(offset >= 725);
+  const embed = new EmbedBuilder().setColor(0x1a9ef3).setTitle('SKAW GROUP · ABSENCE DATE SELECTION').setDescription([
+    step === 'start' ? '**Pilih tanggal mulai Absence.**' : '**Pilih tanggal selesai Absence.**',
+    step === 'end' ? '**Tanggal mulai:** ' + startDate : '',
+    '', '**Rentang pilihan:**', dateOptions[0].label + ' — ' + dateOptions[dateOptions.length - 1].label,
+    '', 'Gunakan tombol Previous / Next untuk membuka tanggal di bulan berikutnya.',
+    'Pilihan tanggal tersedia hingga 2 tahun ke depan.',
+  ].filter(Boolean).join('\n')).setFooter({ text: 'SKAW GROUP · PEOPLE OPERATIONS' });
+  return {
+    embeds: [embed],
+    components: [new ActionRowBuilder().addComponents(select), new ActionRowBuilder().addComponents(previous, next)],
+    allowedMentions: { parse: [] },
+  };
 }
 
 function getPool(client) {

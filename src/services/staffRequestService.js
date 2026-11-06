@@ -715,6 +715,9 @@ async function submitStaffRequest(client, guild, interaction, type, input) {
 
   const reason = cleanText(input.reason, 'Reason', { maxLength: 900 });
   const dateRange = type === 'absence' ? cleanText(input.dateRange, 'Date', { maxLength: 100 }) : null;
+  const dateStart = type === 'absence' ? cleanText(input.dateStart, 'Start date', { maxLength: 10 }) : null;
+  const dateEnd = type === 'absence' ? cleanText(input.dateEnd, 'End date', { maxLength: 10 }) : null;
+  if (type === 'absence') buildAbsenceDateRange(dateStart, dateEnd);
   const note = type === 'resignation' ? cleanText(input.note, 'Note', { required: false, maxLength: 700 }) : '';
 
   if (type === 'resignation') {
@@ -733,9 +736,9 @@ async function submitStaffRequest(client, guild, interaction, type, input) {
   let inserted;
   try {
     inserted = await pool.query(
-      "INSERT INTO skaw_staff_requests (request_id, guild_id, request_type, applicant_id, applicant_name, applicant_username, division_role_id, division_name, date_range, reason, note, status, channel_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pending',$12) RETURNING *",
+      "INSERT INTO skaw_staff_requests (request_id, guild_id, request_type, applicant_id, applicant_name, applicant_username, division_role_id, division_name, date_range, date_start, date_end, reason, note, status, channel_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'pending',$14) RETURNING *",
       [requestId, String(guild.id), type, String(interaction.user.id), applicantName, applicantUsername,
-        division.id, division.name, dateRange, reason, note, String(channel.id)],
+        division.id, division.name, dateRange, dateStart, dateEnd, reason, note, String(channel.id)],
     );
   } catch (error) {
     if (type === 'resignation' && error?.code === '23505') {
@@ -766,9 +769,11 @@ async function submitStaffRequest(client, guild, interaction, type, input) {
       [String(guild.id), requestId],
     ).catch(() => {});
     logger.error('Staff Request message delivery failed', { guildId: guild.id, requestId, error });
+    await sendStaffRequestLog(guild, settings, { ...requestWithRoles, status: 'delivery_failed' }, 'delivery_failed');
     throw new Error('Pengajuan tercatat, tetapi pesan gagal dikirim ke channel Management. Hubungi administrator dengan Request ID ' + requestId + '.');
   }
 
+  await sendStaffRequestLog(guild, settings, requestWithRoles, 'submitted');
   return requestWithRoles;
 }
 
@@ -820,6 +825,7 @@ async function finalizeDecision(client, interaction, requestId, status, reason =
   await updateRequestMessage(client, interaction.guild, updated).catch(error => {
     logger.error('Staff Request decision saved but message update failed', { requestId, status, error });
   });
+  await sendStaffRequestLog(interaction.guild, settings, updated, status);
   await notifyApplicant(interaction.guild, updated);
   return updated;
 }

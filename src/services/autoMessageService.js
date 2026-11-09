@@ -39,9 +39,22 @@ async function withGuildAutoMessagesLock(client, guildId, callback) {
         assertAutoMessageStorageAvailable(client);
         const pool = client.db?.db?.pool;
         if (pool && typeof pool.connect === 'function') {
-            pgClient = await pool.connect();
-            await pgClient.query('SELECT pg_advisory_lock(hashtext($1), hashtext($2))', ['skaw:auto-message', lockKey]);
-            advisoryLockAcquired = true;
+            // Do not hold a pooled connection while waiting on a blocking advisory
+            // lock. Under contention, every waiting caller could otherwise consume
+            // the whole pool and starve the lock holder's read/write queries.
+            while (!advisoryLockAcquired) {
+                pgClient = await pool.connect();
+                const lockResult = await pgClient.query(
+                    'SELECT pg_try_advisory_lock(hashtext($1), hashtext($2)) AS locked',
+                    ['skaw:auto-message', lockKey],
+                );
+                advisoryLockAcquired = lockResult.rows?.[0]?.locked === true;
+                if (!advisoryLockAcquired) {
+                    pgClient.release();
+                    pgClient = null;
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                }
+            }
         }
         return await callback();
     } finally {

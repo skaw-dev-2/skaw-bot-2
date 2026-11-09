@@ -62,6 +62,6 @@ test('reroll rejects a requested count above the remaining eligible entries', ()
 test('reroll rejects a winner count outside the configured range', () => {
     assert.throws(
         () => selectRerollWinners(['user-1', 'user-2'], 11, []),
-        /between 1 and 10/
+        /Invalid winner count: 11/
     );
 });

@@ -317,6 +317,7 @@ test('PostgreSQL storage path performs reads and writes under a guild advisory l
         connect: async () => ({
             query: async sql => {
                 lockStatements.push(sql);
+                if (sql.includes('pg_try_advisory_lock')) return { rows: [{ locked: true }] };
                 return { rows: [] };
             },
             release: () => {},

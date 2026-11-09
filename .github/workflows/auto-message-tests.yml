@@ -8,6 +8,7 @@ on:
       - 'src/commands/Utility/automessage.js'
       - 'src/commands/Utility/automessage-manage.js'
       - 'src/events/ready.js'
+      - 'src/app.js'
       - 'src/tests/autoMessageService.test.js'
       - '.github/workflows/auto-message-tests.yml'
   push:
@@ -19,6 +20,7 @@ on:
       - 'src/commands/Utility/automessage.js'
       - 'src/commands/Utility/automessage-manage.js'
       - 'src/events/ready.js'
+      - 'src/app.js'
       - 'src/tests/autoMessageService.test.js'
       - '.github/workflows/auto-message-tests.yml'
 

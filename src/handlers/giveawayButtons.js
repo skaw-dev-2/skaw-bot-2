@@ -269,7 +269,8 @@ export const giveawayRerollHandler = {
             const newWinners = selectRerollWinners(
                 participants,
                 rerollWinnerCount,
-                previousWinnerIds
+                previousWinnerIds,
+                giveaway.rerollWinners
             );
 
             giveaway.originalWinnerCount = Number.isInteger(giveaway.originalWinnerCount)

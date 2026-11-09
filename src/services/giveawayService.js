@@ -274,7 +274,7 @@ export function selectWinners(participants, winnerCount, fixedWinners = []) {
  * Selects a configurable number of new giveaway winners.
  * Previous winners are excluded so a reroll cannot select the same people again.
  */
-export function selectRerollWinners(participants, winnerCount, previousWinnerIds = []) {
+export function selectRerollWinners(participants, winnerCount, previousWinnerIds = [], fixedWinners = []) {
     validateWinnerCount(winnerCount);
 
     const uniqueParticipants = Array.isArray(participants)
@@ -302,7 +302,7 @@ export function selectRerollWinners(participants, winnerCount, previousWinnerIds
         );
     }
 
-    return selectWinners(eligibleParticipants, winnerCount);
+    return selectWinners(eligibleParticipants, winnerCount, fixedWinners);
 }
 
 export function isUserRateLimited(userId, giveawayId) {

@@ -23,8 +23,7 @@ import { ensureAutoMessageInteractionHandlers } from '../../services/autoMessage
 import {
     AUTO_MESSAGE_DEFAULT_TIMEZONE,
     buildAutoMessageData,
-    getGuildAutoMessages,
-    saveGuildAutoMessages,
+    mutateGuildAutoMessages,
     parseScheduledDateTime,
     formatDateTime,
     validateMessage,
@@ -633,9 +632,10 @@ async function createScheduleFromDraft(interaction, draft) {
         createdBy: interaction.user.id,
     });
 
-    const existing = await getGuildAutoMessages(interaction.client, interaction.guildId);
-    existing.push(schedule);
-    await saveGuildAutoMessages(interaction.client, interaction.guildId, existing);
+    await mutateGuildAutoMessages(interaction.client, interaction.guildId, schedules => {
+        schedules.push(schedule);
+        return schedule;
+    });
 
     return { schedule, channel };
 }

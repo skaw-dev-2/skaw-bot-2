@@ -8,7 +8,7 @@ import {
     buildAutoMessagePayload,
     getAutoMessage,
     getGuildAutoMessages,
-    saveGuildAutoMessages,
+    mutateGuildAutoMessages,
 } from '../../services/autoMessageService.js';
 
 const MAX_LIST_ITEMS = 15;
@@ -98,7 +98,7 @@ export default {
                 }
 
                 const lines = schedules.slice(0, MAX_LIST_ITEMS).map(schedule => {
-                    const status = !schedule.enabled ? '⚪ OFF' : schedule.failureCount > 0 ? `🟠 RETRY ${schedule.failureCount}` : '🟢 ON';
+                    const status = schedule.deliveryUncertain ? '🔴 CHECK' : !schedule.enabled ? '⚪ OFF' : schedule.failureCount > 0 ? `🟠 RETRY ${schedule.failureCount}` : '🟢 ON';
                     const next = schedule.nextRunAt ? formatDateTime(schedule.nextRunAt, schedule.timezone) : '—';
                     const interval = formatInterval(schedule.intervalMs, schedule.scheduleType);
                     return `${status} \`${schedule.id}\` → <#${schedule.channelId}> · ${interval} · next: ${next}`;
@@ -129,7 +129,8 @@ export default {
                         description: schedule.message,
                         fields: [
                             { name: 'Channel', value: `<#${schedule.channelId}>`, inline: true },
-                            { name: 'Status', value: schedule.enabled ? 'Enabled' : 'Disabled', inline: true },
+                            { name: 'Status', value: schedule.deliveryUncertain ? 'Delivery uncertain — manual review required' : schedule.enabled ? 'Enabled' : 'Disabled', inline: true },
+                            { name: 'Last Delivery Outcome', value: schedule.deliveryUncertain ? 'Unconfirmed (' + (schedule.deliveryUncertainAt || 'time unavailable') + ')' : schedule.inFlight ? 'Sending (claim persisted)' : 'No pending delivery', inline: true },
                             { name: 'Type', value: schedule.messageType === 'embed' ? 'Embed Message' : 'Normal Text Message', inline: true },
                             { name: 'Interval', value: formatInterval(schedule.intervalMs, schedule.scheduleType), inline: true },
                             { name: 'Start', value: formatDateTime(schedule.startAt, schedule.timezone), inline: true },
@@ -145,50 +146,44 @@ export default {
             }
 
             if (subcommand === 'enable' || subcommand === 'disable') {
-                schedule.enabled = subcommand === 'enable';
-
-                if (schedule.enabled) {
-                    const now = Date.now();
-                    if (schedule.endAt && now >= schedule.endAt) {
-                        throw new Error('This automatic message has already passed its end time. Create a new schedule.');
+                const enabled = subcommand === 'enable';
+                const updated = await mutateGuildAutoMessages(interaction.client, guildId, schedules => {
+                    const current = schedules.find(item => item.id === id);
+                    if (!current) throw new Error('This Auto Message no longer exists. Refresh the list and try again.');
+                    current.enabled = enabled;
+                    if (enabled) {
+                        const now = Date.now();
+                        if (current.endAt !== null && now >= current.endAt) throw new Error('This automatic message has already passed its end time. Create a new schedule.');
+                        current.nextRunAt = current.nextRunAt && current.nextRunAt > now ? current.nextRunAt : now;
+                        current.failureCount = 0;
+                        current.lastFailureAt = null;
+                        current.lastError = null;
+                        current.inFlight = null;
+                        current.deliveryUncertain = false;
+                        current.deliveryUncertainAt = null;
+                    } else {
+                        current.nextRunAt = null;
+                        current.inFlight = null;
                     }
-                    schedule.nextRunAt = schedule.nextRunAt && schedule.nextRunAt > now
-                        ? schedule.nextRunAt
-                        : now;
-                    schedule.failureCount = 0;
-                    schedule.lastFailureAt = null;
-                    schedule.lastError = null;
-                } else {
-                    schedule.nextRunAt = null;
-                }
-
-                schedule.updatedAt = new Date().toISOString();
-
-                const all = await getGuildAutoMessages(interaction.client, guildId);
-                await saveGuildAutoMessages(
-                    interaction.client,
-                    guildId,
-                    all.map(item => item.id === schedule.id ? schedule : item),
-                );
-
+                    current.updatedAt = new Date().toISOString();
+                    return current;
+                });
                 return InteractionHelper.safeReply(interaction, {
                     embeds: [successEmbed(
-                        `Auto Message ${schedule.enabled ? 'Enabled' : 'Disabled'} ✅`,
-                        `\`${schedule.id}\` is now **${schedule.enabled ? 'enabled' : 'disabled'}**.`,
+                        'Auto Message ' + (enabled ? 'Enabled' : 'Disabled') + ' ✅',
+                        String.fromCharCode(96) + updated.id + String.fromCharCode(96) + ' is now **' + (enabled ? 'enabled' : 'disabled') + '**.',
                     )],
                 });
             }
 
             if (subcommand === 'delete') {
-                const all = await getGuildAutoMessages(interaction.client, guildId);
-                await saveGuildAutoMessages(
-                    interaction.client,
-                    guildId,
-                    all.filter(item => item.id !== schedule.id),
-                );
-
+                await mutateGuildAutoMessages(interaction.client, guildId, schedules => {
+                    const index = schedules.findIndex(item => item.id === id);
+                    if (index < 0) throw new Error('This Auto Message no longer exists. Refresh the list and try again.');
+                    schedules.splice(index, 1);
+                });
                 return InteractionHelper.safeReply(interaction, {
-                    embeds: [successEmbed('Auto Message Deleted ✅', `Removed \`${schedule.id}\` from the schedule list.`)],
+                    embeds: [successEmbed('Auto Message Deleted ✅', 'Removed ' + id + ' from the schedule list.')],
                 });
             }
 

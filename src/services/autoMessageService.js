@@ -15,6 +15,72 @@ const SEND_RETRY_BASE_MS = 60 * 1000;
 const SEND_RETRY_MAX_MS = 30 * 60 * 1000;
 
 const schedulerHandles = new WeakMap();
+const schedulerRunningClients = new WeakSet();
+const guildLockTails = new Map();
+
+function assertAutoMessageStorageAvailable(client) {
+    if (!client?.db) throw new Error('Auto Message database is unavailable.');
+    if (client.db.isDegraded?.()) throw new Error('Auto Message requires persistent PostgreSQL storage. The database is currently in temporary memory mode; no schedule changes were made.');
+    if (typeof client.db.isAvailable === 'function' && !client.db.isAvailable()) throw new Error('Auto Message persistent database is not available. Please try again when PostgreSQL is connected.');
+}
+
+async function withGuildAutoMessagesLock(client, guildId, callback) {
+    const lockKey = String(guildId);
+    const previous = guildLockTails.get(lockKey) || Promise.resolve();
+    let releaseLocal;
+    const localGate = new Promise(resolve => { releaseLocal = resolve; });
+    const tail = previous.catch(() => {}).then(() => localGate);
+    guildLockTails.set(lockKey, tail);
+    await previous.catch(() => {});
+
+    let pgClient = null;
+    let advisoryLockAcquired = false;
+    try {
+        assertAutoMessageStorageAvailable(client);
+        const pool = client.db?.db?.pool;
+        if (pool && typeof pool.connect === 'function') {
+            // Do not hold a pooled connection while waiting on a blocking advisory
+            // lock. Under contention, every waiting caller could otherwise consume
+            // the whole pool and starve the lock holder's read/write queries.
+            while (!advisoryLockAcquired) {
+                pgClient = await pool.connect();
+                const lockResult = await pgClient.query(
+                    'SELECT pg_try_advisory_lock(hashtext($1), hashtext($2)) AS locked',
+                    ['skaw:auto-message', lockKey],
+                );
+                advisoryLockAcquired = lockResult.rows?.[0]?.locked === true;
+                if (!advisoryLockAcquired) {
+                    pgClient.release();
+                    pgClient = null;
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                }
+            }
+        }
+        return await callback();
+    } finally {
+        if (pgClient) {
+            try {
+                if (advisoryLockAcquired) await pgClient.query('SELECT pg_advisory_unlock(hashtext($1), hashtext($2))', ['skaw:auto-message', lockKey]);
+            } catch (error) {
+                logger.error('Could not release Auto Message advisory lock for guild ' + lockKey + ':', error);
+            } finally {
+                pgClient.release();
+            }
+        }
+        releaseLocal();
+        if (guildLockTails.get(lockKey) === tail) guildLockTails.delete(lockKey);
+    }
+}
+
+export async function mutateGuildAutoMessages(client, guildId, mutator) {
+    if (typeof mutator !== 'function') throw new Error('Auto Message mutation callback is required.');
+    return withGuildAutoMessagesLock(client, guildId, async () => {
+        const schedules = await getGuildAutoMessages(client, guildId);
+        const result = await mutator(schedules);
+        await saveGuildAutoMessages(client, guildId, schedules);
+        return result;
+    });
+}
 
 // SKAW GROUP brand color: navy/blue that stays visible on Discord's dark UI.
 export const SKAW_DEFAULT_EMBED_COLOR = '#0A5EA8';
@@ -83,13 +149,16 @@ function normalizeSchedule(record = {}) {
         intervalMs: record.intervalMs == null ? null : Number(record.intervalMs),
         startAt,
         endAt: record.endAt == null ? null : Number(record.endAt),
-        nextRunAt: Number.isFinite(rawNext) ? rawNext : (Number.isFinite(startAt) ? startAt : null),
+        nextRunAt: record.nextRunAt === null ? null : (Number.isFinite(rawNext) ? rawNext : (Number.isFinite(startAt) ? startAt : null)),
         lastRunAt: record.lastRunAt == null ? null : Number(record.lastRunAt),
         enabled: record.enabled !== false,
         runCount: Number.isInteger(record.runCount) ? record.runCount : 0,
         failureCount: Math.max(0, Number(record.failureCount) || 0),
         lastFailureAt: record.lastFailureAt || null,
         lastError: typeof record.lastError === 'string' ? record.lastError.slice(0, 500) : null,
+        inFlight: record.inFlight && typeof record.inFlight === 'object' ? { id: String(record.inFlight.id || ''), claimedAt: Number(record.inFlight.claimedAt) || null, scheduledFor: Number(record.inFlight.scheduledFor) || null } : null,
+        deliveryUncertain: record.deliveryUncertain === true,
+        deliveryUncertainAt: record.deliveryUncertainAt || null,
         createdAt: record.createdAt || new Date().toISOString(),
         createdBy: record.createdBy ? String(record.createdBy) : null,
         updatedAt: record.updatedAt || null,
@@ -97,11 +166,16 @@ function normalizeSchedule(record = {}) {
 }
 
 function asMap(records) {
+    if (!records || typeof records !== 'object' || Array.isArray(records)) {
+        throw new Error('Stored Auto Message data is malformed. No schedule updates were applied to protect existing records.');
+    }
+
     const map = {};
-    if (records && typeof records === 'object' && !Array.isArray(records)) {
-        for (const [id, record] of Object.entries(records)) {
-            if (record) map[id] = normalizeSchedule({ ...record, id: record.id || id });
+    for (const [id, record] of Object.entries(records)) {
+        if (!record || typeof record !== 'object' || Array.isArray(record)) {
+            throw new Error('Stored Auto Message entry "' + id + '" is malformed. No schedule updates were applied to protect existing records.');
         }
+        map[id] = normalizeSchedule({ ...record, id: record.id || id });
     }
     return map;
 }
@@ -286,24 +360,50 @@ export function formatDateTime(timestamp, timeZone = DEFAULT_TIMEZONE) {
     }
 }
 
-export async function getGuildAutoMessages(client, guildId) {
-    if (!client?.db) return [];
+async function readAutoMessageStore(client, guildId) {
+    assertAutoMessageStorageAvailable(client);
+    const key = AUTO_MESSAGE_KEY(guildId);
+    const pool = client.db?.db?.pool;
+    if (pool && typeof pool.query === 'function' && client.db.isAvailable?.()) {
+        const { pgConfig } = await import('../config/database/postgres.js');
+        const result = await pool.query('SELECT value FROM ' + pgConfig.tables.temp_data + ' WHERE key = $1 AND (expires_at IS NULL OR expires_at > NOW())', [key]);
+        if (!result.rows?.length) return {};
+        const value = result.rows[0].value;
+        if (value === null || value === undefined) throw new Error('Stored Auto Message data is null. No schedule updates were applied to protect existing records.');
+        if (typeof value === 'string') {
+            try { return JSON.parse(value); } catch { throw new Error('Stored Auto Message data is not valid JSON.'); }
+        }
+        return value;
+    }
+    return await client.db.get(key, {});
+}
 
-    const raw = await client.db.get(AUTO_MESSAGE_KEY(guildId), {});
+async function writeAutoMessageStore(client, guildId, map) {
+    assertAutoMessageStorageAvailable(client);
+    const key = AUTO_MESSAGE_KEY(guildId);
+    const pool = client.db?.db?.pool;
+    if (pool && typeof pool.query === 'function' && client.db.isAvailable?.()) {
+        const { pgConfig } = await import('../config/database/postgres.js');
+        await pool.query('INSERT INTO ' + pgConfig.tables.temp_data + ' (key, value, expires_at) VALUES ($1, $2::jsonb, NULL) ON CONFLICT (key) DO UPDATE SET value = $2::jsonb, expires_at = NULL', [key, JSON.stringify(map)]);
+        return true;
+    }
+    const result = await client.db.set(key, map);
+    if (result === false) throw new Error('PostgreSQL rejected the Auto Message schedule update.');
+    return true;
+}
+
+export async function getGuildAutoMessages(client, guildId) {
+    const raw = await readAutoMessageStore(client, guildId);
     return Object.values(asMap(raw)).filter(schedule => schedule.id);
 }
 
 export async function saveGuildAutoMessages(client, guildId, schedules) {
-    if (!client?.db) return false;
-
     const map = {};
     for (const schedule of schedules) {
         const normalized = normalizeSchedule(schedule);
         if (normalized.id) map[normalized.id] = normalized;
     }
-
-    await client.db.set(AUTO_MESSAGE_KEY(guildId), map);
-    return true;
+    return writeAutoMessageStore(client, guildId, map);
 }
 
 export async function getAutoMessage(client, guildId, id) {
@@ -326,6 +426,25 @@ export function validateMessage(message) {
     }
 
     return trimmed;
+}
+
+function validateExpandedMessageLength(content) {
+    if (content.length > DISCORD_MAX_MESSAGE_LENGTH) throw new Error('Message exceeds Discord’s 2,000-character limit after custom emoji conversion.');
+    return content;
+}
+
+function validateEmbedTotalLength(embed) {
+    const titleLength = (embed.title || '').length;
+    const descriptionLength = (embed.description || '').length;
+    const footerLength = (embed.footer || '').length;
+
+    if (titleLength > 256) throw new Error('Embed title exceeds Discord’s 256-character limit after custom emoji conversion.');
+    if (descriptionLength > DISCORD_EMBED_DESCRIPTION_LIMIT) throw new Error('Embed description exceeds Discord’s 4,096-character limit after custom emoji conversion.');
+    if (footerLength > 2048) throw new Error('Embed footer exceeds Discord’s 2,048-character limit after custom emoji conversion.');
+
+    const total = titleLength + descriptionLength + footerLength;
+    if (total > 6000) throw new Error('Embed text exceeds Discord’s 6,000-character combined limit (currently ' + total + ').');
+    return total;
 }
 
 export function validateEmbedDescription(description) {
@@ -393,6 +512,7 @@ export function buildAutoMessageData({
         cleanEmbed.color = validateEmbedColor(cleanEmbed.color);
         cleanEmbed.imageUrl = validateEmbedUrl(cleanEmbed.imageUrl);
         cleanEmbed.description = validateEmbedDescription(cleanEmbed.description);
+        validateEmbedTotalLength(cleanEmbed);
     }
 
     const startAt = parseScheduledDateTime(startString, zone);
@@ -441,7 +561,8 @@ function parseHexColor(color) {
 
 export function buildAutoMessagePayload(schedule, guild = null) {
     if (!schedule || schedule.messageType !== 'embed') {
-        return { content: resolveCustomEmojiSyntax(String(schedule?.message || ''), guild) };
+        const content = resolveCustomEmojiSyntax(String(schedule?.message || ''), guild);
+        return { content: validateExpandedMessageLength(content) };
     }
 
     const embedData = normalizeEmbed(schedule.embed, schedule.message);
@@ -460,25 +581,95 @@ export function buildAutoMessagePayload(schedule, guild = null) {
         });
     }
     if (embedData.imageUrl) embed.setImage(validateEmbedUrl(embedData.imageUrl));
+    validateEmbedTotalLength({
+        title: resolveCustomEmojiSyntax(embedData.title, guild),
+        description: resolveCustomEmojiSyntax(embedData.description, guild),
+        footer: resolveCustomEmojiSyntax(embedData.footer, guild),
+    });
 
     return { embeds: [embed] };
 }
 
+function getRetryDelayMs(failureCount, error = null) {
+    const exponent = Math.min(Math.max(0, failureCount - 1), 10);
+    const exponentialDelay = Math.min(SEND_RETRY_MAX_MS, SEND_RETRY_BASE_MS * (2 ** exponent));
+    const retryAfterSeconds = Number(error?.retry_after ?? error?.rawError?.retry_after);
+    if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) return Math.min(SEND_RETRY_MAX_MS, Math.max(exponentialDelay, retryAfterSeconds * 1000));
+    return exponentialDelay;
+}
+
 function recordScheduleFailure(schedule, error, now) {
     const failureCount = Math.max(0, Number(schedule.failureCount) || 0) + 1;
-    const exponent = Math.min(failureCount - 1, 10);
-    const retryDelayMs = Math.min(SEND_RETRY_MAX_MS, SEND_RETRY_BASE_MS * (2 ** exponent));
-
+    const retryDelayMs = getRetryDelayMs(failureCount, error);
     schedule.failureCount = failureCount;
     schedule.lastFailureAt = new Date(now).toISOString();
     schedule.lastError = String(error?.message || error || 'Unknown delivery error').slice(0, 500);
+    schedule.inFlight = null;
+    schedule.deliveryUncertain = false;
+    schedule.deliveryUncertainAt = null;
     schedule.nextRunAt = now + retryDelayMs;
     schedule.updatedAt = new Date(now).toISOString();
-
     return retryDelayMs;
 }
 
-let schedulerRunning = false;
+function advanceScheduleAfterAttempt(schedule, scheduledFor, now) {
+    if (schedule.scheduleType === 'once' || schedule.intervalMs === null) {
+        schedule.enabled = false;
+        schedule.nextRunAt = null;
+        return;
+    }
+    const intervalMs = Number(schedule.intervalMs);
+    if (!Number.isSafeInteger(intervalMs) || intervalMs < MIN_INTERVAL_MS) {
+        schedule.enabled = false;
+        schedule.nextRunAt = null;
+        schedule.lastError = 'The saved repeat interval is invalid. Please create a new schedule.';
+        return;
+    }
+    let nextRunAt = Number(scheduledFor) + intervalMs;
+    while (nextRunAt <= now) nextRunAt += intervalMs;
+    schedule.nextRunAt = nextRunAt;
+    if (schedule.endAt !== null && (now >= schedule.endAt || nextRunAt >= schedule.endAt)) {
+        schedule.enabled = false;
+        schedule.nextRunAt = null;
+    }
+}
+
+function recordUncertainDelivery(schedule, scheduledFor, now, reason) {
+    schedule.failureCount = Math.max(0, Number(schedule.failureCount) || 0) + 1;
+    schedule.lastFailureAt = new Date(now).toISOString();
+    schedule.lastError = String(reason || 'The delivery outcome could not be confirmed.').slice(0, 500);
+    schedule.deliveryUncertain = true;
+    schedule.deliveryUncertainAt = new Date(now).toISOString();
+    schedule.inFlight = null;
+    schedule.updatedAt = new Date(now).toISOString();
+    advanceScheduleAfterAttempt(schedule, scheduledFor, now);
+}
+
+function disableScheduleWithError(schedule, error, now) {
+    schedule.enabled = false;
+    schedule.nextRunAt = null;
+    schedule.inFlight = null;
+    schedule.failureCount = Math.max(0, Number(schedule.failureCount) || 0) + 1;
+    schedule.lastFailureAt = new Date(now).toISOString();
+    schedule.lastError = String(error?.message || error || 'Permanent Auto Message error').slice(0, 500);
+    schedule.deliveryUncertain = false;
+    schedule.deliveryUncertainAt = null;
+    schedule.updatedAt = new Date(now).toISOString();
+}
+
+function isDefinitiveSendRejection(error) {
+    const status = Number(error?.status ?? error?.statusCode);
+    return (Number.isFinite(status) && status >= 400 && status < 500 && ![408, 425, 429].includes(status))
+        || [10003, 50006, 50013, 50035].includes(Number(error?.code));
+}
+
+function isRateLimitError(error) {
+    return Number(error?.status ?? error?.statusCode) === 429 || Number(error?.code) === 429;
+}
+
+async function persistGuildSchedules(client, guildId, schedules) {
+    await saveGuildAutoMessages(client, guildId, schedules);
+}
 
 export function isAutoMessageSchedulerRunning(client) {
     const state = client ? schedulerHandles.get(client) : null;
@@ -487,34 +678,24 @@ export function isAutoMessageSchedulerRunning(client) {
 
 export function startAutoMessageScheduler(client, intervalMs = DEFAULT_SCHEDULER_INTERVAL_MS) {
     if (!client || typeof client !== 'object') return false;
-
     const existing = schedulerHandles.get(client);
     if (existing?.timer) return true;
 
-    const safeInterval = Number.isFinite(intervalMs) && intervalMs >= 5_000
-        ? intervalMs
-        : DEFAULT_SCHEDULER_INTERVAL_MS;
-
+    const safeInterval = Number.isFinite(intervalMs) && intervalMs >= 5000 ? intervalMs : DEFAULT_SCHEDULER_INTERVAL_MS;
     const tick = () => {
-        runAutoMessages(client).catch(error => {
-            logger.error('Auto Message scheduler tick failed:', error);
-        });
+        runAutoMessages(client).catch(error => logger.error('Auto Message scheduler tick failed:', error));
     };
-
     tick();
-
     const timer = setInterval(tick, safeInterval);
     if (typeof timer.unref === 'function') timer.unref();
-
     schedulerHandles.set(client, { timer, intervalMs: safeInterval });
-    logger.info(`Auto Message scheduler started (every ${Math.round(safeInterval / 1000)}s).`);
+    logger.info('Auto Message scheduler started (every ' + Math.round(safeInterval / 1000) + 's).');
     return true;
 }
 
 export function stopAutoMessageScheduler(client) {
     const state = client ? schedulerHandles.get(client) : null;
     if (!state?.timer) return false;
-
     clearInterval(state.timer);
     schedulerHandles.delete(client);
     logger.info('Auto Message scheduler stopped.');
@@ -526,157 +707,174 @@ export async function runAutoMessages(client) {
         logger.warn('Auto Message scheduler skipped: database unavailable.');
         return;
     }
-
-    if (schedulerRunning) {
+    try {
+        assertAutoMessageStorageAvailable(client);
+    } catch (error) {
+        logger.warn('Auto Message scheduler is waiting for persistent PostgreSQL storage: ' + error.message);
+        return;
+    }
+    if (schedulerRunningClients.has(client)) {
         logger.debug('Auto Message scheduler skipped: previous run is still active.');
         return;
     }
-
-    schedulerRunning = true;
-    const now = Date.now();
+    schedulerRunningClients.add(client);
 
     try {
         for (const guild of client.guilds.cache.values()) {
             try {
-                const schedules = await getGuildAutoMessages(client, guild.id);
-                if (schedules.length === 0) continue;
+                await withGuildAutoMessagesLock(client, guild.id, async () => {
+                    const schedules = await getGuildAutoMessages(client, guild.id);
+                    if (schedules.length === 0) return;
 
-                let changed = false;
+                    for (const schedule of schedules) {
+                        if (!schedule.enabled || !Number.isFinite(schedule.startAt)) continue;
+                        const now = Date.now();
 
-                for (const schedule of schedules) {
-                    if (!schedule.enabled || !Number.isFinite(schedule.startAt)) continue;
+                        if (schedule.inFlight) {
+                            const scheduledFor = Number(schedule.inFlight.scheduledFor) || Number(schedule.nextRunAt) || now;
+                            recordUncertainDelivery(
+                                schedule,
+                                scheduledFor,
+                                now,
+                                'Previous delivery was interrupted. Discord may already have received it, so this occurrence was skipped to prevent duplicate messages. Review the schedule and manually re-enable it if a resend is required.',
+                            );
+                            await persistGuildSchedules(client, guild.id, schedules);
+                            logger.warn('Auto Message ' + schedule.id + ' recovered an interrupted delivery; current occurrence marked uncertain.');
+                            continue;
+                        }
 
-                    if (schedule.endAt !== null && now >= schedule.endAt) {
-                        schedule.enabled = false;
-                        schedule.nextRunAt = null;
-                        schedule.updatedAt = new Date().toISOString();
-                        changed = true;
-                        logger.info(`Auto Message ${schedule.id} expired in guild ${guild.id}.`);
-                        continue;
-                    }
-
-                    if (!Number.isFinite(schedule.nextRunAt)) {
-                        schedule.nextRunAt = schedule.startAt;
-                        changed = true;
-                    }
-
-                    if (now < schedule.nextRunAt) continue;
-
-                    let channel = null;
-                    let channelFetchError = null;
-                    try {
-                        channel = await guild.channels.fetch(schedule.channelId);
-                    } catch (error) {
-                        channelFetchError = error;
-                    }
-
-                    if (channelFetchError) {
-                        if (channelFetchError.code === 10003) {
+                        if (schedule.endAt !== null && now >= schedule.endAt) {
                             schedule.enabled = false;
                             schedule.nextRunAt = null;
                             schedule.updatedAt = new Date(now).toISOString();
-                            schedule.lastError = 'The configured channel no longer exists.';
-                            changed = true;
-                            logger.warn(`Auto Message ${schedule.id} disabled: channel ${schedule.channelId} no longer exists.`);
-                        } else {
-                            const retryDelayMs = recordScheduleFailure(schedule, channelFetchError, now);
-                            changed = true;
-                            logger.warn(`Auto Message ${schedule.id} could not fetch channel ${schedule.channelId}; retrying in ${Math.ceil(retryDelayMs / 60000)} minute(s): ${channelFetchError.message}`);
+                            await persistGuildSchedules(client, guild.id, schedules);
+                            logger.info('Auto Message ' + schedule.id + ' expired in guild ' + guild.id + '.');
+                            continue;
                         }
-                        continue;
-                    }
 
-                    if (!channel) {
-                        const retryDelayMs = recordScheduleFailure(
-                            schedule,
-                            new Error('Discord returned no channel for the configured channel ID.'),
-                            now,
-                        );
-                        changed = true;
-                        logger.warn(`Auto Message ${schedule.id} channel lookup returned empty; retrying in ${Math.ceil(retryDelayMs / 60000)} minute(s).`);
-                        continue;
-                    }
+                        if (!Number.isFinite(schedule.nextRunAt)) {
+                            schedule.nextRunAt = schedule.startAt;
+                            await persistGuildSchedules(client, guild.id, schedules);
+                        }
+                        if (now < schedule.nextRunAt) continue;
 
-                    if (typeof channel.send !== 'function' || !channel.isTextBased()) {
-                        schedule.enabled = false;
-                        schedule.nextRunAt = null;
+                        let channel = null;
+                        let channelFetchError = null;
+                        try {
+                            channel = await guild.channels.fetch(schedule.channelId);
+                        } catch (error) {
+                            channelFetchError = error;
+                        }
+
+                        if (channelFetchError) {
+                            if (Number(channelFetchError.code) === 10003) {
+                                disableScheduleWithError(schedule, new Error('The configured channel no longer exists.'), now);
+                                await persistGuildSchedules(client, guild.id, schedules);
+                                logger.warn('Auto Message ' + schedule.id + ' disabled: channel ' + schedule.channelId + ' no longer exists.');
+                            } else {
+                                const retryDelayMs = recordScheduleFailure(schedule, channelFetchError, now);
+                                await persistGuildSchedules(client, guild.id, schedules);
+                                logger.warn('Auto Message ' + schedule.id + ' could not fetch channel ' + schedule.channelId + '; retrying in ' + Math.ceil(retryDelayMs / 60000) + ' minute(s): ' + channelFetchError.message);
+                            }
+                            continue;
+                        }
+
+                        if (!channel) {
+                            const retryDelayMs = recordScheduleFailure(schedule, new Error('Discord returned no channel for the configured channel ID.'), now);
+                            await persistGuildSchedules(client, guild.id, schedules);
+                            logger.warn('Auto Message ' + schedule.id + ' channel lookup returned empty; retrying in ' + Math.ceil(retryDelayMs / 60000) + ' minute(s).');
+                            continue;
+                        }
+
+                        if (typeof channel.send !== 'function' || !channel.isTextBased()) {
+                            disableScheduleWithError(schedule, new Error('The configured channel cannot receive messages.'), now);
+                            await persistGuildSchedules(client, guild.id, schedules);
+                            logger.warn('Auto Message ' + schedule.id + ' disabled: channel ' + schedule.channelId + ' cannot receive messages.');
+                            continue;
+                        }
+
+                        let payload;
+                        try {
+                            payload = buildAutoMessagePayload(schedule, guild);
+                        } catch (payloadError) {
+                            disableScheduleWithError(schedule, payloadError, now);
+                            await persistGuildSchedules(client, guild.id, schedules);
+                            logger.error('Auto Message ' + schedule.id + ' disabled due to invalid message/embeds: ' + payloadError.message);
+                            continue;
+                        }
+
+                        const scheduledFor = Number(schedule.nextRunAt);
+                        const attemptId = createAutoMessageId();
+                        schedule.inFlight = { id: attemptId, claimedAt: now, scheduledFor: scheduledFor };
                         schedule.updatedAt = new Date(now).toISOString();
-                        schedule.lastError = 'The configured channel cannot receive messages.';
-                        changed = true;
-                        logger.warn(`Auto Message ${schedule.id} disabled: channel ${schedule.channelId} cannot receive messages.`);
-                        continue;
-                    }
 
-                    let payload;
-                    try {
-                        payload = buildAutoMessagePayload(schedule, guild);
-                    } catch (payloadError) {
-                        logger.error(`Auto Message ${schedule.id} has invalid message/embeds: ${payloadError.message}`);
-                        schedule.enabled = false;
-                        schedule.nextRunAt = null;
-                        schedule.updatedAt = new Date().toISOString();
-                        changed = true;
-                        continue;
-                    }
-
-                    let sent;
-                    try {
-                        sent = await channel.send(payload);
-                    } catch (sendError) {
-                        const retryDelayMs = recordScheduleFailure(schedule, sendError, now);
-                        changed = true;
-                        logger.warn(`Auto Message ${schedule.id} failed to send in guild ${guild.id}; retrying in ${Math.ceil(retryDelayMs / 60000)} minute(s): ${sendError.message}`);
-                        continue;
-                    }
-
-                    if (!sent) {
-                        const retryDelayMs = recordScheduleFailure(
-                            schedule,
-                            new Error('Discord did not confirm the scheduled message delivery.'),
-                            now,
-                        );
-                        changed = true;
-                        logger.warn(`Auto Message ${schedule.id} returned no sent message; retrying in ${Math.ceil(retryDelayMs / 60000)} minute(s).`);
-                        continue;
-                    }
-
-                    schedule.lastRunAt = now;
-                    schedule.runCount += 1;
-                    schedule.failureCount = 0;
-                    schedule.lastFailureAt = null;
-                    schedule.lastError = null;
-                    schedule.updatedAt = new Date(now).toISOString();
-                    changed = true;
-
-                    if (schedule.scheduleType === 'once' || schedule.intervalMs === null) {
-                        schedule.enabled = false;
-                        schedule.nextRunAt = null;
-                    } else {
-                        let nextRunAt = schedule.nextRunAt + schedule.intervalMs;
-                        while (nextRunAt <= now) {
-                            nextRunAt += schedule.intervalMs;
+                        try {
+                            await persistGuildSchedules(client, guild.id, schedules);
+                        } catch (claimError) {
+                            schedule.inFlight = null;
+                            logger.error('Auto Message ' + schedule.id + ' was not sent because its delivery claim could not be saved:', claimError);
+                            continue;
                         }
-                        schedule.nextRunAt = nextRunAt;
 
-                        if (schedule.endAt !== null && schedule.nextRunAt >= schedule.endAt) {
-                            schedule.enabled = false;
-                            schedule.nextRunAt = null;
+                        let sent;
+                        try {
+                            sent = await channel.send({ ...payload, nonce: attemptId, enforceNonce: true });
+                        } catch (sendError) {
+                            if (isRateLimitError(sendError)) {
+                                const retryDelayMs = recordScheduleFailure(schedule, sendError, Date.now());
+                                await persistGuildSchedules(client, guild.id, schedules);
+                                logger.warn('Auto Message ' + schedule.id + ' was rate limited; retrying in ' + Math.ceil(retryDelayMs / 60000) + ' minute(s): ' + sendError.message);
+                            } else if (isDefinitiveSendRejection(sendError)) {
+                                disableScheduleWithError(schedule, sendError, Date.now());
+                                await persistGuildSchedules(client, guild.id, schedules);
+                                logger.error('Auto Message ' + schedule.id + ' disabled after a permanent Discord rejection: ' + sendError.message);
+                            } else {
+                                recordUncertainDelivery(
+                                    schedule,
+                                    scheduledFor,
+                                    Date.now(),
+                                    'Discord did not confirm delivery (' + (sendError?.message || 'unknown network error') + '). This occurrence was not retried automatically because it may already have been accepted.',
+                                );
+                                await persistGuildSchedules(client, guild.id, schedules);
+                                logger.warn('Auto Message ' + schedule.id + ' delivery outcome is uncertain; occurrence skipped to prevent a duplicate.');
+                            }
+                            continue;
                         }
+
+                        if (!sent) {
+                            recordUncertainDelivery(
+                                schedule,
+                                scheduledFor,
+                                Date.now(),
+                                'Discord returned no message confirmation. This occurrence was not retried automatically because it may already have been accepted.',
+                            );
+                            await persistGuildSchedules(client, guild.id, schedules);
+                            continue;
+                        }
+
+                        const deliveredAt = Date.now();
+                        schedule.lastRunAt = deliveredAt;
+                        schedule.runCount += 1;
+                        schedule.failureCount = 0;
+                        schedule.lastFailureAt = null;
+                        schedule.lastError = null;
+                        schedule.inFlight = null;
+                        schedule.deliveryUncertain = false;
+                        schedule.deliveryUncertainAt = null;
+                        schedule.updatedAt = new Date(deliveredAt).toISOString();
+                        advanceScheduleAfterAttempt(schedule, scheduledFor, deliveredAt);
+
+                        // The persisted in-flight marker prevents a restart from blindly
+                        // resending this occurrence if this final write fails.
+                        await persistGuildSchedules(client, guild.id, schedules);
+                        logger.info('Auto Message sent: ' + schedule.id + ' in guild ' + guild.id + ', channel ' + schedule.channelId);
                     }
-
-                    logger.info(`Auto Message sent: ${schedule.id} in guild ${guild.id}, channel ${schedule.channelId}`);
-                }
-
-                if (changed) {
-                    await saveGuildAutoMessages(client, guild.id, schedules);
-                }
+                });
             } catch (error) {
-                logger.error(`Auto Message scheduler error in guild ${guild.id}:`, error);
+                logger.error('Auto Message scheduler error in guild ' + guild.id + ':', error);
             }
         }
     } finally {
-        schedulerRunning = false;
+        schedulerRunningClients.delete(client);
     }
 }
-
-export const AUTO_MESSAGE_DEFAULT_TIMEZONE = DEFAULT_TIMEZONE;

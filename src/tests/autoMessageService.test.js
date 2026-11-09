@@ -385,7 +385,7 @@ test('PostgreSQL storage path performs reads and writes under a guild advisory l
     });
 
     assert.ok(pgStore.get(AUTO_MESSAGE_KEY).am_postgres_added);
-    assert.ok(lockStatements.some(sql => sql.includes('pg_advisory_lock')));
+    assert.ok(lockStatements.some(sql => sql.includes('pg_try_advisory_lock')));
     assert.ok(lockStatements.some(sql => sql.includes('pg_advisory_unlock')));
 });
 

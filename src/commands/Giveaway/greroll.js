@@ -106,7 +106,8 @@ export default {
         const newWinners = selectRerollWinners(
             participants,
             rerollWinnerCount,
-            previousWinnerIds
+            previousWinnerIds,
+            giveaway.rerollWinners
         );
 
         const updatedGiveaway = {

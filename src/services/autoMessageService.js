@@ -166,11 +166,16 @@ function normalizeSchedule(record = {}) {
 }
 
 function asMap(records) {
+    if (!records || typeof records !== 'object' || Array.isArray(records)) {
+        throw new Error('Stored Auto Message data is malformed. No schedule updates were applied to protect existing records.');
+    }
+
     const map = {};
-    if (records && typeof records === 'object' && !Array.isArray(records)) {
-        for (const [id, record] of Object.entries(records)) {
-            if (record) map[id] = normalizeSchedule({ ...record, id: record.id || id });
+    for (const [id, record] of Object.entries(records)) {
+        if (!record || typeof record !== 'object' || Array.isArray(record)) {
+            throw new Error('Stored Auto Message entry "' + id + '" is malformed. No schedule updates were applied to protect existing records.');
         }
+        map[id] = normalizeSchedule({ ...record, id: record.id || id });
     }
     return map;
 }
@@ -362,7 +367,9 @@ async function readAutoMessageStore(client, guildId) {
     if (pool && typeof pool.query === 'function' && client.db.isAvailable?.()) {
         const { pgConfig } = await import('../config/database/postgres.js');
         const result = await pool.query('SELECT value FROM ' + pgConfig.tables.temp_data + ' WHERE key = $1 AND (expires_at IS NULL OR expires_at > NOW())', [key]);
-        const value = result.rows?.[0]?.value ?? {};
+        if (!result.rows?.length) return {};
+        const value = result.rows[0].value;
+        if (value === null || value === undefined) throw new Error('Stored Auto Message data is null. No schedule updates were applied to protect existing records.');
         if (typeof value === 'string') {
             try { return JSON.parse(value); } catch { throw new Error('Stored Auto Message data is not valid JSON.'); }
         }

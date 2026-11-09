@@ -4,12 +4,16 @@ import { logger } from '../../utils/logger.js';
 import { TitanBotError, ErrorTypes } from '../../utils/errorHandler.js';
 import { getGuildGiveaways, saveGiveaway } from '../../utils/giveaways.js';
 import { 
-    selectWinners,
+    selectRerollWinners,
     createGiveawayEmbed, 
     createGiveawayButtons 
 } from '../../services/giveawayService.js';
 import { logEvent, EVENT_TYPES } from '../../services/loggingService.js';
 import { InteractionHelper } from '../../utils/interactionHelper.js';
+import { botConfig } from '../../config/bot.js';
+
+const GIVEAWAY_MIN_WINNERS = botConfig.giveaways?.minimumWinners ?? 1;
+const GIVEAWAY_MAX_WINNERS = botConfig.giveaways?.maximumWinners ?? 10;
 
 export default {
     data: new SlashCommandBuilder()
@@ -20,6 +24,14 @@ export default {
                 .setName("messageid")
                 .setDescription("The message ID of the ended giveaway.")
                 .setRequired(true),
+        )
+        .addIntegerOption((option) =>
+            option
+                .setName("winners")
+                .setDescription("Number of new winners to select (defaults to the current winner count).")
+                .setMinValue(GIVEAWAY_MIN_WINNERS)
+                .setMaxValue(GIVEAWAY_MAX_WINNERS)
+                .setRequired(false),
         )
         .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 
@@ -81,27 +93,31 @@ export default {
         }
 
         const participants = giveaway.participants || [];
+        const rerollWinnerCount = interaction.options.getInteger("winners")
+            ?? (Number.isInteger(giveaway.winnerCount) ? giveaway.winnerCount : 1);
+        const previousWinnerHistory = Array.isArray(giveaway.rerollWinnerHistory)
+            ? giveaway.rerollWinnerHistory.map(String)
+            : [];
+        const previousWinnerIds = [...new Set([
+            ...previousWinnerHistory,
+            ...(Array.isArray(giveaway.winnerIds) ? giveaway.winnerIds.map(String) : [])
+        ])];
 
-        if (participants.length < giveaway.winnerCount) {
-            throw new TitanBotError(
-                `Insufficient participants for reroll: ${participants.length} < ${giveaway.winnerCount}`,
-                ErrorTypes.VALIDATION,
-                "Not enough entries to pick the required number of winners.",
-                { participantsCount: participants.length, winnersNeeded: giveaway.winnerCount }
-            );
-        }
-
-        // Optional reroll winners configured in the database.
-        // If rerollWinners is missing or empty, reroll remains fully random.
-        const newWinners = selectWinners(
+        const newWinners = selectRerollWinners(
             participants,
-            giveaway.winnerCount,
-            giveaway.rerollWinners
+            rerollWinnerCount,
+            previousWinnerIds
         );
 
         const updatedGiveaway = {
             ...giveaway,
+            originalWinnerCount: Number.isInteger(giveaway.originalWinnerCount)
+                ? giveaway.originalWinnerCount
+                : (Number.isInteger(giveaway.winnerCount) ? giveaway.winnerCount : rerollWinnerCount),
+            winnerCount: rerollWinnerCount,
             winnerIds: newWinners,
+            rerollWinnerCount,
+            rerollWinnerHistory: previousWinnerIds,
             rerolledAt: new Date().toISOString(),
             rerolledBy: interaction.user.id
         };

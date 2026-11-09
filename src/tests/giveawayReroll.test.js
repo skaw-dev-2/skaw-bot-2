@@ -39,6 +39,19 @@ test('reroll excludes winners selected in previous reroll rounds', () => {
     assert.equal(new Set([...firstRound, ...secondRound]).size, 4);
 });
 
+test('reroll retains configured fixed winners when they are still eligible', () => {
+    const winners = selectRerollWinners(
+        ['user-1', 'user-2', 'user-3', 'user-4'],
+        2,
+        ['user-1'],
+        ['user-3']
+    );
+
+    assert.equal(winners.length, 2);
+    assert.ok(winners.includes('user-3'));
+    assert.ok(!winners.includes('user-1'));
+});
+
 test('reroll rejects a requested count above the remaining eligible entries', () => {
     assert.throws(
         () => selectRerollWinners(['user-1', 'user-2', 'user-3'], 2, ['user-1', 'user-2']),

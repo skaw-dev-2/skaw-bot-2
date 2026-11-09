@@ -136,7 +136,7 @@ function normalizeSchedule(record = {}) {
         intervalMs: record.intervalMs == null ? null : Number(record.intervalMs),
         startAt,
         endAt: record.endAt == null ? null : Number(record.endAt),
-        nextRunAt: Number.isFinite(rawNext) ? rawNext : (Number.isFinite(startAt) ? startAt : null),
+        nextRunAt: record.nextRunAt === null ? null : (Number.isFinite(rawNext) ? rawNext : (Number.isFinite(startAt) ? startAt : null)),
         lastRunAt: record.lastRunAt == null ? null : Number(record.lastRunAt),
         enabled: record.enabled !== false,
         runCount: Number.isInteger(record.runCount) ? record.runCount : 0,

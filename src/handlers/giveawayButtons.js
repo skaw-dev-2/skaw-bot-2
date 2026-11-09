@@ -9,7 +9,7 @@ import {
 } from '../utils/giveaways.js';
 import { Mutex } from '../utils/mutex.js';
 import { 
-    selectWinners,
+    selectRerollWinners,
     isUserRateLimited,
     recordUserInteraction,
     createGiveawayEmbed,
@@ -258,8 +258,26 @@ export const giveawayRerollHandler = {
                 );
             }
 
-            const newWinners = selectWinners(participants, giveaway.winnerCount);
+            const rerollWinnerCount = Number.isInteger(giveaway.winnerCount) ? giveaway.winnerCount : 1;
+            const previousWinnerHistory = Array.isArray(giveaway.rerollWinnerHistory)
+                ? giveaway.rerollWinnerHistory.map(String)
+                : [];
+            const previousWinnerIds = [...new Set([
+                ...previousWinnerHistory,
+                ...(Array.isArray(giveaway.winnerIds) ? giveaway.winnerIds.map(String) : [])
+            ])];
+            const newWinners = selectRerollWinners(
+                participants,
+                rerollWinnerCount,
+                previousWinnerIds
+            );
 
+            giveaway.originalWinnerCount = Number.isInteger(giveaway.originalWinnerCount)
+                ? giveaway.originalWinnerCount
+                : rerollWinnerCount;
+            giveaway.winnerCount = rerollWinnerCount;
+            giveaway.rerollWinnerCount = rerollWinnerCount;
+            giveaway.rerollWinnerHistory = previousWinnerIds;
             giveaway.winnerIds = newWinners;
             giveaway.rerolledAt = new Date().toISOString();
             giveaway.rerolledBy = interaction.user.id;

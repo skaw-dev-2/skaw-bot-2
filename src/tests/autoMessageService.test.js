@@ -133,6 +133,40 @@ test('definitive permission rejection disables the schedule with a visible error
     assert.equal(saved.inFlight, null);
 });
 
+test('ambiguous HTTP timeouts are marked uncertain rather than blindly retried', async () => {
+    let sends = 0;
+    const harness = createClient(createSchedule(), async () => {
+        sends += 1;
+        const error = new Error('Gateway timeout');
+        error.status = 408;
+        throw error;
+    });
+
+    await runAutoMessages(harness.client);
+
+    const saved = harness.readSchedule();
+    assert.equal(sends, 1);
+    assert.equal(saved.enabled, true);
+    assert.equal(saved.inFlight, null);
+    assert.equal(saved.deliveryUncertain, true);
+    assert.match(saved.lastError, /not retried automatically/i);
+    assert.ok(saved.nextRunAt > Date.now());
+});
+
+test('scheduler refuses non-persistent memory fallback storage', async () => {
+    let sends = 0;
+    const harness = createClient(createSchedule(), async () => {
+        sends += 1;
+        return { id: 'must-not-send' };
+    });
+    harness.client.db.isDegraded = () => true;
+
+    await runAutoMessages(harness.client);
+
+    assert.equal(sends, 0);
+    assert.equal(harness.writeCount, 0);
+});
+
 test('a successful retry clears previous errors and advances the schedule', async () => {
     let attempts = 0;
     const harness = createClient(

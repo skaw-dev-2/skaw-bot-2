@@ -16,6 +16,7 @@ import { loadCommands, registerCommands as registerSlashCommands } from './handl
 import { runSafeTask, handleTaskError, ErrorCodes } from './utils/errorHandler.js';
 import { initializeMusic } from './services/music/riffySetup.js';
 import { shutdownMusic } from './services/music/playerHandler.js';
+import { stopAutoMessageScheduler } from './services/autoMessageService.js';
 import pkg from '../package.json' with { type: 'json' };
 import { EXPECTED_SCHEMA_VERSION, EXPECTED_SCHEMA_LABEL } from './config/database/schemaVersion.js';
 
@@ -340,6 +341,10 @@ class TitanBot extends Client {
 
     try {
       
+      logger.info('Stopping Auto Message scheduler...');
+      stopAutoMessageScheduler(this);
+      logger.info('✅ Auto Message scheduler stopped');
+
       logger.info('Stopping cron jobs...');
       cron.getTasks().forEach(task => task.stop());
       logger.info('✅ Cron jobs stopped');

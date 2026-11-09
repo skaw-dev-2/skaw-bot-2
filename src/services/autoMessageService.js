@@ -3,7 +3,7 @@
 // Uses the existing client.db key-value interface.
 
 import { EmbedBuilder } from 'discord.js';
-import { logger } from '../utils/logger.js';
+import { logger, startupLog, shutdownLog } from '../utils/logger.js';
 
 const AUTO_MESSAGE_KEY = (guildId) => `guild:${guildId}:auto_messages`;
 const DEFAULT_TIMEZONE = 'Asia/Jakarta';
@@ -690,7 +690,7 @@ export function startAutoMessageScheduler(client, intervalMs = DEFAULT_SCHEDULER
     const timer = setInterval(tick, safeInterval);
     if (typeof timer.unref === 'function') timer.unref();
     schedulerHandles.set(client, { timer, intervalMs: safeInterval });
-    logger.info('Auto Message scheduler started (every ' + Math.round(safeInterval / 1000) + 's).');
+    startupLog('Auto Message scheduler started (every ' + Math.round(safeInterval / 1000) + 's).');
     return true;
 }
 
@@ -699,7 +699,7 @@ export function stopAutoMessageScheduler(client) {
     if (!state?.timer) return false;
     clearInterval(state.timer);
     schedulerHandles.delete(client);
-    logger.info('Auto Message scheduler stopped.');
+    shutdownLog('Auto Message scheduler stopped.');
     return true;
 }
 

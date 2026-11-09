@@ -1,8 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { MessageFlags } from 'discord.js';
 
 import rerollCommand from '../commands/Giveaway/greroll.js';
 import { selectRerollWinners } from '../services/giveawayService.js';
+import { InteractionHelper } from '../utils/interactionHelper.js';
 
 test('reroll command exposes an optional winners count', () => {
     const winnersOption = rerollCommand.data.toJSON().options.find(
@@ -64,4 +66,37 @@ test('reroll rejects a winner count outside the configured range', () => {
         () => selectRerollWinners(['user-1', 'user-2'], 11, []),
         /Invalid winner count: 11/
     );
+});
+
+
+test('reroll interaction is deferred ephemerally and completes through editReply', async () => {
+    const deferCalls = [];
+    const editCalls = [];
+    const interaction = {
+        id: '1569369999999999999',
+        user: { id: '123456789012345678' },
+        deferred: false,
+        replied: false,
+        async deferReply(options) {
+            deferCalls.push(options);
+            this.deferred = true;
+        },
+        async editReply(options) {
+            editCalls.push(options);
+            this.replied = true;
+            return options;
+        },
+    };
+
+    assert.equal(
+        await InteractionHelper.safeDefer(interaction, { flags: MessageFlags.Ephemeral }),
+        true
+    );
+    assert.deepEqual(deferCalls, [{ flags: MessageFlags.Ephemeral }]);
+
+    assert.equal(
+        await InteractionHelper.safeReply(interaction, { content: 'Reroll completed.' }),
+        true
+    );
+    assert.deepEqual(editCalls, [{ content: 'Reroll completed.' }]);
 });

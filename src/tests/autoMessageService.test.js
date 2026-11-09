@@ -297,6 +297,48 @@ test('custom emoji expansion is checked against Discord message length', () => {
     assert.throws(() => buildAutoMessagePayload(schedule, guild), /after custom emoji conversion/);
 });
 
+test('PostgreSQL storage path performs reads and writes under a guild advisory lock', async () => {
+    const pgStore = new Map([
+        [AUTO_MESSAGE_KEY, { [createSchedule().id]: createSchedule() }],
+    ]);
+    const lockStatements = [];
+    const pool = {
+        query: async (sql, params) => {
+            if (sql.startsWith('SELECT value FROM')) {
+                const value = pgStore.get(params[0]);
+                return { rows: value === undefined ? [] : [{ value: structuredClone(value) }] };
+            }
+            if (sql.startsWith('INSERT INTO')) {
+                pgStore.set(params[0], JSON.parse(params[1]));
+                return { rows: [], rowCount: 1 };
+            }
+            throw new Error('Unexpected PostgreSQL query: ' + sql);
+        },
+        connect: async () => ({
+            query: async sql => {
+                lockStatements.push(sql);
+                return { rows: [] };
+            },
+            release: () => {},
+        }),
+    };
+    const client = {
+        db: {
+            db: { pool },
+            isAvailable: () => true,
+            isDegraded: () => false,
+        },
+    };
+
+    await mutateGuildAutoMessages(client, 'guild-1', schedules => {
+        schedules.push(createSchedule({ id: 'am_postgres_added' }));
+    });
+
+    assert.ok(pgStore.get(AUTO_MESSAGE_KEY).am_postgres_added);
+    assert.ok(lockStatements.some(sql => sql.includes('pg_advisory_lock')));
+    assert.ok(lockStatements.some(sql => sql.includes('pg_advisory_unlock')));
+});
+
 test('Auto Message scheduler starts idempotently and stops cleanly', () => {
     const client = {
         db: {

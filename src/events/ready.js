@@ -6,6 +6,7 @@ import { reconcileTicketPanels, reconcileVerificationPanels, reconcileReactionRo
 import { reconcileLevelRoles } from "../services/leveling/levelRoleSyncService.js";
 import { initRiffyAfterReady } from "../services/music/riffySetup.js";
 import { initializeSkawRecruitment } from "../services/skawRecruitmentService.js";
+import { startAutoMessageScheduler } from "../services/autoMessageService.js";
 
 export default {
   name: Events.ClientReady,
@@ -14,6 +15,11 @@ export default {
   async execute(client) {
     try {
       client.user.setPresence(config.bot.presence);
+
+      // Restore persistent scheduled messages on every bot start/reconnect.
+      // The scheduler timer is process-local, while schedule definitions live in the database.
+      startAutoMessageScheduler(client);
+      startupLog("Auto Message scheduler recovery initialized");
 
       startupLog(`Ready! Logged in as ${client.user.tag}`);
       startupLog(`Serving ${client.guilds.cache.size} guild(s)`);

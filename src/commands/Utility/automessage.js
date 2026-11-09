@@ -23,8 +23,6 @@ import { ensureAutoMessageInteractionHandlers } from '../../services/autoMessage
 import {
     AUTO_MESSAGE_DEFAULT_TIMEZONE,
     buildAutoMessageData,
-    getGuildAutoMessages,
-    saveGuildAutoMessages,
     mutateGuildAutoMessages,
     parseScheduledDateTime,
     formatDateTime,

@@ -126,6 +126,15 @@ export default {
 
         if (interaction.isChatInputCommand()) {
           try {
+            // Acknowledge /greroll before database/config lookups so its response
+            // cannot expire while giveaway data and Discord messages are being loaded.
+            if (interaction.commandName === 'greroll') {
+              const acknowledged = await InteractionHelper.safeDefer(interaction, {
+                flags: MessageFlags.Ephemeral,
+              });
+              if (!acknowledged) return;
+            }
+
             logger.info(`Command executed: /${interaction.commandName} by ${interaction.user.tag}`, {
               event: 'interaction.command.received',
               traceId: interactionTraceContext.traceId,

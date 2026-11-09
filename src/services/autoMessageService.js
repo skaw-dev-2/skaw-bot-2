@@ -7,6 +7,7 @@ import { logger } from '../utils/logger.js';
 
 const AUTO_MESSAGE_KEY = (guildId) => `guild:${guildId}:auto_messages`;
 const DEFAULT_TIMEZONE = 'Asia/Jakarta';
+export const AUTO_MESSAGE_DEFAULT_TIMEZONE = DEFAULT_TIMEZONE;
 const DISCORD_MAX_MESSAGE_LENGTH = 2000;
 const DISCORD_EMBED_DESCRIPTION_LIMIT = 4096;
 const MIN_INTERVAL_MS = 60 * 1000;

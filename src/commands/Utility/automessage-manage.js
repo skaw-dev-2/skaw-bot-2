@@ -8,7 +8,6 @@ import {
     buildAutoMessagePayload,
     getAutoMessage,
     getGuildAutoMessages,
-    saveGuildAutoMessages,
     mutateGuildAutoMessages,
 } from '../../services/autoMessageService.js';
 

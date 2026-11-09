@@ -270,6 +270,41 @@ export function selectWinners(participants, winnerCount, fixedWinners = []) {
     }
 }
 
+/**
+ * Selects a configurable number of new giveaway winners.
+ * Previous winners are excluded so a reroll cannot select the same people again.
+ */
+export function selectRerollWinners(participants, winnerCount, previousWinnerIds = [], fixedWinners = []) {
+    validateWinnerCount(winnerCount);
+
+    const uniqueParticipants = Array.isArray(participants)
+        ? [...new Set(participants.map(String).filter(Boolean))]
+        : [];
+    const previousWinners = new Set(
+        Array.isArray(previousWinnerIds)
+            ? previousWinnerIds.map(String).filter(Boolean)
+            : []
+    );
+    const eligibleParticipants = uniqueParticipants.filter(
+        userId => !previousWinners.has(userId)
+    );
+
+    if (eligibleParticipants.length < winnerCount) {
+        throw new TitanBotError(
+            'Insufficient eligible participants for giveaway reroll',
+            ErrorTypes.VALIDATION,
+            `Only ${eligibleParticipants.length} eligible participant(s) remain after excluding previous winners. You requested ${winnerCount} new winner(s).`,
+            {
+                participantCount: uniqueParticipants.length,
+                eligibleParticipantCount: eligibleParticipants.length,
+                winnersRequested: winnerCount,
+            }
+        );
+    }
+
+    return selectWinners(eligibleParticipants, winnerCount, fixedWinners);
+}
+
 export function isUserRateLimited(userId, giveawayId) {
     const status = getRateLimitStatus(
         getGiveawayInteractionKey(userId, giveawayId),

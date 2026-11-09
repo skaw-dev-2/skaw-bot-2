@@ -11,6 +11,8 @@ const DISCORD_MAX_MESSAGE_LENGTH = 2000;
 const DISCORD_EMBED_DESCRIPTION_LIMIT = 4096;
 const MIN_INTERVAL_MS = 60 * 1000;
 const DEFAULT_SCHEDULER_INTERVAL_MS = 30 * 1000;
+const SEND_RETRY_BASE_MS = 60 * 1000;
+const SEND_RETRY_MAX_MS = 30 * 60 * 1000;
 
 const schedulerHandles = new WeakMap();
 
@@ -85,6 +87,9 @@ function normalizeSchedule(record = {}) {
         lastRunAt: record.lastRunAt == null ? null : Number(record.lastRunAt),
         enabled: record.enabled !== false,
         runCount: Number.isInteger(record.runCount) ? record.runCount : 0,
+        failureCount: Math.max(0, Number(record.failureCount) || 0),
+        lastFailureAt: record.lastFailureAt || null,
+        lastError: typeof record.lastError === 'string' ? record.lastError.slice(0, 500) : null,
         createdAt: record.createdAt || new Date().toISOString(),
         createdBy: record.createdBy ? String(record.createdBy) : null,
         updatedAt: record.updatedAt || null,
@@ -419,6 +424,9 @@ export function buildAutoMessageData({
         lastRunAt: null,
         enabled: true,
         runCount: 0,
+        failureCount: 0,
+        lastFailureAt: null,
+        lastError: null,
         createdAt: new Date().toISOString(),
         createdBy: createdBy ? String(createdBy) : null,
         updatedAt: null,
@@ -454,6 +462,20 @@ export function buildAutoMessagePayload(schedule, guild = null) {
     if (embedData.imageUrl) embed.setImage(validateEmbedUrl(embedData.imageUrl));
 
     return { embeds: [embed] };
+}
+
+function recordScheduleFailure(schedule, error, now) {
+    const failureCount = Math.max(0, Number(schedule.failureCount) || 0) + 1;
+    const exponent = Math.min(failureCount - 1, 10);
+    const retryDelayMs = Math.min(SEND_RETRY_MAX_MS, SEND_RETRY_BASE_MS * (2 ** exponent));
+
+    schedule.failureCount = failureCount;
+    schedule.lastFailureAt = new Date(now).toISOString();
+    schedule.lastError = String(error?.message || error || 'Unknown delivery error').slice(0, 500);
+    schedule.nextRunAt = now + retryDelayMs;
+    schedule.updatedAt = new Date(now).toISOString();
+
+    return retryDelayMs;
 }
 
 let schedulerRunning = false;
@@ -540,13 +562,48 @@ export async function runAutoMessages(client) {
 
                     if (now < schedule.nextRunAt) continue;
 
-                    const channel = await guild.channels.fetch(schedule.channelId).catch(() => null);
-                    if (!channel || typeof channel.send !== 'function' || !channel.isTextBased()) {
+                    let channel = null;
+                    let channelFetchError = null;
+                    try {
+                        channel = await guild.channels.fetch(schedule.channelId);
+                    } catch (error) {
+                        channelFetchError = error;
+                    }
+
+                    if (channelFetchError) {
+                        if (channelFetchError.code === 10003) {
+                            schedule.enabled = false;
+                            schedule.nextRunAt = null;
+                            schedule.updatedAt = new Date(now).toISOString();
+                            schedule.lastError = 'The configured channel no longer exists.';
+                            changed = true;
+                            logger.warn(`Auto Message ${schedule.id} disabled: channel ${schedule.channelId} no longer exists.`);
+                        } else {
+                            const retryDelayMs = recordScheduleFailure(schedule, channelFetchError, now);
+                            changed = true;
+                            logger.warn(`Auto Message ${schedule.id} could not fetch channel ${schedule.channelId}; retrying in ${Math.ceil(retryDelayMs / 60000)} minute(s): ${channelFetchError.message}`);
+                        }
+                        continue;
+                    }
+
+                    if (!channel) {
+                        const retryDelayMs = recordScheduleFailure(
+                            schedule,
+                            new Error('Discord returned no channel for the configured channel ID.'),
+                            now,
+                        );
+                        changed = true;
+                        logger.warn(`Auto Message ${schedule.id} channel lookup returned empty; retrying in ${Math.ceil(retryDelayMs / 60000)} minute(s).`);
+                        continue;
+                    }
+
+                    if (typeof channel.send !== 'function' || !channel.isTextBased()) {
                         schedule.enabled = false;
                         schedule.nextRunAt = null;
-                        schedule.updatedAt = new Date().toISOString();
+                        schedule.updatedAt = new Date(now).toISOString();
+                        schedule.lastError = 'The configured channel cannot receive messages.';
                         changed = true;
-                        logger.warn(`Auto Message ${schedule.id} disabled: channel ${schedule.channelId} is unavailable.`);
+                        logger.warn(`Auto Message ${schedule.id} disabled: channel ${schedule.channelId} cannot receive messages.`);
                         continue;
                     }
 
@@ -562,16 +619,33 @@ export async function runAutoMessages(client) {
                         continue;
                     }
 
-                    const sent = await channel.send(payload).catch(error => {
-                        logger.warn(`Auto Message ${schedule.id} failed to send in guild ${guild.id}: ${error.message}`);
-                        return null;
-                    });
+                    let sent;
+                    try {
+                        sent = await channel.send(payload);
+                    } catch (sendError) {
+                        const retryDelayMs = recordScheduleFailure(schedule, sendError, now);
+                        changed = true;
+                        logger.warn(`Auto Message ${schedule.id} failed to send in guild ${guild.id}; retrying in ${Math.ceil(retryDelayMs / 60000)} minute(s): ${sendError.message}`);
+                        continue;
+                    }
 
-                    if (!sent) continue;
+                    if (!sent) {
+                        const retryDelayMs = recordScheduleFailure(
+                            schedule,
+                            new Error('Discord did not confirm the scheduled message delivery.'),
+                            now,
+                        );
+                        changed = true;
+                        logger.warn(`Auto Message ${schedule.id} returned no sent message; retrying in ${Math.ceil(retryDelayMs / 60000)} minute(s).`);
+                        continue;
+                    }
 
                     schedule.lastRunAt = now;
                     schedule.runCount += 1;
-                    schedule.updatedAt = new Date().toISOString();
+                    schedule.failureCount = 0;
+                    schedule.lastFailureAt = null;
+                    schedule.lastError = null;
+                    schedule.updatedAt = new Date(now).toISOString();
                     changed = true;
 
                     if (schedule.scheduleType === 'once' || schedule.intervalMs === null) {

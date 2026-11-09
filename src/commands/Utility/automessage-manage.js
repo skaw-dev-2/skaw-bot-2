@@ -98,7 +98,7 @@ export default {
                 }
 
                 const lines = schedules.slice(0, MAX_LIST_ITEMS).map(schedule => {
-                    const status = schedule.enabled ? '🟢 ON' : '⚪ OFF';
+                    const status = !schedule.enabled ? '⚪ OFF' : schedule.failureCount > 0 ? `🟠 RETRY ${schedule.failureCount}` : '🟢 ON';
                     const next = schedule.nextRunAt ? formatDateTime(schedule.nextRunAt, schedule.timezone) : '—';
                     const interval = formatInterval(schedule.intervalMs, schedule.scheduleType);
                     return `${status} \`${schedule.id}\` → <#${schedule.channelId}> · ${interval} · next: ${next}`;
@@ -136,6 +136,8 @@ export default {
                             { name: 'Next', value: schedule.nextRunAt ? formatDateTime(schedule.nextRunAt, schedule.timezone) : '—', inline: true },
                             { name: 'End', value: schedule.endAt ? formatDateTime(schedule.endAt, schedule.timezone) : 'No end', inline: true },
                             { name: 'Runs', value: String(schedule.runCount), inline: true },
+                            { name: 'Delivery Failures', value: String(schedule.failureCount || 0), inline: true },
+                            ...(schedule.lastError ? [{ name: 'Last Delivery Issue', value: schedule.lastError.slice(0, 1024), inline: false }] : []),
                         ],
                         footer: { text: `Timezone: ${schedule.timezone}` },
                     }],
@@ -153,6 +155,9 @@ export default {
                     schedule.nextRunAt = schedule.nextRunAt && schedule.nextRunAt > now
                         ? schedule.nextRunAt
                         : now;
+                    schedule.failureCount = 0;
+                    schedule.lastFailureAt = null;
+                    schedule.lastError = null;
                 } else {
                     schedule.nextRunAt = null;
                 }

@@ -25,6 +25,7 @@ import {
     buildAutoMessageData,
     getGuildAutoMessages,
     saveGuildAutoMessages,
+    mutateGuildAutoMessages,
     parseScheduledDateTime,
     formatDateTime,
     validateMessage,
@@ -633,9 +634,10 @@ async function createScheduleFromDraft(interaction, draft) {
         createdBy: interaction.user.id,
     });
 
-    const existing = await getGuildAutoMessages(interaction.client, interaction.guildId);
-    existing.push(schedule);
-    await saveGuildAutoMessages(interaction.client, interaction.guildId, existing);
+    await mutateGuildAutoMessages(interaction.client, interaction.guildId, schedules => {
+        schedules.push(schedule);
+        return schedule;
+    });
 
     return { schedule, channel };
 }

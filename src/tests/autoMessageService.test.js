@@ -256,6 +256,21 @@ test('database read errors are propagated and do not look like an empty schedule
     await assert.rejects(getGuildAutoMessages(harness.client, 'guild-1'), /PostgreSQL read failed/);
 });
 
+test('malformed stored Auto Message data is rejected instead of being treated as empty', async () => {
+    const harness = createClient(createSchedule());
+    harness.store.set(AUTO_MESSAGE_KEY, null);
+    await assert.rejects(
+        getGuildAutoMessages(harness.client, 'guild-1'),
+        /Stored Auto Message data is malformed/i,
+    );
+
+    harness.store.set(AUTO_MESSAGE_KEY, { broken: 'not-an-object' });
+    await assert.rejects(
+        getGuildAutoMessages(harness.client, 'guild-1'),
+        /entry "broken" is malformed/i,
+    );
+});
+
 test('concurrent guild mutations are serialized and do not lose newly added schedules', async () => {
     const harness = createClient(createSchedule());
     await Promise.all(Array.from({ length: 8 }, (_, index) =>

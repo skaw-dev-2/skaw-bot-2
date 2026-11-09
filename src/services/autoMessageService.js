@@ -659,7 +659,7 @@ function disableScheduleWithError(schedule, error, now) {
 
 function isDefinitiveSendRejection(error) {
     const status = Number(error?.status ?? error?.statusCode);
-    return (Number.isFinite(status) && status >= 400 && status < 500 && status !== 429)
+    return (Number.isFinite(status) && status >= 400 && status < 500 && ![408, 425, 429].includes(status))
         || [10003, 50006, 50013, 50035].includes(Number(error?.code));
 }
 
@@ -705,6 +705,12 @@ export function stopAutoMessageScheduler(client) {
 export async function runAutoMessages(client) {
     if (!client?.db) {
         logger.warn('Auto Message scheduler skipped: database unavailable.');
+        return;
+    }
+    try {
+        assertAutoMessageStorageAvailable(client);
+    } catch (error) {
+        logger.warn('Auto Message scheduler is waiting for persistent PostgreSQL storage: ' + error.message);
         return;
     }
     if (schedulerRunningClients.has(client)) {

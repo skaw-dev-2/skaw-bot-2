@@ -184,6 +184,9 @@ export default {
                 updatedGiveaway.winnerPingMessageId = newPingMsg.id;
             }
 
+            // Persist the announcement message ID so later rerolls edit the same announcement.
+            await saveGiveaway(interaction.client, interaction.guildId, updatedGiveaway);
+
             logger.info(`Giveaway rerolled (message not found, but announced): ${messageId}`);
 
             try {
@@ -257,10 +260,13 @@ export default {
             });
         } else {
             const newPingMsg = await channel.send({
-                content: `🔄 **REROLL WINNERS** 🔄 CONGRATULATIONS ${winnerMentions}! You are the new winner(s) for the **${giveaway.prize}** giveaway! Please contact the host <@${giveaway.hostId}> to claim your prize.`,
+                content: `🔄 **REROLL WINNERS** 🔄 CONGRATULATIONS ${winnerMentions}! You are the new winner(s) for the **${giveaway.prize}** giveaway! Please contact the host <@${giveaway.hostId}> to claim the prize.`,
             });
             updatedGiveaway.winnerPingMessageId = newPingMsg.id;
         }
+
+        // Keep the announcement reference persistent for subsequent rerolls.
+        await saveGiveaway(interaction.client, interaction.guildId, updatedGiveaway);
 
         logger.info(`Giveaway successfully rerolled: ${messageId} with ${newWinners.length} new winners`);
 

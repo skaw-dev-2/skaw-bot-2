@@ -389,6 +389,16 @@ test('PostgreSQL storage path performs reads and writes under a guild advisory l
     assert.ok(lockStatements.some(sql => sql.includes('pg_advisory_unlock')));
 });
 
+test('Auto Message slash command modules import with all required service exports', async () => {
+    const [createCommand, manageCommand] = await Promise.all([
+        import('../commands/Utility/automessage.js'),
+        import('../commands/Utility/automessage-manage.js'),
+    ]);
+
+    assert.equal(createCommand.default.data.name, 'automessage');
+    assert.equal(manageCommand.default.data.name, 'automessage-manage');
+});
+
 test('Auto Message scheduler starts idempotently and stops cleanly', () => {
     const client = {
         db: {

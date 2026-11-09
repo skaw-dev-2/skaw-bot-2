@@ -414,7 +414,15 @@ function validateExpandedMessageLength(content) {
 }
 
 function validateEmbedTotalLength(embed) {
-    const total = (embed.title || '').length + (embed.description || '').length + (embed.footer || '').length;
+    const titleLength = (embed.title || '').length;
+    const descriptionLength = (embed.description || '').length;
+    const footerLength = (embed.footer || '').length;
+
+    if (titleLength > 256) throw new Error('Embed title exceeds Discord’s 256-character limit after custom emoji conversion.');
+    if (descriptionLength > DISCORD_EMBED_DESCRIPTION_LIMIT) throw new Error('Embed description exceeds Discord’s 4,096-character limit after custom emoji conversion.');
+    if (footerLength > 2048) throw new Error('Embed footer exceeds Discord’s 2,048-character limit after custom emoji conversion.');
+
+    const total = titleLength + descriptionLength + footerLength;
     if (total > 6000) throw new Error('Embed text exceeds Discord’s 6,000-character combined limit (currently ' + total + ').');
     return total;
 }

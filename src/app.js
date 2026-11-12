@@ -2,6 +2,7 @@
 import { Client, Collection, GatewayIntentBits } from 'discord.js';
 import { REST } from '@discordjs/rest';
 import express from 'express';
+import { registerWebsiteNotificationRoute } from './services/websiteNotificationService.js';
 import cron from 'node-cron';
 
 import config from './config/application.js';
@@ -157,6 +158,8 @@ class TitanBot extends Client {
       requestCounts.set(ip, times);
       next();
     });
+
+    registerWebsiteNotificationRoute(app, this);
 
     app.get('/health', (req, res) => {
       const dbStatus = this.db?.getStatus?.() || { isDegraded: 'unknown' };

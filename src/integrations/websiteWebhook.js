@@ -50,13 +50,18 @@ function pruneRecentEvents(now = Date.now()) {
 
 function buildWebsiteEmbed(event) {
   const isApplication = event.type === 'application.created';
+  const isSupport = event.type === 'support.created';
   const data = event.data || {};
-  const title = isApplication ? 'New SKAW career application' : 'New SKAW website inquiry';
+  const title = isApplication
+    ? 'New SKAW career application'
+    : isSupport ? 'New SKAW Support request' : 'New SKAW website inquiry';
   const description = isApplication
     ? 'A new recruitment application has been submitted through the SKAW Group website.'
     : event.type === 'partnership.created'
       ? 'A new partnership proposal has been submitted through the SKAW Group website.'
-      : 'A new Contact Center inquiry has been submitted through the SKAW Group website.';
+      : isSupport
+        ? 'A new Support Center request has been submitted through the SKAW Group website.'
+        : 'A new Contact Center inquiry has been submitted through the SKAW Group website.';
   const fields = [
     { name: 'Reference', value: clean(event.reference, 24) || 'Not available', inline: true },
     { name: 'Applicant / Sender', value: clean(data.name, 80) || 'Not provided', inline: true },
@@ -106,28 +111,35 @@ export function createWebsiteWebhookHandler(client) {
     if (recentEvents.has(eventId)) {
       return response.status(200).json({ accepted: true, duplicate: true });
     }
+    // Reserve the event ID before awaiting Discord so concurrent retries cannot
+    // deliver the same notification twice.
+    recentEvents.set(eventId, Date.now());
 
     let event;
     try {
       event = JSON.parse(rawBody.toString('utf8'));
     } catch {
+      recentEvents.delete(eventId);
       return response.status(400).json({ error: 'Invalid JSON payload.' });
     }
 
-    const allowedTypes = new Set(['inquiry.created', 'partnership.created', 'application.created']);
+    const allowedTypes = new Set(['inquiry.created', 'partnership.created', 'support.created', 'application.created']);
     if (!event || event.id !== eventId || !allowedTypes.has(event.type)
       || typeof event.reference !== 'string' || !event.data || typeof event.data !== 'object') {
+      recentEvents.delete(eventId);
       return response.status(400).json({ error: 'Invalid website event payload.' });
     }
 
     const channelId = process.env.SKAW_WEBSITE_NOTIFICATIONS_CHANNEL_ID;
     if (!channelId || !/^\d{17,20}$/.test(channelId)) {
+      recentEvents.delete(eventId);
       return response.status(503).json({ error: 'Website notification channel is not configured.' });
     }
 
     try {
       const channel = await client.channels.fetch(channelId);
       if (!channel || typeof channel.send !== 'function') {
+        recentEvents.delete(eventId);
         return response.status(503).json({ error: 'Configured notification channel is unavailable.' });
       }
 
@@ -139,6 +151,7 @@ export function createWebsiteWebhookHandler(client) {
         eventId,
         error: error instanceof Error ? error.message : String(error),
       });
+      recentEvents.delete(eventId);
       return response.status(503).json({ error: 'Could not deliver website notification.' });
     }
   };

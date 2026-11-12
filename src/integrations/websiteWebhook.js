@@ -132,19 +132,49 @@ export function createWebsiteWebhookHandler(client) {
     }
 
     const channelId = process.env.SKAW_WEBSITE_NOTIFICATIONS_CHANNEL_ID;
-    if (!channelId || !/^\d{17,20}$/.test(channelId)) {
-      recentEvents.delete(eventId);
-      return response.status(503).json({ error: 'Website notification channel is not configured.' });
-    }
 
     try {
-      const channel = await client.channels.fetch(channelId);
-      if (!channel || typeof channel.send !== 'function') {
-        recentEvents.delete(eventId);
-        return response.status(503).json({ error: 'Configured notification channel is unavailable.' });
+      if (channelId) {
+        if (!/^\d{17,20}$/.test(channelId)) {
+          recentEvents.delete(eventId);
+          return response.status(503).json({ error: 'Website notification channel configuration is invalid.' });
+        }
+
+        const channel = await client.channels.fetch(channelId);
+        if (!channel || typeof channel.send !== 'function') {
+          recentEvents.delete(eventId);
+          return response.status(503).json({ error: 'Configured notification channel is unavailable.' });
+        }
+
+        await channel.send({ embeds: [buildWebsiteEmbed(event)] });
+      } else {
+        // A private channel is preferred. When one has not been configured,
+        // send the notice to the bot owners already listed in OWNER_IDS.
+        const owners = Array.isArray(client.config?.commands?.owners)
+          ? client.config.commands.owners.map((id) => String(id).trim()).filter(Boolean)
+          : [];
+        if (!owners.length) {
+          recentEvents.delete(eventId);
+          return response.status(503).json({ error: 'No website notification recipient is configured.' });
+        }
+
+        const deliveries = await Promise.allSettled(owners.map(async (ownerId) => {
+          const owner = await client.users.fetch(ownerId);
+          await owner.send({ embeds: [buildWebsiteEmbed(event)] });
+        }));
+        const delivered = deliveries.filter((result) => result.status === 'fulfilled').length;
+        if (!delivered) {
+          throw new Error('Could not deliver the website notice to any configured bot owner.');
+        }
+        if (delivered < deliveries.length) {
+          logger.warn('Some SKAW website owner notifications could not be delivered', {
+            eventId,
+            delivered,
+            attempted: deliveries.length,
+          });
+        }
       }
 
-      await channel.send({ embeds: [buildWebsiteEmbed(event)] });
       recentEvents.set(eventId, Date.now());
       return response.status(202).json({ accepted: true });
     } catch (error) {

@@ -150,8 +150,9 @@ export function createWebsiteWebhookHandler(client) {
       } else {
         // A private channel is preferred. When one has not been configured,
         // send the notice to the bot owners already listed in OWNER_IDS.
-        const owners = Array.isArray(client.config?.commands?.owners)
-          ? client.config.commands.owners.map((id) => String(id).trim()).filter(Boolean)
+        const configuredOwners = client.config?.bot?.commands?.owners;
+        const owners = Array.isArray(configuredOwners)
+          ? configuredOwners.map((id) => String(id).trim()).filter(Boolean)
           : [];
         if (!owners.length) {
           recentEvents.delete(eventId);

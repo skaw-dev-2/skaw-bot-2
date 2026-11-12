@@ -19,6 +19,7 @@ import { shutdownMusic } from './services/music/playerHandler.js';
 import { stopAutoMessageScheduler } from './services/autoMessageService.js';
 import pkg from '../package.json' with { type: 'json' };
 import { EXPECTED_SCHEMA_VERSION, EXPECTED_SCHEMA_LABEL } from './config/database/schemaVersion.js';
+import { createWebsiteWebhookHandler } from './integrations/websiteWebhook.js';
 
 class TitanBot extends Client {
   constructor() {
@@ -157,6 +158,14 @@ class TitanBot extends Client {
       requestCounts.set(ip, times);
       next();
     });
+
+    // Signed website events are isolated from the bot database. The raw body is
+    // preserved for HMAC verification before any JSON parsing is performed.
+    app.post(
+      '/integrations/website',
+      express.raw({ type: 'application/json', limit: '12kb' }),
+      createWebsiteWebhookHandler(this)
+    );
 
     app.get('/health', (req, res) => {
       const dbStatus = this.db?.getStatus?.() || { isDegraded: 'unknown' };

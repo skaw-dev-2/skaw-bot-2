@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { EmbedBuilder } from 'discord.js';
+import { logger } from '../utils/logger.js';
 
 const MAX_CLOCK_SKEW_SECONDS = 300;
 const EVENT_TTL_MS = 10 * 60 * 1000;
@@ -147,7 +148,7 @@ export function createWebsiteWebhookHandler(client) {
       recentEvents.set(eventId, Date.now());
       return response.status(202).json({ accepted: true });
     } catch (error) {
-      client.logger?.error?.('SKAW website webhook delivery failed', {
+      logger.error('SKAW website webhook delivery failed', {
         eventId,
         error: error instanceof Error ? error.message : String(error),
       });

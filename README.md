@@ -50,7 +50,7 @@ The bot exposes a signed server-to-server notification endpoint for the SKAW Gro
 Set these environment variables on the bot service:
 
 - `SKAW_WEBSITE_WEBHOOK_SECRET` — a long random secret shared with the website's `SKAW_BOT_WEBHOOK_SECRET`. Keep it private.
-- `SKAW_WEBSITE_NOTIFICATIONS_CHANNEL_ID` — the ID of a private Discord text channel where management notifications should be sent.
+- `SKAW_WEBSITE_NOTIFICATIONS_CHANNEL_ID` — optional ID of a private Discord text channel where management notifications should be sent. If omitted, the bot sends direct messages to the users already listed in `OWNER_IDS`.
 
 The endpoint is mounted on the existing Express web server at:
 

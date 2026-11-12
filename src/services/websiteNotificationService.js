@@ -30,8 +30,8 @@ export function registerWebsiteNotificationRoute(app, client) {
       const secret = process.env.SKAW_WEBSITE_WEBHOOK_SECRET;
       const channelId = process.env.SKAW_WEBSITE_NOTIFICATION_CHANNEL_ID;
 
-      if (!secret || !channelId) {
-        return res.status(503).json({ error: "Website notification integration is not configured." });
+      if (!secret || !channelId || secret.length < 32) {
+        return res.status(503).json({ error: "Website notification integration is not configured with a sufficiently strong secret and channel." });
       }
 
       if (!validSignature(req.body, req.get("x-skaw-signature"), secret)) {
